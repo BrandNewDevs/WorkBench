@@ -1,0 +1,10 @@
+{
+  "name": "@workbench/web",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"console.log('web dev placeholder')\"",
+    "build": "node -e \"console.log('web build placeholder')\"",
+    "lint": "node -e \"console.log('web lint placeholder')\"",
+    "typecheck": "node -e \"console.log('web typecheck placeholder')\""
+  }
+}

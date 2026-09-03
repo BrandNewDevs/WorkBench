@@ -1,0 +1,10 @@
+{
+  "name": "@workbench/desktop",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"console.log('desktop dev placeholder')\"",
+    "build": "node -e \"console.log('desktop build placeholder')\"",
+    "lint": "node -e \"console.log('desktop lint placeholder')\"",
+    "typecheck": "node -e \"console.log('desktop typecheck placeholder')\""
+  }
+}

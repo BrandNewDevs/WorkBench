@@ -1,0 +1,15 @@
+{
+  "name": "workbench",
+  "private": true,
+  "packageManager": "pnpm@11.24.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "check": "pnpm lint && pnpm typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.8"
+  }
+}
