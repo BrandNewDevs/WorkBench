@@ -1,8 +1,8 @@
 # WorkBench web
 
-`apps/web` is the WorkBench single-page application. Vite runs the development server and production build. The UI uses React with TypeScript and TSX, Chakra UI, and Emotion. ESLint checks the source, pnpm manages dependencies, and Turborepo runs workspace tasks from the repository root.
+`apps/web` is the WorkBench single-page application. Vite runs the development server and production build. The UI uses React with TypeScript, TSX, and Tailwind CSS. ESLint checks the source, pnpm manages dependencies, and Turborepo runs workspace tasks from the repository root.
 
-TSX is TypeScript with JSX syntax.
+Tailwind CSS is loaded from `src/index.css` and integrated with Vite through `@tailwindcss/vite`.
 
 ## Install
 
