@@ -77,4 +77,3 @@ def load_model_profile(settings: ModelSettings | None = None) -> ModelProfile:
         raise ValueError(
             f"unknown model profile '{selected.model_profile}'; approved profiles: {approved}"
         ) from error
-
