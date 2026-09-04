@@ -31,4 +31,3 @@ class KnowledgeIndexUnavailable(AIError):
 
 class NoRelevantEvidence(AIError):
     """No local evidence passed the requested relevance threshold."""
-

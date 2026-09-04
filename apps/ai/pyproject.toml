@@ -13,6 +13,7 @@ warn_unreachable = true
 [tool.pytest.ini_options]
 addopts = "-q"
 asyncio_mode = "auto"
+pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
   "live_ollama: requires a running local Ollama instance and preloaded models",

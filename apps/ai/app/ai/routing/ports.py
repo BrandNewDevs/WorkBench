@@ -11,4 +11,3 @@ class CapabilityRouter(Protocol):
     def choose(self, task: TaskDescriptor, health: AIHealthReport) -> CapabilityDecision:
         """Choose a model capability without making a permission decision."""
         ...
-

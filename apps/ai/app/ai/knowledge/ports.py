@@ -19,4 +19,3 @@ class KnowledgeAdapter(Protocol):
     async def search(self, query: KnowledgeQuery) -> list[EvidenceChunk]:
         """Search locally and return application-controlled source metadata."""
         ...
-
