@@ -1,0 +1,13 @@
+name: workbench-ai
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -r requirements.txt
+
+# Intentionally installed outside this environment:
+# - Ollama runtime and preloaded model files
+# - Docker Engine
+# - LibreOffice for local DOCX-to-PDF conversion

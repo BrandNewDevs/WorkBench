@@ -1,0 +1,32 @@
+# FastAPI application and local API integration
+fastapi>=0.115,<1
+uvicorn[standard]>=0.32,<1
+pydantic>=2.10,<3
+pydantic-settings>=2.7,<3
+python-multipart>=0.0.18,<1
+sse-starlette>=2,<4
+httpx>=0.28,<1
+tenacity>=9,<10
+
+# Local persistence, security, and file handling
+aiosqlite>=0.20,<1
+pwdlib[argon2]>=0.2,<1
+PyJWT>=2.10,<3
+aiofiles>=24,<25
+filetype>=1.2,<2
+
+# Local knowledge and document processing
+chromadb>=0.6,<2
+PyMuPDF>=1.25,<2
+Pillow>=11,<12
+python-docx>=1.1,<2
+docxtpl>=0.19,<1
+
+# Local sandbox integration
+docker>=7,<8
+
+# Development and verification
+pytest>=8,<9
+pytest-asyncio>=0.25,<1
+ruff>=0.9,<1
+mypy>=1.14,<2
