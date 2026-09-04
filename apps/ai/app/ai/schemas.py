@@ -78,6 +78,29 @@ class GenerationLimits(ContractModel):
     timeout_seconds: float = Field(gt=0)
 
 
+class InferenceMetrics(ContractModel):
+    """Non-confidential timing and token counts returned by Ollama."""
+
+    client_elapsed_ms: float = Field(ge=0)
+    total_duration_ns: int | None = Field(default=None, ge=0)
+    load_duration_ns: int | None = Field(default=None, ge=0)
+    prompt_eval_count: int | None = Field(default=None, ge=0)
+    prompt_eval_duration_ns: int | None = Field(default=None, ge=0)
+    eval_count: int | None = Field(default=None, ge=0)
+    eval_duration_ns: int | None = Field(default=None, ge=0)
+
+
+class InstalledModel(ContractModel):
+    """Non-sensitive metadata reported by Ollama's local model registry."""
+
+    name: str = Field(min_length=1)
+    size_bytes: int = Field(ge=0)
+    digest: str = ""
+    family: str | None = None
+    parameter_size: str | None = None
+    quantization_level: str | None = None
+
+
 class ModelProfile(ContractModel):
     """Ordered local candidates and limits for each AI capability."""
 
@@ -391,12 +414,28 @@ class TextGenerationRequest(ContractModel):
     temperature: float = Field(default=0, ge=0, le=1)
 
 
+class VisionGenerationRequest(ContractModel):
+    """Normalized images and prompts for the low-level local model adapter."""
+
+    model: str = Field(min_length=1)
+    system_prompt: str = Field(min_length=1)
+    user_prompt: str = Field(min_length=1)
+    images_base64: tuple[str, ...] = Field(min_length=1)
+    output_schema: dict[str, JsonValue]
+    limits: GenerationLimits
+    temperature: float = Field(default=0, ge=0, le=1)
+
+
 class TextGenerationResult(ContractModel):
     """Raw validated response returned by a local model adapter."""
 
     model: str = Field(min_length=1)
     text: str
     structured_output: JsonValue
+    metrics: InferenceMetrics
+    done_reason: str | None = None
+    used_fallback: bool = False
+    fallback_reason: str | None = None
 
 
 class EmbeddingRequest(ContractModel):
@@ -411,3 +450,6 @@ class EmbeddingResult(ContractModel):
 
     model: str = Field(min_length=1)
     vectors: tuple[tuple[float, ...], ...] = Field(min_length=1)
+    metrics: InferenceMetrics
+    used_fallback: bool = False
+    fallback_reason: str | None = None

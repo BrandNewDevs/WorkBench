@@ -5,12 +5,12 @@ from typing import Protocol
 from app.ai.schemas import (
     EmbeddingRequest,
     EmbeddingResult,
+    InstalledModel,
     ModelProfile,
     ModelRuntimeHealth,
     TextGenerationRequest,
     TextGenerationResult,
-    VisionAnalysis,
-    VisualAnalysisRequest,
+    VisionGenerationRequest,
 )
 
 
@@ -21,6 +21,10 @@ class ModelAdapter(Protocol):
     this protocol performs no I/O and does not require Ollama to be installed.
     """
 
+    async def list_models(self) -> tuple[InstalledModel, ...]:
+        """List models already installed in the local runtime."""
+        ...
+
     async def health(self, profile: ModelProfile) -> ModelRuntimeHealth:
         """Report local runtime and approved-model readiness."""
         ...
@@ -29,10 +33,14 @@ class ModelAdapter(Protocol):
         """Run one bounded structured text generation request."""
         ...
 
-    async def analyze_visual(self, request: VisualAnalysisRequest) -> VisionAnalysis:
-        """Analyze only the backend-approved visual inputs in the request."""
+    async def generate_vision(self, request: VisionGenerationRequest) -> TextGenerationResult:
+        """Run structured generation over already-normalized image data."""
         ...
 
     async def create_embeddings(self, request: EmbeddingRequest) -> EmbeddingResult:
         """Create embeddings using an approved local embedding model."""
+        ...
+
+    async def unload(self) -> None:
+        """Unload the active large generative model, if one is tracked."""
         ...

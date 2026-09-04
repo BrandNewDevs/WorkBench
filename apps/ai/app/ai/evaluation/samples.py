@@ -23,8 +23,10 @@ from app.ai.schemas import (
     FindingSeverity,
     GenerationLimits,
     GroundedDraft,
+    InferenceMetrics,
     IngestionResult,
     InputModality,
+    InstalledModel,
     KnowledgeQuery,
     ModelHealth,
     ModelProfile,
@@ -39,6 +41,7 @@ from app.ai.schemas import (
     TextGenerationResult,
     ToolDefinition,
     VisionAnalysis,
+    VisionGenerationRequest,
     VisionPageResult,
     VisualAnalysisRequest,
 )
@@ -48,6 +51,20 @@ def sample_generation_limits() -> GenerationLimits:
     """Return small, valid generation limits for deterministic tests."""
 
     return GenerationLimits(context_window=8_192, max_output_tokens=1_024, timeout_seconds=60)
+
+
+def sample_inference_metrics() -> InferenceMetrics:
+    """Return non-sensitive timing and token metadata for fake inference."""
+
+    return InferenceMetrics(
+        client_elapsed_ms=12.5,
+        total_duration_ns=12_000_000,
+        load_duration_ns=2_000_000,
+        prompt_eval_count=12,
+        prompt_eval_duration_ns=3_000_000,
+        eval_count=8,
+        eval_duration_ns=7_000_000,
+    )
 
 
 def sample_model_profile() -> ModelProfile:
@@ -236,6 +253,15 @@ def representative_contracts() -> tuple[ContractModel, ...]:
     runtime_health = sample_runtime_health()
     return (
         limits,
+        sample_inference_metrics(),
+        InstalledModel(
+            name="qwen3:4b",
+            size_bytes=2_500_000_000,
+            digest="sha256:sample-model",
+            family="qwen3",
+            parameter_size="4B",
+            quantization_level="Q4_K_M",
+        ),
         sample_model_profile(),
         *sample_model_health(),
         runtime_health,
@@ -310,7 +336,20 @@ def representative_contracts() -> tuple[ContractModel, ...]:
             model="qwen3:4b",
             text='{"status":"ok"}',
             structured_output={"status": "ok"},
+            metrics=sample_inference_metrics(),
+        ),
+        VisionGenerationRequest(
+            model="qwen3-vl:4b",
+            system_prompt="Return valid structured output.",
+            user_prompt="Extract visible findings.",
+            images_base64=("c2FuaXRpemVkLWltYWdl",),
+            output_schema=tool_schema,
+            limits=limits,
         ),
         EmbeddingRequest(model="qwen3-embedding:0.6b", inputs=(evidence.content,)),
-        EmbeddingResult(model="qwen3-embedding:0.6b", vectors=((0.1, 0.2, 0.3),)),
+        EmbeddingResult(
+            model="qwen3-embedding:0.6b",
+            vectors=((0.1, 0.2, 0.3),),
+            metrics=sample_inference_metrics(),
+        ),
     )
