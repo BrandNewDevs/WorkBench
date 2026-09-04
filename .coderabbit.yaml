@@ -369,7 +369,7 @@ chat:
 
   # Public repo: don't let arbitrary GitHub users consume bot interaction.
   # Automatic PR review eligibility is unaffected.
-  allow_non_org_members: false
+  _non_org_members: true
 
 
 # ─────────────────────────────────────────────
