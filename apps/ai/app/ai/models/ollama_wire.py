@@ -1,6 +1,70 @@
 """Private Pydantic models for the local Ollama HTTP wire format."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+
+
+class OllamaRequestModel(BaseModel):
+    """Strict base for request data controlled by WorkBench."""
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid", frozen=True)
+
+
+class OllamaChatMessage(OllamaRequestModel):
+    """One text or normalized-image message sent to local Ollama."""
+
+    role: Literal["system", "user"]
+    content: str
+    images: tuple[str, ...] | None = None
+
+
+class OllamaGenerationOptions(OllamaRequestModel):
+    """Bounded generation options used by structured chat requests."""
+
+    temperature: float = Field(ge=0, le=1)
+    num_ctx: int = Field(gt=0)
+    num_predict: int = Field(gt=0)
+
+
+class OllamaChatRequest(OllamaRequestModel):
+    """Validated non-streaming request for structured local generation."""
+
+    model: str = Field(min_length=1)
+    messages: tuple[OllamaChatMessage, ...] = Field(min_length=1)
+    stream: Literal[False] = False
+    think: Literal[False] = False
+    format: dict[str, JsonValue]
+    keep_alive: str | int
+    options: OllamaGenerationOptions
+
+
+class OllamaEmbedRequest(OllamaRequestModel):
+    """Validated local embedding request."""
+
+    model: str = Field(min_length=1)
+    input: tuple[str, ...] = Field(min_length=1)
+    truncate: Literal[False] = False
+
+
+class OllamaUnloadRequest(OllamaRequestModel):
+    """Validated request to unload one tracked generative model."""
+
+    model: str = Field(min_length=1)
+    messages: tuple[OllamaChatMessage, ...] = ()
+    stream: Literal[False] = False
+    keep_alive: Literal[0] = 0
+
+    @field_validator("messages")
+    @classmethod
+    def require_empty_messages(
+        cls, messages: tuple[OllamaChatMessage, ...]
+    ) -> tuple[OllamaChatMessage, ...]:
+        """Keep unload requests distinct from inference requests."""
+
+        if messages:
+            raise ValueError("Ollama unload requests must not contain messages")
+        return messages
 
 
 class OllamaWireModel(BaseModel):

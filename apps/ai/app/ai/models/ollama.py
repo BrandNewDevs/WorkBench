@@ -25,9 +25,14 @@ from app.ai.models.ollama_http import (
     OllamaSettings,
 )
 from app.ai.models.ollama_wire import (
+    OllamaChatMessage,
+    OllamaChatRequest,
     OllamaChatResponse,
+    OllamaEmbedRequest,
     OllamaEmbedResponse,
+    OllamaGenerationOptions,
     OllamaTagsResponse,
+    OllamaUnloadRequest,
 )
 from app.ai.models.profiles import load_model_profile
 from app.ai.models.structured_output import validate_output_schema, validate_structured_output
@@ -302,14 +307,10 @@ class OllamaModelAdapter:
             self._active_generative_model = None
 
     async def _unload_model(self, model: str) -> None:
+        payload = OllamaUnloadRequest(model=model)
         response = await self._client.request(
             OllamaEndpoint.CHAT,
-            payload={
-                "model": model,
-                "messages": [],
-                "stream": False,
-                "keep_alive": 0,
-            },
+            payload=payload.model_dump(mode="json"),
         )
         self._raise_for_status(response, model=model)
 
@@ -326,29 +327,28 @@ class OllamaModelAdapter:
         timeout_seconds: float,
         temperature: float,
     ) -> TextGenerationResult:
-        user_message: dict[str, object] = {"role": "user", "content": user_prompt}
-        if images_base64:
-            user_message["images"] = list(images_base64)
-        payload: dict[str, object] = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                user_message,
-            ],
-            "stream": False,
-            "think": False,
-            "format": output_schema,
-            "keep_alive": self._settings.keep_alive,
-            "options": {
-                "temperature": temperature,
-                "num_ctx": context_window,
-                "num_predict": max_output_tokens,
-            },
-        }
+        payload = OllamaChatRequest(
+            model=model,
+            messages=(
+                OllamaChatMessage(role="system", content=system_prompt),
+                OllamaChatMessage(
+                    role="user",
+                    content=user_prompt,
+                    images=images_base64 or None,
+                ),
+            ),
+            format=output_schema,
+            keep_alive=self._settings.keep_alive,
+            options=OllamaGenerationOptions(
+                temperature=temperature,
+                num_ctx=context_window,
+                num_predict=max_output_tokens,
+            ),
+        )
         started = perf_counter()
         response = await self._client.request(
             OllamaEndpoint.CHAT,
-            payload=payload,
+            payload=payload.model_dump(mode="json", exclude_none=True),
             timeout_seconds=timeout_seconds,
         )
         elapsed_ms = (perf_counter() - started) * 1_000
@@ -377,14 +377,11 @@ class OllamaModelAdapter:
         )
 
     async def _embed(self, model: str, inputs: tuple[str, ...]) -> EmbeddingResult:
+        payload = OllamaEmbedRequest(model=model, input=inputs)
         started = perf_counter()
         response = await self._client.request(
             OllamaEndpoint.EMBED,
-            payload={
-                "model": model,
-                "input": list(inputs),
-                "truncate": False,
-            },
+            payload=payload.model_dump(mode="json"),
         )
         elapsed_ms = (perf_counter() - started) * 1_000
         self._raise_for_status(response, model=model)
