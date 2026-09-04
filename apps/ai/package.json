@@ -3,8 +3,9 @@
   "private": true,
   "scripts": {
     "dev": "node -e \"console.log('ai dev placeholder')\"",
-    "build": "node -e \"console.log('ai build placeholder')\"",
-    "lint": "node -e \"console.log('ai lint placeholder')\"",
-    "typecheck": "node -e \"console.log('ai typecheck placeholder')\""
+    "build": "conda run -n workbench-ai python -m compileall -q app",
+    "lint": "conda run -n workbench-ai ruff check app tests",
+    "typecheck": "conda run -n workbench-ai mypy app tests",
+    "test": "conda run -n workbench-ai pytest"
   }
 }

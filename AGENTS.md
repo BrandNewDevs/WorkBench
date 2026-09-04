@@ -40,6 +40,14 @@ WorkBench is a sovereign, local-first agentic AI workbench for confidential indu
 - `apps/api` remains unused unless a separate server boundary becomes necessary after the MVP.
 - Put only genuinely shared, framework-neutral code in `packages/`; applications must not import one another.
 
+### Python package layout
+
+- Treat `apps/ai` as the Python service root, not as an importable package. It contains configuration, tests, documentation, and the `app` source package.
+- Treat `apps/ai/app` as the import root. Keep AI/LLM code in `apps/ai/app/ai`; place future FastAPI, workflow, storage, and sandbox packages beside `ai` under `apps/ai/app` after their owners agree on the package names.
+- Use absolute service imports such as `from app.ai.schemas import Finding`. Keep `apps/ai/app/__init__.py` and an `__init__.py` in every importable subpackage. Avoid `from ai...` and `from apps.ai...`; those forms depend on an incorrect or ambiguous Python path.
+- Run direct Python, Ruff, mypy, pytest, and Uvicorn commands with `apps/ai` as the working directory. Repository commands such as `pnpm --filter @workbench/ai test` already use that workspace. When Electron launches the Python service, set its child-process working directory to `apps/ai`; an explicit Uvicorn `--app-dir apps/ai` is the equivalent when launching from the repository root.
+- Mirror AI tests under `apps/ai/tests/ai`. Never patch `sys.path` inside application or test files; keep the import root in project/tool configuration.
+
 ## Validate changes
 
 - Run `pnpm check` for repository-level TypeScript/lint validation.
