@@ -81,8 +81,8 @@ class FakeModelAdapter:
         self.calls.append(f"generate_vision:{request.model}")
         return TextGenerationResult(
             model=request.model,
-            text='{"findings":[]}',
-            structured_output={"findings": []},
+            text=self.vision_result.model_dump_json(by_alias=True),
+            structured_output=self.vision_result.model_dump(mode="json", by_alias=True),
             metrics=sample_inference_metrics(),
         )
 
