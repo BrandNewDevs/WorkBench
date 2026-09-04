@@ -1,5 +1,6 @@
 """Tests for typed proposal validation and approval-gated dispatch."""
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -415,6 +416,29 @@ async def test_retry_returns_a_durable_result_without_a_second_dispatch() -> Non
     assert first.dispatched_now is True
     assert retry.dispatched_now is False
     assert retry.result == first.result
+    assert len(artifacts.calls) == 1
+
+
+async def test_concurrent_dispatchers_execute_an_approval_only_once() -> None:
+    """Concurrent callers cannot both win Backend 2's atomic execution claim."""
+
+    registry, approvals, artifacts, _ = _registry()
+    workflow_run = _waiting_run()
+    call = registry.validate_proposal(
+        _export_proposal(),
+        workflow_type=WorkflowType.INSPECTION_ANALYSIS,
+        stage=WorkflowStage.VALIDATING,
+    )
+    approval = registry.create_pending_approval(call, workflow_run=workflow_run)
+    approved = _approved(approval)
+    approvals.approvals[approval.approval_id] = approved
+
+    results = await asyncio.gather(
+        registry.execute_approved(call, approval=approved, workflow_run=workflow_run),
+        registry.execute_approved(call, approval=approved, workflow_run=workflow_run),
+    )
+
+    assert sum(result.dispatched_now for result in results) == 1
     assert len(artifacts.calls) == 1
 
 
