@@ -9,7 +9,7 @@ from types import TracebackType
 from typing import TypeVar
 
 import httpx
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from app.ai.errors import (
     AIError,
@@ -30,6 +30,7 @@ from app.ai.models.ollama_wire import (
     OllamaTagsResponse,
 )
 from app.ai.models.profiles import load_model_profile
+from app.ai.models.structured_output import validate_output_schema, validate_structured_output
 from app.ai.schemas import (
     Capability,
     EmbeddingRequest,
@@ -46,7 +47,10 @@ from app.ai.schemas import (
 )
 
 ResultT = TypeVar("ResultT")
-_JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+_JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(
+    JsonValue,
+    config=ConfigDict(allow_inf_nan=False),
+)
 _CAPACITY_MARKERS = (
     "out of memory",
     "insufficient memory",
@@ -128,6 +132,7 @@ class OllamaModelAdapter:
     async def generate_text(self, request: TextGenerationRequest) -> TextGenerationResult:
         """Run non-streaming structured text generation with one approved fallback."""
 
+        validate_output_schema(request.output_schema)
         async with self._inference_lock:
             result, selected_model, fallback_reason = await self._with_fallback(
                 Capability.TEXT,
@@ -155,6 +160,7 @@ class OllamaModelAdapter:
     async def generate_vision(self, request: VisionGenerationRequest) -> TextGenerationResult:
         """Run structured vision generation over caller-normalized base64 images."""
 
+        validate_output_schema(request.output_schema)
         async with self._inference_lock:
             result, selected_model, fallback_reason = await self._with_fallback(
                 Capability.VISION,
@@ -360,6 +366,7 @@ class OllamaModelAdapter:
             raise InvalidStructuredOutput("Ollama response model did not match the selected model")
         if not result.done:
             raise InvalidStructuredOutput("Ollama non-streaming chat response was incomplete")
+        validate_structured_output(output_schema, structured_output)
 
         return TextGenerationResult(
             model=model,

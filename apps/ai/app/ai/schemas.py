@@ -4,10 +4,12 @@ These models describe data only. They do not grant file access, approve a tool,
 execute an action, or start a local service.
 """
 
+from base64 import b64decode
+from binascii import Error as Base64DecodeError
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -16,6 +18,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(
         alias_generator=to_camel,
+        allow_inf_nan=False,
         extra="forbid",
         frozen=True,
         populate_by_name=True,
@@ -424,6 +427,22 @@ class VisionGenerationRequest(ContractModel):
     output_schema: dict[str, JsonValue]
     limits: GenerationLimits
     temperature: float = Field(default=0, ge=0, le=1)
+
+    @field_validator("images_base64")
+    @classmethod
+    def require_valid_nonempty_base64(cls, images: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject malformed or empty normalized image payloads before inference."""
+
+        for image in images:
+            if not image:
+                raise ValueError("base64 image data must not be empty")
+            try:
+                decoded = b64decode(image, validate=True)
+            except (Base64DecodeError, ValueError) as error:
+                raise ValueError("image data must use valid standard base64 encoding") from error
+            if not decoded:
+                raise ValueError("base64 image data must decode to at least one byte")
+        return images
 
 
 class TextGenerationResult(ContractModel):

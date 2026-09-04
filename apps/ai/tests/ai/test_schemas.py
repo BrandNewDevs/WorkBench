@@ -1,10 +1,24 @@
 """Validation tests for the Phase 0 AI data contracts."""
 
+from math import inf, nan
+
 import pytest
 from pydantic import ValidationError
 
-from app.ai.evaluation.samples import representative_contracts, sample_model_profile
-from app.ai.schemas import AgentProposal, Capability, CapabilityDecision, ModelHealth, ModelStatus
+from app.ai.evaluation.samples import (
+    representative_contracts,
+    sample_inference_metrics,
+    sample_model_profile,
+)
+from app.ai.schemas import (
+    AgentProposal,
+    Capability,
+    CapabilityDecision,
+    EmbeddingResult,
+    ModelHealth,
+    ModelStatus,
+    VisionGenerationRequest,
+)
 
 
 def test_every_contract_accepts_a_representative_example() -> None:
@@ -60,4 +74,32 @@ def test_fallback_decision_requires_a_reason() -> None:
             selected_model="qwen3:1.7b",
             reason="Preferred model was not selected.",
             used_fallback=True,
+        )
+
+
+@pytest.mark.parametrize("non_finite", (nan, inf, -inf))
+def test_public_embedding_contract_rejects_non_finite_values(non_finite: float) -> None:
+    """Prevent invalid vectors from reaching retrieval or persistent storage."""
+
+    with pytest.raises(ValidationError):
+        EmbeddingResult(
+            model="qwen3-embedding:0.6b",
+            vectors=((non_finite,),),
+            metrics=sample_inference_metrics(),
+        )
+
+
+@pytest.mark.parametrize("image", ("", "not-base64", "===="))
+def test_vision_request_rejects_invalid_base64_images(image: str) -> None:
+    """Reject malformed normalized image input before it reaches Ollama."""
+
+    profile = sample_model_profile()
+    with pytest.raises(ValidationError):
+        VisionGenerationRequest(
+            model="qwen3-vl:4b",
+            system_prompt="Return JSON.",
+            user_prompt="Inspect the image.",
+            images_base64=(image,),
+            output_schema={"type": "object"},
+            limits=profile.vision_limits,
         )

@@ -6,10 +6,12 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.ai.errors import InvalidStructuredOutput, ModelNotInstalled, OllamaPolicyViolation
 from app.ai.models.ollama import OllamaModelAdapter, create_ollama_adapter
 from app.ai.models.ollama_http import OllamaSettings
+from app.ai.models.ollama_wire import OllamaEmbedResponse
 from app.ai.models.profiles import load_model_profile
 from app.ai.schemas import (
     Capability,
@@ -424,3 +426,98 @@ async def test_malformed_structured_chat_output_is_rejected() -> None:
             )
         )
     await adapter.close()
+
+
+async def test_json_that_does_not_match_output_schema_is_rejected() -> None:
+    """Reject syntactically valid JSON with the wrong application structure."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json=tags_response("qwen3:4b"))
+        payload = json.loads(request.content)
+        if payload.get("keep_alive") == 0:
+            return httpx.Response(200, json={"done": True})
+        return httpx.Response(200, json=chat_response(payload["model"], "[]"))
+
+    profile = load_model_profile()
+    adapter = adapter_for(handler)
+    with pytest.raises(InvalidStructuredOutput, match="did not match"):
+        await adapter.generate_text(
+            TextGenerationRequest(
+                model="qwen3:4b",
+                system_prompt="Return JSON.",
+                user_prompt="Return status.",
+                output_schema={
+                    "type": "object",
+                    "required": ["status"],
+                    "properties": {"status": {"type": "string"}},
+                },
+                limits=profile.text_limits,
+            )
+        )
+    await adapter.close()
+
+
+async def test_invalid_output_schema_is_rejected_before_http() -> None:
+    """Catch application schema mistakes before listing or loading a model."""
+
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=tags_response("qwen3:4b"))
+
+    profile = load_model_profile()
+    adapter = adapter_for(handler)
+    with pytest.raises(InvalidStructuredOutput, match="schema is invalid"):
+        await adapter.generate_text(
+            TextGenerationRequest(
+                model="qwen3:4b",
+                system_prompt="Return JSON.",
+                user_prompt="Return status.",
+                output_schema={"type": "not-a-json-schema-type"},
+                limits=profile.text_limits,
+            )
+        )
+    await adapter.close()
+
+    assert requests == []
+
+
+async def test_external_schema_reference_is_rejected_before_http() -> None:
+    """Prevent JSON Schema validation from resolving anything over a network."""
+
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=tags_response("qwen3:4b"))
+
+    profile = load_model_profile()
+    adapter = adapter_for(handler)
+    with pytest.raises(OllamaPolicyViolation, match="external JSON Schema"):
+        await adapter.generate_text(
+            TextGenerationRequest(
+                model="qwen3:4b",
+                system_prompt="Return JSON.",
+                user_prompt="Return status.",
+                output_schema={"$ref": "https://example.com/confidential-schema.json"},
+                limits=profile.text_limits,
+            )
+        )
+    await adapter.close()
+
+    assert requests == []
+
+
+@pytest.mark.parametrize("non_finite", ("NaN", "Infinity", "-Infinity"))
+def test_ollama_embedding_response_rejects_non_finite_values(non_finite: str) -> None:
+    """Reject invalid numeric values at the Ollama wire boundary."""
+
+    with pytest.raises(ValidationError):
+        OllamaEmbedResponse.model_validate(
+            {
+                "model": "qwen3-embedding:0.6b",
+                "embeddings": [[non_finite]],
+            }
+        )

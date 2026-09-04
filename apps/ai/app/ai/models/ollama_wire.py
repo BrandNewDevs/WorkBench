@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class OllamaWireModel(BaseModel):
     """Allow additive Ollama response fields while validating fields we consume."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(allow_inf_nan=False, extra="ignore")
 
 
 class OllamaModelDetails(OllamaWireModel):
