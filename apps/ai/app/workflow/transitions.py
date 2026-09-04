@@ -38,6 +38,7 @@ def can_transition(
     target: WorkflowStage,
     *,
     sandbox_attempts: int = 0,
+    sandbox_passed: bool | None = None,
 ) -> bool:
     """Return whether the exact workflow state permits the requested transition."""
 
@@ -58,7 +59,7 @@ def can_transition(
         if target is WorkflowStage.REPAIRING:
             return sandbox_attempts == 1
         if target is WorkflowStage.COMPLETED:
-            return sandbox_attempts >= 2
+            return sandbox_attempts >= 2 and sandbox_passed is True
     return True
 
 
@@ -68,10 +69,17 @@ def assert_transition(
     target: WorkflowStage,
     *,
     sandbox_attempts: int = 0,
+    sandbox_passed: bool | None = None,
 ) -> None:
     """Reject an invalid controller transition before the persistence port is called."""
 
-    if not can_transition(workflow_type, current, target, sandbox_attempts=sandbox_attempts):
+    if not can_transition(
+        workflow_type,
+        current,
+        target,
+        sandbox_attempts=sandbox_attempts,
+        sandbox_passed=sandbox_passed,
+    ):
         raise WorkflowTransitionError(
             f"{workflow_type.value} cannot transition from {current.value} to {target.value}"
         )

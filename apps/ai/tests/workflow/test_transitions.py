@@ -45,7 +45,13 @@ def test_all_code_repair_transitions_are_permitted(
     """The repair path uses a second approval before the successful rerun."""
 
     attempts = 2 if target is WorkflowStage.COMPLETED else 1
-    assert can_transition(WorkflowType.CODE_REPAIR, current, target, sandbox_attempts=attempts)
+    assert can_transition(
+        WorkflowType.CODE_REPAIR,
+        current,
+        target,
+        sandbox_attempts=attempts,
+        sandbox_passed=True if target is WorkflowStage.COMPLETED else None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -59,6 +65,7 @@ def test_all_code_repair_transitions_are_permitted(
         ),
         (WorkflowType.CODE_REPAIR, WorkflowStage.PLANNING, WorkflowStage.EXTRACTING, 0),
         (WorkflowType.CODE_REPAIR, WorkflowStage.SANDBOX_EXECUTING, WorkflowStage.COMPLETED, 1),
+        (WorkflowType.CODE_REPAIR, WorkflowStage.SANDBOX_EXECUTING, WorkflowStage.COMPLETED, 2),
         (WorkflowType.CODE_REPAIR, WorkflowStage.SANDBOX_EXECUTING, WorkflowStage.REPAIRING, 2),
         (WorkflowType.CODE_REPAIR, WorkflowStage.COMPLETED, WorkflowStage.FAILED, 2),
         (
@@ -105,3 +112,15 @@ def test_any_active_stage_may_fail(workflow_type: WorkflowType, stage: WorkflowS
     """Expected dependency failures can be recorded from every in-progress stage."""
 
     assert can_transition(workflow_type, stage, WorkflowStage.FAILED)
+
+
+def test_failed_second_sandbox_attempt_cannot_complete() -> None:
+    """Completion requires the approved repair rerun to pass."""
+
+    assert not can_transition(
+        WorkflowType.CODE_REPAIR,
+        WorkflowStage.SANDBOX_EXECUTING,
+        WorkflowStage.COMPLETED,
+        sandbox_attempts=2,
+        sandbox_passed=False,
+    )

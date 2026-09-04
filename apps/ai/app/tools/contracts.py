@@ -110,6 +110,18 @@ class DocumentExportResult(ApiContractModel):
     artifacts: tuple[ArtifactReference, ...] = ()
     failure_code: str | None = Field(default=None, max_length=100)
 
+    @model_validator(mode="after")
+    def require_consistent_execution_result(self) -> "DocumentExportResult":
+        if self.status is ExecutionStatus.COMPLETED:
+            if not self.artifacts or self.failure_code is not None:
+                raise ValueError("completed document export requires artifacts and no failure code")
+        elif self.status is ExecutionStatus.FAILED:
+            if self.artifacts or self.failure_code is None:
+                raise ValueError("failed document export requires a failure code and no artifacts")
+        else:
+            raise ValueError("document export results must be completed or failed")
+        return self
+
 
 class SandboxExecutionResult(ApiContractModel):
     """Sanitized summary returned from Backend 2's isolated sandbox executor."""
@@ -119,6 +131,20 @@ class SandboxExecutionResult(ApiContractModel):
     exit_code: int | None = None
     passed: bool | None = None
     failure_code: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def require_consistent_execution_result(self) -> "SandboxExecutionResult":
+        if self.status is ExecutionStatus.COMPLETED:
+            if self.exit_code != 0 or self.passed is not True or self.failure_code is not None:
+                raise ValueError("completed sandbox execution requires exit code 0 and passed=true")
+        elif self.status is ExecutionStatus.FAILED:
+            if self.passed is not False or self.failure_code is None:
+                raise ValueError(
+                    "failed sandbox execution requires passed=false and a failure code"
+                )
+        else:
+            raise ValueError("sandbox execution results must be completed or failed")
+        return self
 
 
 ToolExecutionResult = DocumentExportResult | SandboxExecutionResult

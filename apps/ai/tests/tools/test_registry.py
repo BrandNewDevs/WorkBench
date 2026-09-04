@@ -10,6 +10,7 @@ import pytest
 from app.ai.schemas import ProposedToolCall
 from app.tools.contracts import (
     ArtifactFormat,
+    ArtifactReference,
     DocumentExportExecutionRequest,
     DocumentExportResult,
     SandboxExecutionRequest,
@@ -25,9 +26,9 @@ from app.workflow.contracts import (
     ApprovalStatus,
     ExecutionStatus,
     UtcTimestamp,
-    WorkflowStage,
     WorkflowRun,
     WorkflowRunStatus,
+    WorkflowStage,
     WorkflowType,
 )
 
@@ -42,7 +43,16 @@ class RecordingArtifactExecutor:
         self, request: DocumentExportExecutionRequest
     ) -> DocumentExportResult:
         self.calls.append(request)
-        return DocumentExportResult(status=ExecutionStatus.COMPLETED)
+        return DocumentExportResult(
+            status=ExecutionStatus.COMPLETED,
+            artifacts=(
+                ArtifactReference(
+                    artifact_id=uuid4(),
+                    format=ArtifactFormat.DOCX,
+                    file_name="approval-note.docx",
+                ),
+            ),
+        )
 
 
 @dataclass
