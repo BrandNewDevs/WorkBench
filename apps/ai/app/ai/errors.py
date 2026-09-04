@@ -17,6 +17,18 @@ class ModelCapacityError(AIError):
     """The local runtime lacks capacity to load or run a selected model."""
 
 
+class ModelRequestTimeout(AIError):
+    """A bounded local model request exceeded its configured deadline."""
+
+
+class ModelRequestFailed(AIError):
+    """The local runtime rejected a request for a non-capacity reason."""
+
+
+class OllamaPolicyViolation(AIError):
+    """Configuration or an endpoint would cross the approved local-only seam."""
+
+
 class InvalidStructuredOutput(AIError):
     """A local model response failed schema validation after allowed retries."""
 

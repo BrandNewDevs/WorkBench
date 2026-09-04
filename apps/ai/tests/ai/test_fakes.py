@@ -5,27 +5,34 @@ from app.ai.evaluation.samples import (
     sample_evidence_chunk,
     sample_finding,
     sample_model_profile,
-    sample_task,
 )
 from app.ai.fakes import FakeAIEngine, FakeKnowledgeAdapter, FakeModelAdapter
 from app.ai.schemas import (
     DraftRequest,
     KnowledgeQuery,
     SourceDocument,
-    VisualAnalysisRequest,
+    VisionGenerationRequest,
 )
 
 
-async def test_fake_model_returns_sample_finding_without_reading_a_file() -> None:
-    """Exercise visual analysis without Ollama or filesystem access."""
+async def test_fake_model_returns_structured_vision_output() -> None:
+    """Exercise low-level vision generation without Ollama or filesystem access."""
 
     adapter = FakeModelAdapter()
-    request = VisualAnalysisRequest(inputs=(sample_approved_path(),), task=sample_task())
+    profile = sample_model_profile()
+    request = VisionGenerationRequest(
+        model="qwen3-vl:4b",
+        system_prompt="Return valid JSON.",
+        user_prompt="Extract findings.",
+        images_base64=("c2FuaXRpemVkLWltYWdl",),
+        output_schema={"type": "object"},
+        limits=profile.vision_limits,
+    )
 
-    result = await adapter.analyze_visual(request)
+    result = await adapter.generate_vision(request)
 
-    assert result.findings == (sample_finding(),)
-    assert adapter.calls == ["analyze_visual:task-inspection-001"]
+    assert result.structured_output == {"findings": []}
+    assert adapter.calls == ["generate_vision:qwen3-vl:4b"]
 
 
 async def test_fake_knowledge_returns_sample_evidence() -> None:

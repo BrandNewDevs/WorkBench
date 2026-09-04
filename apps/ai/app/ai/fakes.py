@@ -7,6 +7,7 @@ from app.ai.evaluation.samples import (
     sample_evidence_chunk,
     sample_grounded_draft,
     sample_health_report,
+    sample_inference_metrics,
     sample_runtime_health,
     sample_vision_analysis,
 )
@@ -24,6 +25,7 @@ from app.ai.schemas import (
     EvidenceChunk,
     GroundedDraft,
     IngestionResult,
+    InstalledModel,
     KnowledgeQuery,
     ModelProfile,
     ModelRuntimeHealth,
@@ -33,6 +35,7 @@ from app.ai.schemas import (
     TextGenerationRequest,
     TextGenerationResult,
     VisionAnalysis,
+    VisionGenerationRequest,
     VisualAnalysisRequest,
 )
 
@@ -44,6 +47,16 @@ class FakeModelAdapter:
     runtime_health: ModelRuntimeHealth = field(default_factory=sample_runtime_health)
     vision_result: VisionAnalysis = field(default_factory=sample_vision_analysis)
     calls: list[str] = field(default_factory=list, init=False)
+
+    async def list_models(self) -> tuple[InstalledModel, ...]:
+        """Return the selected fake models as installed."""
+
+        self.calls.append("list_models")
+        return tuple(
+            InstalledModel(name=health.selected_model, size_bytes=0)
+            for health in self.runtime_health.models
+            if health.selected_model is not None
+        )
 
     async def health(self, profile: ModelProfile) -> ModelRuntimeHealth:
         """Return configured fake health and record the operation."""
@@ -59,20 +72,40 @@ class FakeModelAdapter:
             model=request.model,
             text='{"status":"ok"}',
             structured_output={"status": "ok"},
+            metrics=sample_inference_metrics(),
         )
 
-    async def analyze_visual(self, request: VisualAnalysisRequest) -> VisionAnalysis:
-        """Return the sample finding without reading the supplied path."""
+    async def generate_vision(self, request: VisionGenerationRequest) -> TextGenerationResult:
+        """Return deterministic structured vision text."""
 
-        self.calls.append(f"analyze_visual:{request.task.task_id}")
-        return self.vision_result
+        self.calls.append(f"generate_vision:{request.model}")
+        return TextGenerationResult(
+            model=request.model,
+            text='{"findings":[]}',
+            structured_output={"findings": []},
+            metrics=sample_inference_metrics(),
+        )
 
     async def create_embeddings(self, request: EmbeddingRequest) -> EmbeddingResult:
         """Return one stable vector per input string."""
 
         self.calls.append(f"create_embeddings:{request.model}")
         vectors = tuple((0.1, 0.2, 0.3) for _ in request.inputs)
-        return EmbeddingResult(model=request.model, vectors=vectors)
+        return EmbeddingResult(
+            model=request.model,
+            vectors=vectors,
+            metrics=sample_inference_metrics(),
+        )
+
+    async def unload(self) -> None:
+        """Record an unload without contacting a runtime."""
+
+        self.calls.append("unload")
+
+    async def close(self) -> None:
+        """Record lifecycle cleanup without owning external resources."""
+
+        self.calls.append("close")
 
 
 @dataclass(slots=True)

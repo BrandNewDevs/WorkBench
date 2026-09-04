@@ -4,10 +4,12 @@ These models describe data only. They do not grant file access, approve a tool,
 execute an action, or start a local service.
 """
 
+from base64 import b64decode
+from binascii import Error as Base64DecodeError
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -16,6 +18,7 @@ class ContractModel(BaseModel):
 
     model_config = ConfigDict(
         alias_generator=to_camel,
+        allow_inf_nan=False,
         extra="forbid",
         frozen=True,
         populate_by_name=True,
@@ -76,6 +79,29 @@ class GenerationLimits(ContractModel):
     context_window: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
     timeout_seconds: float = Field(gt=0)
+
+
+class InferenceMetrics(ContractModel):
+    """Non-confidential timing and token counts returned by Ollama."""
+
+    client_elapsed_ms: float = Field(ge=0)
+    total_duration_ns: int | None = Field(default=None, ge=0)
+    load_duration_ns: int | None = Field(default=None, ge=0)
+    prompt_eval_count: int | None = Field(default=None, ge=0)
+    prompt_eval_duration_ns: int | None = Field(default=None, ge=0)
+    eval_count: int | None = Field(default=None, ge=0)
+    eval_duration_ns: int | None = Field(default=None, ge=0)
+
+
+class InstalledModel(ContractModel):
+    """Non-sensitive metadata reported by Ollama's local model registry."""
+
+    name: str = Field(min_length=1)
+    size_bytes: int = Field(ge=0)
+    digest: str = ""
+    family: str | None = None
+    parameter_size: str | None = None
+    quantization_level: str | None = None
 
 
 class ModelProfile(ContractModel):
@@ -391,12 +417,44 @@ class TextGenerationRequest(ContractModel):
     temperature: float = Field(default=0, ge=0, le=1)
 
 
+class VisionGenerationRequest(ContractModel):
+    """Normalized images and prompts for the low-level local model adapter."""
+
+    model: str = Field(min_length=1)
+    system_prompt: str = Field(min_length=1)
+    user_prompt: str = Field(min_length=1)
+    images_base64: tuple[str, ...] = Field(min_length=1)
+    output_schema: dict[str, JsonValue]
+    limits: GenerationLimits
+    temperature: float = Field(default=0, ge=0, le=1)
+
+    @field_validator("images_base64")
+    @classmethod
+    def require_valid_nonempty_base64(cls, images: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject malformed or empty normalized image payloads before inference."""
+
+        for image in images:
+            if not image:
+                raise ValueError("base64 image data must not be empty")
+            try:
+                decoded = b64decode(image, validate=True)
+            except (Base64DecodeError, ValueError) as error:
+                raise ValueError("image data must use valid standard base64 encoding") from error
+            if not decoded:
+                raise ValueError("base64 image data must decode to at least one byte")
+        return images
+
+
 class TextGenerationResult(ContractModel):
     """Raw validated response returned by a local model adapter."""
 
     model: str = Field(min_length=1)
     text: str
     structured_output: JsonValue
+    metrics: InferenceMetrics
+    done_reason: str | None = None
+    used_fallback: bool = False
+    fallback_reason: str | None = None
 
 
 class EmbeddingRequest(ContractModel):
@@ -411,3 +469,6 @@ class EmbeddingResult(ContractModel):
 
     model: str = Field(min_length=1)
     vectors: tuple[tuple[float, ...], ...] = Field(min_length=1)
+    metrics: InferenceMetrics
+    used_fallback: bool = False
+    fallback_reason: str | None = None
