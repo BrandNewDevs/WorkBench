@@ -17,6 +17,21 @@ WorkBench is a sovereign, local-first agentic AI workbench for confidential indu
 - Prompt before side effects: sandbox execution, artifact creation, export, or save. Directly uploaded inputs and curated-corpus retrieval may be read without a prompt.
 - Prefer a working vertical slice over unplanned platform breadth. Place enterprise integrations and unvalidated Jetson/LAN deployment work in future scope unless the plan is explicitly revised.
 
+## Technology baseline
+
+- Build the employee desktop client with **Electron + React + TypeScript**. Use the existing Vite/Tailwind toolchain for renderer UI and the static product site.
+- Build local services with **Python + FastAPI**. Keep workflow control, OCR/VLM integration, retrieval, document generation, and sandbox coordination in Python.
+- Use **Ollama** for every local inference and embedding request; use **Chroma** for the persistent local vector index, **SQLite** for application metadata, and **Docker** for isolated code execution.
+- Stay inside this stack for the MVP. A new framework, database, hosted service, model runtime, or package boundary needs an explicit `PLAN.md` revision before it is introduced.
+
+## Language and code guidelines
+
+- Write Electron, React, shared client types, and static-site code in TypeScript. Keep TypeScript strict; define interfaces at process/API boundaries and avoid `any`.
+- Write FastAPI, orchestration, retrieval, document, and sandbox code in Python. Use type hints, Pydantic models at API boundaries, `pathlib` for filesystem paths, and `snake_case` for Python names.
+- Keep API contracts explicit JSON. Use `camelCase` for JSON/TypeScript fields and translate at the Python boundary when needed; do not pass untyped dictionaries across application boundaries.
+- Keep React components focused on rendering and user interaction. Put Electron main-process work behind narrow IPC interfaces and keep security-sensitive filesystem/process operations out of the renderer.
+- Write UI text in clear, professional English suitable for government and industrial users. Label generated artifacts as drafts until the user approves export, use exact action language in approval prompts, and state uncertainty instead of inventing a conclusion.
+
 ## Repository boundaries
 
 - `apps/desktop` owns the Electron employee client.
