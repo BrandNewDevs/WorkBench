@@ -15,17 +15,20 @@ from app.tools.contracts import (
     DocumentExportResult,
     SandboxExecutionRequest,
     SandboxExecutionResult,
+    ToolExecutionResult,
 )
 from app.workflow.contracts import (
     ActivityEvent,
     Approval,
     ApprovalDecision,
+    ApprovalExecutionClaim,
     ApprovalResolution,
     UtcTimestamp,
     WorkflowRun,
     WorkflowRunStatus,
     WorkflowSession,
     WorkflowStage,
+    WorkflowType,
 )
 
 
@@ -182,7 +185,9 @@ class SessionFileStore(Protocol):
         """Atomically store validated upload content and metadata."""
         ...
 
-    async def resolve_approved_path(self, upload_id: UUID, session_id: UUID) -> ApprovedPath | None:
+    async def resolve_approved_path(
+        self, upload_id: UUID, session_id: UUID
+    ) -> ApprovedPath | None:
         """Return the exact stored input path after ownership checks."""
         ...
 
@@ -224,6 +229,39 @@ class ApprovalStore(Protocol):
         comment: str | None,
     ) -> ApprovalResolution | None:
         """Resolve once or return the matching prior resolution without rerunning work."""
+        ...
+
+    async def claim_execution(
+        self,
+        *,
+        approval_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+        workflow_type: WorkflowType,
+        expected_stage: WorkflowStage,
+        expected_stage_version: int,
+        tool_name: str,
+        arguments_hash: str,
+    ) -> ApprovalExecutionClaim | None:
+        """Atomically change a matching approved intent from not-started to queued."""
+        ...
+
+    async def record_execution_result(
+        self, *, approval_id: UUID, result: ToolExecutionResult
+    ) -> Approval | None:
+        """Durably attach an executor result to the approval claimed by this process."""
+        ...
+
+    async def get_execution_result(
+        self,
+        *,
+        approval_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+    ) -> ToolExecutionResult | None:
+        """Return the durable result for an already-claimed matching approval."""
         ...
 
 

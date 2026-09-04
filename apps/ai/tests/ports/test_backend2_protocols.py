@@ -31,3 +31,13 @@ def test_approval_store_exposes_atomic_pending_resolution() -> None:
     assert "expected_stage_version" in signature.parameters
     assert "decision" in signature.parameters
     assert inspect.iscoroutinefunction(ApprovalStore.resolve_pending_approval)
+
+
+def test_approval_store_exposes_an_atomic_execution_claim() -> None:
+    """Only the caller that changes an approval to queued may dispatch its tool."""
+
+    signature = inspect.signature(ApprovalStore.claim_execution)
+
+    assert "workflow_type" in signature.parameters
+    assert "arguments_hash" in signature.parameters
+    assert inspect.iscoroutinefunction(ApprovalStore.claim_execution)

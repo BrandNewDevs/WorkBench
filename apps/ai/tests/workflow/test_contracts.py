@@ -1,5 +1,6 @@
 """Tests for Backend 1's endpoint-neutral workflow contracts."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -12,7 +13,11 @@ from app.workflow.contracts import (
     ApprovalDecision,
     ApprovalStatus,
     ExecutionStatus,
+    WorkflowRun,
+    WorkflowRunStatus,
+    WorkflowSession,
     WorkflowStage,
+    WorkflowStatus,
     WorkflowType,
 )
 
@@ -43,6 +48,7 @@ def test_approval_requires_a_consistent_resolution() -> None:
             session_id=uuid4(),
             workflow_run_id=uuid4(),
             owner_user_id=uuid4(),
+            workflow_type=WorkflowType.CODE_REPAIR,
             stage=WorkflowStage.AWAITING_APPROVAL,
             stage_version=2,
             tool_name="run_sandbox",
@@ -62,6 +68,7 @@ def test_rejected_approval_cannot_claim_execution() -> None:
             session_id=uuid4(),
             workflow_run_id=uuid4(),
             owner_user_id=uuid4(),
+            workflow_type=WorkflowType.CODE_REPAIR,
             stage=WorkflowStage.AWAITING_APPROVAL,
             stage_version=2,
             tool_name="run_sandbox",
@@ -85,6 +92,7 @@ def test_pending_approval_cannot_claim_execution() -> None:
             session_id=uuid4(),
             workflow_run_id=uuid4(),
             owner_user_id=uuid4(),
+            workflow_type=WorkflowType.CODE_REPAIR,
             stage=WorkflowStage.AWAITING_APPROVAL,
             stage_version=2,
             tool_name="run_sandbox",
@@ -104,6 +112,7 @@ def test_timestamps_must_be_utc() -> None:
             session_id=uuid4(),
             workflow_run_id=uuid4(),
             owner_user_id=uuid4(),
+            workflow_type=WorkflowType.CODE_REPAIR,
             stage=WorkflowStage.AWAITING_APPROVAL,
             stage_version=2,
             tool_name="run_sandbox",
@@ -120,3 +129,50 @@ def test_workflow_type_is_explicit() -> None:
         "inspectionAnalysis",
         "codeRepair",
     }
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        lambda: WorkflowSession(
+            session_id=uuid4(),
+            owner_user_id=uuid4(),
+            workflow_type=WorkflowType.INSPECTION_ANALYSIS,
+            title="Inspection review",
+            stage=WorkflowStage.PLANNING,
+            status=WorkflowStatus.ACTIVE,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
+        lambda: WorkflowRun(
+            workflow_run_id=uuid4(),
+            session_id=uuid4(),
+            owner_user_id=uuid4(),
+            workflow_type=WorkflowType.INSPECTION_ANALYSIS,
+            stage=WorkflowStage.AWAITING_APPROVAL,
+            stage_version=3,
+            status=WorkflowRunStatus.COMPLETED,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
+        lambda: WorkflowRun(
+            workflow_run_id=uuid4(),
+            session_id=uuid4(),
+            owner_user_id=uuid4(),
+            workflow_type=WorkflowType.CODE_REPAIR,
+            stage=WorkflowStage.SANDBOX_EXECUTING,
+            stage_version=3,
+            status=WorkflowRunStatus.ACTIVE,
+            sandbox_attempts=0,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        ),
+    ],
+)
+def test_workflow_contracts_reject_inconsistent_states(
+    model: Callable[[], WorkflowSession | WorkflowRun],
+) -> None:
+    """Invalid workflow type, stage, status, and attempt combinations never persist."""
+
+    with pytest.raises(ValidationError):
+        model()

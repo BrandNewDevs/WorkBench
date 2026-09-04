@@ -105,6 +105,58 @@ class ExecutionStatus(StrEnum):
     FAILED = "failed"
 
 
+_INSPECTION_STAGES = frozenset(
+    {
+        WorkflowStage.COLLECTING_INPUTS,
+        WorkflowStage.EXTRACTING,
+        WorkflowStage.RETRIEVING,
+        WorkflowStage.DRAFTING,
+        WorkflowStage.VALIDATING,
+        WorkflowStage.AWAITING_APPROVAL,
+        WorkflowStage.EXPORTING,
+        WorkflowStage.APPROVAL_REJECTED,
+        WorkflowStage.COMPLETED,
+        WorkflowStage.FAILED,
+    }
+)
+_CODE_REPAIR_STAGES = frozenset(
+    {
+        WorkflowStage.COLLECTING_INPUTS,
+        WorkflowStage.PLANNING,
+        WorkflowStage.AWAITING_APPROVAL,
+        WorkflowStage.SANDBOX_EXECUTING,
+        WorkflowStage.REPAIRING,
+        WorkflowStage.APPROVAL_REJECTED,
+        WorkflowStage.COMPLETED,
+        WorkflowStage.FAILED,
+    }
+)
+_TERMINAL_STAGES = frozenset(
+    {WorkflowStage.APPROVAL_REJECTED, WorkflowStage.COMPLETED, WorkflowStage.FAILED}
+)
+
+
+def _stage_matches_workflow(workflow_type: WorkflowType, stage: WorkflowStage) -> bool:
+    allowed_stages = (
+        _INSPECTION_STAGES
+        if workflow_type is WorkflowType.INSPECTION_ANALYSIS
+        else _CODE_REPAIR_STAGES
+    )
+    return stage in allowed_stages
+
+
+def _status_matches_stage(status: WorkflowStatus, stage: WorkflowStage) -> bool:
+    return (
+        (status is WorkflowStatus.ACTIVE and stage not in _TERMINAL_STAGES)
+        or (status is WorkflowStatus.COMPLETED and stage is WorkflowStage.COMPLETED)
+        or (status is WorkflowStatus.FAILED and stage is WorkflowStage.FAILED)
+        or (
+            status is WorkflowStatus.APPROVAL_REJECTED
+            and stage is WorkflowStage.APPROVAL_REJECTED
+        )
+    )
+
+
 class WorkflowSession(ApiContractModel):
     """Durable user-owned workspace boundary without filesystem details."""
 
@@ -116,6 +168,14 @@ class WorkflowSession(ApiContractModel):
     status: WorkflowStatus = WorkflowStatus.ACTIVE
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
+
+    @model_validator(mode="after")
+    def require_consistent_workflow_state(self) -> "WorkflowSession":
+        if not _stage_matches_workflow(self.workflow_type, self.stage):
+            raise ValueError("workflow stage is not valid for this workflow type")
+        if not _status_matches_stage(self.status, self.stage):
+            raise ValueError("workflow status does not match its stage")
+        return self
 
 
 class WorkflowRun(ApiContractModel):
@@ -131,6 +191,43 @@ class WorkflowRun(ApiContractModel):
     sandbox_attempts: int = Field(default=0, ge=0)
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
+
+    @model_validator(mode="after")
+    def require_consistent_workflow_state(self) -> "WorkflowRun":
+        if not _stage_matches_workflow(self.workflow_type, self.stage):
+            raise ValueError("workflow stage is not valid for this workflow type")
+        if (
+            self.status is WorkflowRunStatus.QUEUED
+            and self.stage is not WorkflowStage.COLLECTING_INPUTS
+        ):
+            raise ValueError("queued workflow runs must remain at collecting inputs")
+        if self.status is WorkflowRunStatus.WAITING_FOR_APPROVAL:
+            if self.stage is not WorkflowStage.AWAITING_APPROVAL:
+                raise ValueError("waiting workflow runs must be awaiting approval")
+        elif self.status is WorkflowRunStatus.COMPLETED:
+            if self.stage is not WorkflowStage.COMPLETED:
+                raise ValueError("completed workflow runs must be completed")
+        elif self.status is WorkflowRunStatus.FAILED:
+            if self.stage is not WorkflowStage.FAILED:
+                raise ValueError("failed workflow runs must be failed")
+        elif self.status is WorkflowRunStatus.APPROVAL_REJECTED:
+            if self.stage is not WorkflowStage.APPROVAL_REJECTED:
+                raise ValueError("rejected workflow runs must be approval rejected")
+        elif self.status is WorkflowRunStatus.ACTIVE and self.stage in _TERMINAL_STAGES | {
+            WorkflowStage.AWAITING_APPROVAL
+        }:
+            raise ValueError("active workflow runs must be in an active operation stage")
+        if self.workflow_type is WorkflowType.INSPECTION_ANALYSIS and self.sandbox_attempts != 0:
+            raise ValueError("inspection workflow runs cannot have sandbox attempts")
+        if self.stage is WorkflowStage.SANDBOX_EXECUTING and self.sandbox_attempts < 1:
+            raise ValueError("sandbox execution requires a recorded sandbox attempt")
+        if self.stage is WorkflowStage.REPAIRING and self.sandbox_attempts != 1:
+            raise ValueError("repairing requires exactly one prior sandbox attempt")
+        if self.stage is WorkflowStage.COMPLETED and (
+            self.workflow_type is WorkflowType.CODE_REPAIR and self.sandbox_attempts < 2
+        ):
+            raise ValueError("completed code repair requires a successful approved rerun")
+        return self
 
 
 class ActivityEvent(ApiContractModel):
@@ -151,6 +248,7 @@ class Approval(ApiContractModel):
     session_id: UUID
     workflow_run_id: UUID
     owner_user_id: UUID
+    workflow_type: WorkflowType
     stage: WorkflowStage
     stage_version: int = Field(ge=0)
     tool_name: str = Field(min_length=1, max_length=100, pattern=r"^[a-z][a-z0-9_]*$")
@@ -220,3 +318,10 @@ class ApprovalResolution(ApiContractModel):
 
     approval: Approval
     resolved_now: bool
+
+
+class ApprovalExecutionClaim(ApiContractModel):
+    """Outcome of atomically reserving one approved side effect for execution."""
+
+    approval: Approval
+    claimed_now: bool

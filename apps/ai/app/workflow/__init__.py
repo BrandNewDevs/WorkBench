@@ -3,6 +3,7 @@
 from app.workflow.contracts import (
     ActivityEvent,
     Approval,
+    ApprovalExecutionClaim,
     ApprovalResolution,
     WorkflowRun,
     WorkflowSession,
@@ -14,6 +15,7 @@ from app.workflow.transitions import WorkflowTransitionError, assert_transition,
 __all__ = [
     "ActivityEvent",
     "Approval",
+    "ApprovalExecutionClaim",
     "ApprovalResolution",
     "WorkflowRun",
     "WorkflowSession",

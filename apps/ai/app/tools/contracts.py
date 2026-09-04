@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from app.api.contracts import ApiContractModel
-from app.workflow.contracts import ExecutionStatus
+from app.workflow.contracts import Approval, ExecutionStatus
 
 
 class ToolName(StrEnum):
@@ -122,3 +122,17 @@ class SandboxExecutionResult(ApiContractModel):
 
 
 ToolExecutionResult = DocumentExportResult | SandboxExecutionResult
+
+
+class ToolExecutionDispatch(ApiContractModel):
+    """Whether this caller claimed execution and any durable prior result."""
+
+    approval: Approval
+    dispatched_now: bool
+    result: ToolExecutionResult | None = None
+
+    @model_validator(mode="after")
+    def require_result_for_new_dispatch(self) -> "ToolExecutionDispatch":
+        if self.dispatched_now and self.result is None:
+            raise ValueError("a new dispatch must include its executor result")
+        return self

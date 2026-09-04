@@ -10,13 +10,14 @@ from pydantic import JsonValue, ValidationError
 
 from app.ai.schemas import ProposedToolCall, ToolDefinition
 from app.api.contracts import ApiContractModel
-from app.ports.backend2 import ArtifactExecutor, SandboxExecutor
+from app.ports.backend2 import ApprovalStore, ArtifactExecutor, SandboxExecutor
 from app.tools.contracts import (
     DocumentExportArguments,
     DocumentExportExecutionRequest,
     SandboxArguments,
     SandboxExecutionRequest,
     ToolArguments,
+    ToolExecutionDispatch,
     ToolExecutionResult,
     ToolName,
     ValidatedToolCall,
@@ -25,6 +26,8 @@ from app.workflow.contracts import (
     Approval,
     ApprovalStatus,
     ExecutionStatus,
+    WorkflowRun,
+    WorkflowRunStatus,
     WorkflowStage,
     WorkflowType,
 )
@@ -88,8 +91,12 @@ class ToolRegistry:
     """Validate proposals and dispatch only an exact approved execution intent."""
 
     def __init__(
-        self, artifact_executor: ArtifactExecutor, sandbox_executor: SandboxExecutor
+        self,
+        approval_store: ApprovalStore,
+        artifact_executor: ArtifactExecutor,
+        sandbox_executor: SandboxExecutor,
     ) -> None:
+        self._approval_store = approval_store
         self._artifact_executor = artifact_executor
         self._sandbox_executor = sandbox_executor
 
@@ -148,27 +155,29 @@ class ToolRegistry:
         self,
         call: ValidatedToolCall,
         *,
-        session_id: UUID,
-        workflow_run_id: UUID,
-        owner_user_id: UUID,
-        stage: WorkflowStage,
-        stage_version: int,
+        workflow_run: WorkflowRun,
         requested_at: datetime | None = None,
         approval_id: UUID | None = None,
     ) -> Approval:
         """Bind normalized intent to the awaiting-approval run state before persistence."""
 
         registration = _REGISTERED_TOOLS[call.tool_name]
-        if stage not in registration.execution_stages:
+        if registration.workflow_type is not workflow_run.workflow_type:
+            raise ApprovalPolicyError("tool is not eligible for this workflow type")
+        if (
+            workflow_run.stage not in registration.execution_stages
+            or workflow_run.status is not WorkflowRunStatus.WAITING_FOR_APPROVAL
+        ):
             raise ApprovalPolicyError("approval is not being created at the tool execution stage")
         timestamp = requested_at if requested_at is not None else datetime.now(UTC)
         return Approval(
             approval_id=approval_id or uuid4(),
-            session_id=session_id,
-            workflow_run_id=workflow_run_id,
-            owner_user_id=owner_user_id,
-            stage=stage,
-            stage_version=stage_version,
+            session_id=workflow_run.session_id,
+            workflow_run_id=workflow_run.workflow_run_id,
+            owner_user_id=workflow_run.owner_user_id,
+            workflow_type=workflow_run.workflow_type,
+            stage=workflow_run.stage,
+            stage_version=workflow_run.stage_version,
             tool_name=call.tool_name.value,
             normalized_arguments=_normalized_arguments(call.arguments),
             arguments_hash=argument_hash(call.arguments),
@@ -180,42 +189,70 @@ class ToolRegistry:
         call: ValidatedToolCall,
         *,
         approval: Approval | None,
-        session_id: UUID,
-        workflow_run_id: UUID,
-        owner_user_id: UUID,
-        stage: WorkflowStage,
-        stage_version: int,
-    ) -> ToolExecutionResult:
+        workflow_run: WorkflowRun,
+    ) -> ToolExecutionDispatch:
         """Dispatch only after the persisted approval exactly matches the current intent."""
 
         self._assert_execution_approved(
             call,
             approval=approval,
-            session_id=session_id,
-            workflow_run_id=workflow_run_id,
-            owner_user_id=owner_user_id,
-            stage=stage,
-            stage_version=stage_version,
+            workflow_run=workflow_run,
         )
         assert approval is not None  # Narrowed after the policy guard above.
+        claim = await self._approval_store.claim_execution(
+            approval_id=approval.approval_id,
+            session_id=workflow_run.session_id,
+            workflow_run_id=workflow_run.workflow_run_id,
+            owner_user_id=workflow_run.owner_user_id,
+            workflow_type=workflow_run.workflow_type,
+            expected_stage=workflow_run.stage,
+            expected_stage_version=workflow_run.stage_version,
+            tool_name=call.tool_name.value,
+            arguments_hash=argument_hash(call.arguments),
+        )
+        if claim is None:
+            raise ApprovalPolicyError("approval could not be claimed for execution")
+        if not claim.claimed_now:
+            return ToolExecutionDispatch(
+                approval=claim.approval,
+                dispatched_now=False,
+                result=await self._approval_store.get_execution_result(
+                    approval_id=approval.approval_id,
+                    session_id=workflow_run.session_id,
+                    workflow_run_id=workflow_run.workflow_run_id,
+                    owner_user_id=workflow_run.owner_user_id,
+                ),
+            )
         if call.tool_name is ToolName.REQUEST_DOCUMENT_EXPORT:
             assert isinstance(call.arguments, DocumentExportArguments)
-            return await self._artifact_executor.create_artifacts(
+            result: ToolExecutionResult = await self._artifact_executor.create_artifacts(
                 DocumentExportExecutionRequest(
                     approval_id=approval.approval_id,
-                    session_id=session_id,
-                    workflow_run_id=workflow_run_id,
+                    session_id=workflow_run.session_id,
+                    workflow_run_id=workflow_run.workflow_run_id,
                     arguments=call.arguments,
                 )
             )
-        assert isinstance(call.arguments, SandboxArguments)
-        return await self._sandbox_executor.run(
-            SandboxExecutionRequest(
-                approval_id=approval.approval_id,
-                session_id=session_id,
-                workflow_run_id=workflow_run_id,
-                arguments=call.arguments,
+        else:
+            assert isinstance(call.arguments, SandboxArguments)
+            result = await self._sandbox_executor.run(
+                SandboxExecutionRequest(
+                    approval_id=approval.approval_id,
+                    session_id=workflow_run.session_id,
+                    workflow_run_id=workflow_run.workflow_run_id,
+                    arguments=call.arguments,
+                )
             )
+        persisted_approval = await self._approval_store.record_execution_result(
+            approval_id=approval.approval_id,
+            result=result,
+        )
+        if persisted_approval is None:
+            raise ApprovalPolicyError("executor result could not be persisted")
+        return ToolExecutionDispatch(
+            approval=persisted_approval,
+            dispatched_now=True,
+            result=result,
         )
 
     def _assert_execution_approved(
@@ -223,27 +260,29 @@ class ToolRegistry:
         call: ValidatedToolCall,
         *,
         approval: Approval | None,
-        session_id: UUID,
-        workflow_run_id: UUID,
-        owner_user_id: UUID,
-        stage: WorkflowStage,
-        stage_version: int,
+        workflow_run: WorkflowRun,
     ) -> None:
         if approval is None:
             raise ApprovalPolicyError("missing approval")
         registration = _REGISTERED_TOOLS[call.tool_name]
-        if stage not in registration.execution_stages:
+        if registration.workflow_type is not workflow_run.workflow_type:
+            raise ApprovalPolicyError("tool is not eligible for this workflow type")
+        if (
+            workflow_run.stage not in registration.execution_stages
+            or workflow_run.status is not WorkflowRunStatus.WAITING_FOR_APPROVAL
+        ):
             raise ApprovalPolicyError("tool is not eligible for execution at the current stage")
         if approval.status is not ApprovalStatus.APPROVED:
             raise ApprovalPolicyError("approval is not approved")
-        if approval.execution_status not in {ExecutionStatus.NOT_STARTED, ExecutionStatus.QUEUED}:
-            raise ApprovalPolicyError("approval has already completed execution")
+        if approval.execution_status is ExecutionStatus.NOT_APPLICABLE:
+            raise ApprovalPolicyError("approval cannot authorize execution")
         if (
-            approval.session_id != session_id
-            or approval.workflow_run_id != workflow_run_id
-            or approval.owner_user_id != owner_user_id
-            or approval.stage is not stage
-            or approval.stage_version != stage_version
+            approval.session_id != workflow_run.session_id
+            or approval.workflow_run_id != workflow_run.workflow_run_id
+            or approval.owner_user_id != workflow_run.owner_user_id
+            or approval.workflow_type is not workflow_run.workflow_type
+            or approval.stage is not workflow_run.stage
+            or approval.stage_version != workflow_run.stage_version
             or approval.tool_name != call.tool_name.value
         ):
             raise ApprovalPolicyError("approval does not bind to the current execution context")
