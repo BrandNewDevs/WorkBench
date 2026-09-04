@@ -1,6 +1,7 @@
 """Validation tests for the Phase 0 AI data contracts."""
 
 from math import inf, nan
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -9,15 +10,21 @@ from app.ai.evaluation.samples import (
     representative_contracts,
     sample_inference_metrics,
     sample_model_profile,
+    sample_task,
 )
 from app.ai.schemas import (
     AgentProposal,
+    ApprovedPath,
+    ApprovedVisualInput,
     Capability,
     CapabilityDecision,
     EmbeddingResult,
     ModelHealth,
     ModelStatus,
     VisionGenerationRequest,
+    VisualAnalysisRequest,
+    VisualBytesInput,
+    VisualMimeType,
 )
 
 
@@ -102,4 +109,49 @@ def test_vision_request_rejects_invalid_base64_images(image: str) -> None:
             images_base64=(image,),
             output_schema={"type": "object"},
             limits=profile.vision_limits,
+        )
+
+
+def test_visual_request_accepts_only_explicit_approved_or_byte_inputs() -> None:
+    """Make filesystem authority visible in the public AI contract."""
+
+    approved = ApprovedVisualInput(
+        approved_path=ApprovedPath(
+            path=Path("/approved/session/report.pdf"),
+            source_id="report-1",
+            session_id="session-1",
+        ),
+        mime_type=VisualMimeType.PDF,
+        document_name="report.pdf",
+    )
+    uploaded = VisualBytesInput(
+        content=b"sanitized-image-bytes",
+        source_id="photo-1",
+        session_id="session-1",
+        mime_type=VisualMimeType.PNG,
+        document_name="photo.png",
+    )
+
+    request = VisualAnalysisRequest(inputs=(approved, uploaded), task=sample_task())
+
+    assert request.inputs == (approved, uploaded)
+    assert "sanitized-image-bytes" not in repr(request)
+
+
+def test_visual_request_rejects_an_unapproved_raw_path() -> None:
+    """Do not let callers bypass Backend 2's ApprovedPath wrapper."""
+
+    with pytest.raises(ValidationError):
+        VisualAnalysisRequest.model_validate(
+            {
+                "inputs": [
+                    {
+                        "inputKind": "approvedPath",
+                        "approvedPath": "/arbitrary/report.pdf",
+                        "mimeType": "application/pdf",
+                        "documentName": "report.pdf",
+                    }
+                ],
+                "task": sample_task().model_dump(by_alias=True, mode="json"),
+            }
         )

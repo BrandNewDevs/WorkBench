@@ -8,6 +8,7 @@ from base64 import b64decode
 from binascii import Error as Base64DecodeError
 from enum import StrEnum
 from pathlib import Path
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.alias_generators import to_camel
@@ -52,6 +53,15 @@ class InputModality(StrEnum):
     IMAGE = "image"
     SCANNED_PDF = "scannedPdf"
     NATIVE_DOCUMENT = "nativeDocument"
+
+
+class VisualMimeType(StrEnum):
+    """Visual formats deliberately supported by the MVP pipeline."""
+
+    PDF = "application/pdf"
+    JPEG = "image/jpeg"
+    PNG = "image/png"
+    WEBP = "image/webp"
 
 
 class ModelStatus(StrEnum):
@@ -210,6 +220,32 @@ class ApprovedPath(ContractModel):
     session_id: str = Field(min_length=1)
 
 
+class ApprovedVisualInput(ContractModel):
+    """A visual file whose exact path was already approved by Backend 2."""
+
+    input_kind: Literal["approvedPath"] = "approvedPath"
+    approved_path: ApprovedPath
+    mime_type: VisualMimeType
+    document_name: str = Field(min_length=1)
+
+
+class VisualBytesInput(ContractModel):
+    """An in-memory upload supplied by Backend 1 with immutable source metadata."""
+
+    input_kind: Literal["bytes"] = "bytes"
+    content: bytes = Field(min_length=1, repr=False)
+    source_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    mime_type: VisualMimeType
+    document_name: str = Field(min_length=1)
+
+
+VisualInput: TypeAlias = Annotated[
+    ApprovedVisualInput | VisualBytesInput,
+    Field(discriminator="input_kind"),
+]
+
+
 class SourceReference(ContractModel):
     """Application-controlled evidence location for a finding."""
 
@@ -265,6 +301,15 @@ class VisionPageResult(ContractModel):
     findings: tuple[Finding, ...] = ()
     warnings: tuple[str, ...] = ()
 
+    @model_validator(mode="after")
+    def has_exactly_one_visual_locator(self) -> "VisionPageResult":
+        """Identify a PDF page or a native image, never an ambiguous source."""
+
+        locator_count = int(self.page_number is not None) + int(self.image_id is not None)
+        if locator_count != 1:
+            raise ValueError("vision page result requires exactly one page or image locator")
+        return self
+
 
 class VisionAnalysis(ContractModel):
     """Combined OCR/vision result; it does not make workflow decisions."""
@@ -274,6 +319,24 @@ class VisionAnalysis(ContractModel):
     pages: tuple[VisionPageResult, ...] = Field(min_length=1)
     findings: tuple[Finding, ...] = ()
     warnings: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def findings_reference_returned_pages(self) -> "VisionAnalysis":
+        """Reject findings whose evidence is absent from the returned page set."""
+
+        page_locations = {
+            (page.source_id, page.page_number, page.image_id) for page in self.pages
+        }
+        page_findings = tuple(finding for page in self.pages for finding in page.findings)
+        if self.findings != page_findings:
+            raise ValueError("analysis findings must match the findings attached to its pages")
+
+        for finding in self.findings:
+            for evidence in finding.evidence:
+                location = (evidence.source_id, evidence.page_number, evidence.image_id)
+                if location not in page_locations:
+                    raise ValueError("finding evidence must reference a returned page or image")
+        return self
 
 
 class GroundedDraft(ContractModel):
@@ -330,7 +393,7 @@ class AgentProposal(ContractModel):
 class VisualAnalysisRequest(ContractModel):
     """Backend-approved inputs for a vision/OCR operation."""
 
-    inputs: tuple[ApprovedPath, ...] = Field(min_length=1)
+    inputs: tuple[VisualInput, ...] = Field(min_length=1)
     task: TaskDescriptor
 
 
