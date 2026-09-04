@@ -87,6 +87,7 @@ class LocalOllamaHTTPClient:
         endpoint: OllamaEndpoint,
         *,
         payload: dict[str, object] | None = None,
+        timeout_seconds: float | None = None,
     ) -> httpx.Response:
         """Call one allowlisted endpoint and preserve caller cancellation."""
 
@@ -94,9 +95,17 @@ class LocalOllamaHTTPClient:
             raise OllamaPolicyViolation("Ollama endpoint is not in the local runtime allowlist")
 
         method = "GET" if endpoint is OllamaEndpoint.TAGS else "POST"
+        deadline = timeout_seconds or self._settings.request_timeout_seconds
+        if deadline <= 0:
+            raise ValueError("Ollama request timeout must be greater than zero")
         try:
-            async with asyncio.timeout(self._settings.request_timeout_seconds):
-                return await self._client.request(method, endpoint.value, json=payload)
+            async with asyncio.timeout(deadline):
+                return await self._client.request(
+                    method,
+                    endpoint.value,
+                    json=payload,
+                    timeout=httpx.Timeout(deadline),
+                )
         except TimeoutError as error:
             raise ModelRequestTimeout("local Ollama request timed out") from error
         except httpx.TimeoutException as error:

@@ -44,3 +44,7 @@ class ModelAdapter(Protocol):
     async def unload(self) -> None:
         """Unload the active large generative model, if one is tracked."""
         ...
+
+    async def close(self) -> None:
+        """Release local runtime connections owned by the adapter."""
+        ...

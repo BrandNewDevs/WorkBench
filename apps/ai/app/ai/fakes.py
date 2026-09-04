@@ -102,6 +102,11 @@ class FakeModelAdapter:
 
         self.calls.append("unload")
 
+    async def close(self) -> None:
+        """Record lifecycle cleanup without owning external resources."""
+
+        self.calls.append("close")
+
 
 @dataclass(slots=True)
 class FakeKnowledgeAdapter:
