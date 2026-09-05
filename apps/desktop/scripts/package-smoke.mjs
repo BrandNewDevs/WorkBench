@@ -40,7 +40,9 @@ try {
   let verified = false;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/internal/ready`, { headers: { "X-Workbench-Capability": capability, "X-Workbench-Readiness-Nonce": nonce } });
+      const response = await fetch(`http://127.0.0.1:${port}/internal/ready`, {
+        headers: { "X-Workbench-Readiness-Nonce": nonce },
+      });
       const body = await response.json();
       if (typeof body.proof === "string" && body.proof.length === expected.length && timingSafeEqual(Buffer.from(body.proof), Buffer.from(expected))) {
         verified = true;
@@ -54,8 +56,21 @@ try {
   child.kill();
 }
 
-await new Promise((resolve, reject) => {
-  const provisionChild = spawn(provision, ["--help"], { windowsHide: true, stdio: "ignore" });
-  provisionChild.once("error", reject);
-  provisionChild.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`Provisioning tool exited with ${code}.`)));
-});
+function runProvision(commandArguments, stdio) {
+  return new Promise((resolve, reject) => {
+    const provisionChild = spawn(provision, commandArguments, { windowsHide: true, stdio });
+    let output = "";
+    provisionChild.stdout?.on("data", (chunk) => { output += chunk; });
+    provisionChild.once("error", reject);
+    provisionChild.once("exit", (code) => resolve({ code, output }));
+  });
+}
+
+const help = await runProvision(["--help"], "pipe");
+if (help.code !== 0 || !help.output.includes("usage:")) {
+  throw new Error(`Provisioning help exited with ${help.code}.`);
+}
+const nonInteractive = await runProvision([], "ignore");
+if (nonInteractive.code !== 2) {
+  throw new Error(`Provisioning tool must reject non-interactive input, got ${nonInteractive.code}.`);
+}

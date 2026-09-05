@@ -144,6 +144,15 @@ def create_app(
     async def require_managed_capability(
         request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
+        # Readiness proves the child received Electron's launch environment. Sending that
+        # capability to an unverified listener would defeat the proof, so this one route
+        # accepts only Electron's fresh nonce.
+        if request.url.path == "/internal/ready":
+            if request.headers.get("origin") == "null":
+                return JSONResponse(
+                    status_code=403, content={"detail": "request origin is not allowed"}
+                )
+            return await call_next(request)
         capability = resolved_settings.local_service_capability
         if capability is not None and not hmac.compare_digest(
             request.headers.get("x-workbench-capability", ""), capability

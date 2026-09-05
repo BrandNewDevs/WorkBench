@@ -82,15 +82,17 @@ def test_managed_capability_gates_requests_and_proves_readiness(tmp_path: Path) 
         blocked = client.get("/health")
         ready = client.get(
             "/internal/ready",
-            headers={
-                "X-Workbench-Capability": capability,
-                "X-Workbench-Readiness-Nonce": nonce,
-            },
+            headers={"X-Workbench-Readiness-Nonce": nonce},
+        )
+        null_origin = client.get(
+            "/internal/ready",
+            headers={"Origin": "null", "X-Workbench-Readiness-Nonce": nonce},
         )
         allowed = client.get("/health", headers={"X-Workbench-Capability": capability})
 
     assert blocked.status_code == 403
     assert ready.status_code == 200
+    assert null_origin.status_code == 403
     expected_proof = hmac.new(capability.encode(), nonce.encode(), sha256).hexdigest()
     assert ready.json()["proof"] == expected_proof
     assert allowed.status_code in {200, 503}

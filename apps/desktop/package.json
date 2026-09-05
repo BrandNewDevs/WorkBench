@@ -58,7 +58,7 @@
     ],
     "extraResources": [
       {
-        "from": "dist/service/workbench-service",
+        "from": "dist/service",
         "to": "service",
         "filter": ["**/*"]
       }

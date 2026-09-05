@@ -18,14 +18,13 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _run() -> int:
+async def _run(arguments: argparse.Namespace) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print(
             "Initial account provisioning requires an interactive local terminal.", file=sys.stderr
         )
         return 2
 
-    arguments = _arguments()
     username = input("Employee username: ")
     display_name = input("Employee display name: ")
     password = getpass.getpass("New password: ")
@@ -53,7 +52,8 @@ async def _run() -> int:
 def main() -> None:
     """Run the interactive local provisioning command."""
 
-    raise SystemExit(asyncio.run(_run()))
+    arguments = _arguments()
+    raise SystemExit(asyncio.run(_run(arguments)))
 
 
 if __name__ == "__main__":
