@@ -2,7 +2,21 @@
 
 from typing import Protocol
 
-from app.ai.schemas import EvidenceChunk, IngestionResult, KnowledgeQuery, SourceDocument
+from app.ai.schemas import (
+    EvidenceChunk,
+    IngestionResult,
+    KnowledgeQuery,
+    RetrievalMetrics,
+    SourceDocument,
+)
+
+
+class RetrievalMetricsSink(Protocol):
+    """Local output boundary for safe retrieval performance observations."""
+
+    def record(self, metrics: RetrievalMetrics) -> None:
+        """Record metrics that contain no query or document content."""
+        ...
 
 
 class KnowledgeIngestor(Protocol):

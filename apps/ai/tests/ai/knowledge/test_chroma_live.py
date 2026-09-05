@@ -10,7 +10,7 @@ from app.ai.knowledge.chroma_ingestion import (
     create_persistent_chroma_client,
 )
 from app.ai.models import create_ollama_adapter, load_model_profile
-from app.ai.schemas import ApprovedKnowledgeRoot, SourceDocument
+from app.ai.schemas import ApprovedKnowledgeRoot, KnowledgeQuery, SourceDocument
 
 pytestmark = [
     pytest.mark.live_ollama,
@@ -41,10 +41,15 @@ async def test_local_ollama_embeddings_are_persisted_idempotently(tmp_path: Path
     try:
         first = await ingestor.ingest(document)
         second = await ingestor.ingest(document)
+        evidence = await ingestor.search(
+            KnowledgeQuery(text="How should an unreadable measurement be recorded?")
+        )
     finally:
         await model_adapter.close()
 
     collection = client.get_collection(ingestor.collection_name, embedding_function=None)
     assert first.indexed_chunks == 1
     assert second.unchanged_chunks == 1
+    assert evidence[0].source_id == "live-sop-source"
+    assert evidence[0].page_number == 1
     assert collection.count() == 1

@@ -19,6 +19,7 @@ from app.ai.schemas import (
     Capability,
     CapabilityDecision,
     EmbeddingResult,
+    KnowledgeQuery,
     ModelHealth,
     ModelStatus,
     SourceDocument,
@@ -95,6 +96,23 @@ def test_public_embedding_contract_rejects_non_finite_values(non_finite: float) 
             vectors=((non_finite,),),
             metrics=sample_inference_metrics(),
         )
+
+
+def test_knowledge_query_rejects_blank_text() -> None:
+    """Stop empty semantic searches before they consume local model time."""
+
+    with pytest.raises(ValidationError):
+        KnowledgeQuery(text="   ")
+
+
+@pytest.mark.parametrize("minimum_score", (0.0, 0.29))
+def test_knowledge_query_cannot_lower_the_grounding_floor(
+    minimum_score: float,
+) -> None:
+    """Prevent callers from admitting unrelated evidence into drafting context."""
+
+    with pytest.raises(ValidationError):
+        KnowledgeQuery(text="Find the applicable SOP.", minimum_score=minimum_score)
 
 
 @pytest.mark.parametrize("image", ("", "not-base64", "===="))

@@ -297,6 +297,20 @@ class EvidenceChunk(ContractModel):
     embedding_model: str = Field(min_length=1)
 
 
+class RetrievalMetrics(ContractModel):
+    """Non-confidential measurements for comparing local retrieval hardware."""
+
+    profile_id: str = Field(min_length=1)
+    collection_name: str = Field(min_length=1)
+    embedding_model_id: str = Field(min_length=1)
+    elapsed_ms: float = Field(ge=0)
+    embedding_elapsed_ms: float = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+    returned_count: int = Field(ge=0)
+    candidate_scores: tuple[Annotated[float, Field(ge=0, le=1)], ...]
+    returned_scores: tuple[Annotated[float, Field(ge=0, le=1)], ...]
+
+
 class VisionPageResult(ContractModel):
     """Structured output for one page or image."""
 
@@ -456,7 +470,17 @@ class KnowledgeQuery(ContractModel):
 
     text: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
-    minimum_score: float = Field(default=0.3, ge=0, le=1)
+    minimum_score: float = Field(default=0.3, ge=0.3, le=1)
+
+    @field_validator("text")
+    @classmethod
+    def reject_blank_text(cls, text: str) -> str:
+        """Normalize surrounding whitespace and reject an empty semantic query."""
+
+        normalized = text.strip()
+        if not normalized:
+            raise ValueError("knowledge query text must not be blank")
+        return normalized
 
 
 class DraftRequest(ContractModel):
