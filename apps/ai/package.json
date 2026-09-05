@@ -2,6 +2,7 @@
   "name": "@workbench/ai",
   "private": true,
   "scripts": {
+    "dev": "node scripts/python.mjs -m app.main",
     "lint": "node scripts/python.mjs -m ruff check app tests",
     "typecheck": "node scripts/python.mjs -m mypy app tests",
     "test": "node --test scripts/*.test.mjs && node scripts/python.mjs -m pytest -m \"not live_ollama\"",
