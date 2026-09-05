@@ -6,7 +6,11 @@ from collections.abc import Sequence
 import pytest
 from pydantic import JsonValue
 
-from app.ai.errors import GroundingViolation, InvalidToolProposal
+from app.ai.errors import (
+    GroundingViolation,
+    InvalidStructuredOutput,
+    InvalidToolProposal,
+)
 from app.ai.evaluation.samples import (
     sample_evidence_chunk,
     sample_finding,
@@ -106,6 +110,68 @@ async def test_planning_returns_a_typed_sequence_and_next_step() -> None:
     assert "UNTRUSTED DATA BEGIN" in request.user_prompt
     assert "task-planning-v1" in request.user_prompt
     assert request.temperature == 0
+
+
+def one_step_plan_output() -> dict[str, JsonValue]:
+    """Return a minimal valid plan for structured retry tests."""
+
+    return {
+        "objective": "Prepare a grounded draft.",
+        "steps": [
+            {
+                "stepId": "review-evidence",
+                "instruction": "Review supplied evidence.",
+                "expectedOutput": "Supported claims and missing information.",
+            }
+        ],
+        "nextStepId": "review-evidence",
+        "uncertainties": [],
+    }
+
+
+def planning_context() -> AgentContext:
+    """Return minimal authenticated context for structured retry tests."""
+
+    return AgentContext(
+        task=sample_task(),
+        conversation=(ConversationMessage(role="user", content="Prepare the note."),),
+        allowed_tools=(),
+    )
+
+
+async def test_invalid_structured_text_is_corrected_once_then_accepted() -> None:
+    """Give malformed local-model output exactly one correction attempt."""
+
+    adapter = ScriptedTextAdapter(
+        (
+            InvalidStructuredOutput("recorded malformed JSON"),
+            recorded_output(one_step_plan_output()),
+        )
+    )
+    generator = StructuredTextGenerator(adapter, sample_model_profile())
+
+    result = await generator.plan_task(planning_context())
+
+    assert result.next_step_id == "review-evidence"
+    assert len(adapter.requests) == 2
+    assert "previous response was invalid" in adapter.requests[1].user_prompt
+
+
+async def test_second_invalid_structured_text_returns_typed_error() -> None:
+    """Stop after one retry instead of guessing missing planning fields."""
+
+    adapter = ScriptedTextAdapter(
+        (
+            InvalidStructuredOutput("recorded malformed JSON"),
+            InvalidStructuredOutput("recorded malformed JSON"),
+        )
+    )
+    generator = StructuredTextGenerator(adapter, sample_model_profile())
+
+    with pytest.raises(InvalidStructuredOutput, match="after one retry"):
+        await generator.plan_task(planning_context())
+
+    assert len(adapter.requests) == 2
 
 
 def grounded_draft_output(*, evidence_source_ids: list[str]) -> dict[str, JsonValue]:

@@ -13,6 +13,7 @@ from app.ai.evaluation.samples import (
     sample_task,
 )
 from app.ai.schemas import (
+    AgentContext,
     AgentProposal,
     ApprovedPath,
     ApprovedVisualInput,
@@ -23,6 +24,7 @@ from app.ai.schemas import (
     ModelHealth,
     ModelStatus,
     SourceDocument,
+    ToolDefinition,
     VisionGenerationRequest,
     VisualAnalysisRequest,
     VisualBytesInput,
@@ -60,6 +62,23 @@ def test_agent_proposal_requires_exactly_one_outcome(
 
     with pytest.raises(ValidationError):
         AgentProposal.model_validate({"responseText": response_text, "toolCall": tool_call})
+
+
+def test_agent_context_rejects_duplicate_allowed_tool_names() -> None:
+    """Keep Backend 1's allowed tool registry unambiguous."""
+
+    tool = ToolDefinition(
+        name="request_export",
+        description="Request an artifact export.",
+        input_schema={"type": "object"},
+    )
+
+    with pytest.raises(ValidationError, match="tool names must be unique"):
+        AgentContext(
+            task=sample_task(),
+            conversation=(),
+            allowed_tools=(tool, tool),
+        )
 
 
 def test_ready_model_health_requires_a_loadable_selected_model() -> None:
