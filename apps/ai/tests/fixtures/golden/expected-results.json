@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "golden-corpus-v1",
+  "corpusId": "pump-inspection-v1",
+  "requiredFindings": [
+    {
+      "findingKey": "lower-flange-corrosion",
+      "requiredTerms": ["corrosion", "lower", "flange"],
+      "sourceId": "inspection-report",
+      "pageNumber": 2
+    },
+    {
+      "findingKey": "shaft-seal-seepage",
+      "requiredTerms": ["oil", "seepage", "seal"],
+      "sourceId": "inspection-report",
+      "pageNumber": 2
+    },
+    {
+      "findingKey": "missing-guard-bolt",
+      "requiredTerms": ["missing", "bolt", "guard"],
+      "sourceId": "site-photograph",
+      "imageId": "site-photograph"
+    }
+  ],
+  "expectedReportPageReferences": [2],
+  "expectedSopReference": {
+    "sourceId": "pump-maintenance-sop",
+    "pageNumber": 1,
+    "section": "4.2 Defect response and verification"
+  },
+  "retrievalQueries": [
+    {
+      "queryId": "corrosion-response",
+      "text": "What must be verified before approving repair of localized pump flange corrosion?",
+      "expected": {
+        "sourceId": "pump-maintenance-sop",
+        "pageNumber": 1,
+        "section": "4.2 Defect response and verification"
+      }
+    },
+    {
+      "queryId": "seal-seepage-response",
+      "text": "What action and measurement are required for oil seepage at a pump shaft seal?",
+      "expected": {
+        "sourceId": "pump-maintenance-sop",
+        "pageNumber": 1,
+        "section": "4.2 Defect response and verification"
+      }
+    },
+    {
+      "queryId": "guard-fastener-response",
+      "text": "What is required when a coupling guard fastener or bolt is missing?",
+      "expected": {
+        "sourceId": "pump-maintenance-sop",
+        "pageNumber": 1,
+        "section": "4.2 Defect response and verification"
+      }
+    }
+  ],
+  "allowedSeverityValues": ["low", "medium", "high"],
+  "requiredDraftSections": [
+    "subject",
+    "summary",
+    "findings",
+    "recommendation",
+    "criticalClaims",
+    "evidenceSourceIds",
+    "uncertainties"
+  ],
+  "requiredUncertaintyStatement": "Remaining wall thickness and leak rate require instrumented verification before repair approval.",
+  "forbiddenUnsupportedConclusions": [
+    "equipment is safe to operate",
+    "remaining wall thickness is acceptable",
+    "repair is approved",
+    "no further inspection is required"
+  ]
+}

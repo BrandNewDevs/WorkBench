@@ -79,3 +79,7 @@ class KnowledgeInputTooLarge(UnsupportedKnowledgeInput):
 
 class NoRelevantEvidence(AIError):
     """No local evidence passed the requested relevance threshold."""
+
+
+class GoldenCorpusError(AIError):
+    """The sanitized golden corpus is missing, corrupt, or internally inconsistent."""
