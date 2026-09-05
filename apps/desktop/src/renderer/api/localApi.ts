@@ -1,4 +1,10 @@
 import type {
+  ChatMessage,
+  ChatMessageAppendRequest,
+  ChatMessageListResponse,
+  ChatSession,
+  ChatSessionCreateRequest,
+  ChatSessionListResponse,
   EmployeeLoginRequest,
   EmployeeLoginResponse,
   EmployeeLogoutResponse,
@@ -8,6 +14,14 @@ import type {
   OutboundStatus,
   LocalServiceRequest,
 } from "../../shared/contracts";
+import {
+  chatErrorCodeSchema,
+  chatMessageListResponseSchema,
+  chatMessageSchema,
+  chatSessionListResponseSchema,
+  chatSessionSchema,
+} from "../../shared/contracts.ts";
+import type { ZodType } from "zod";
 
 const requestTimeoutMs = 5_000;
 
@@ -17,6 +31,7 @@ export type LocalApiErrorKind =
   | "timeout"
   | "unauthorized"
   | "endpointUnavailable"
+  | "resourceNotFound"
   | "http"
   | "malformedJson"
   | "expiredSession"
@@ -36,6 +51,23 @@ export class LocalApiError extends Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function parseErrorCode(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return isRecord(parsed) && typeof parsed.code === "string" ? parsed.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseChat<T>(schema: ZodType<T>, value: unknown, operation: string): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw new LocalApiError(`FastAPI returned an invalid ${operation} response.`, "invalidResponse");
+  }
+  return result.data;
 }
 
 function parseEmployeeSession(value: unknown, responseName: string): EmployeeSession {
@@ -137,7 +169,13 @@ export class LocalApiClient {
         }),
       ]);
       if (response.status === 401 || response.status === 403) throw new LocalApiError(`The local employee ${operation} was not authorized.`, "unauthorized", response.status);
-      if (response.status === 404) throw new LocalApiError(`The local employee ${operation} endpoint is unavailable on FastAPI.`, "endpointUnavailable", response.status);
+      if (response.status === 404) {
+        const errorCode = chatErrorCodeSchema.safeParse(parseErrorCode(response.body));
+        if (errorCode.success && errorCode.data === "session_not_found") {
+          throw new LocalApiError("The chat session was not found for this employee.", "resourceNotFound", response.status);
+        }
+        throw new LocalApiError(`The local employee ${operation} endpoint is unavailable on FastAPI.`, "endpointUnavailable", response.status);
+      }
       if (response.status < 200 || response.status >= 300) throw new LocalApiError(`FastAPI ${operation} returned HTTP ${response.status}.`, "http", response.status);
       try { return JSON.parse(response.body) as unknown; } catch { throw new LocalApiError(`FastAPI returned malformed JSON for ${operation}.`, "malformedJson"); }
     } catch (error) {
@@ -168,6 +206,55 @@ export class LocalApiClient {
   async getHealth(apiBaseUrl?: string): Promise<HealthResponse> {
     void apiBaseUrl;
     return parseHealthResponse(await this.requestJson({ operation: "health" }, "health check"));
+  }
+
+  async listChatSessions(apiBaseUrl?: string): Promise<ChatSessionListResponse> {
+    void apiBaseUrl;
+    return parseChat(
+      chatSessionListResponseSchema,
+      await this.requestJson({ operation: "chatListSessions" }, "chat session listing"),
+      "chat session listing",
+    );
+  }
+
+  async createChatSession(request: ChatSessionCreateRequest, apiBaseUrl?: string): Promise<ChatSession> {
+    void apiBaseUrl;
+    return parseChat(
+      chatSessionSchema,
+      await this.requestJson({ operation: "chatCreateSession", request }, "chat session creation"),
+      "chat session",
+    );
+  }
+
+  async getChatSession(sessionId: string, apiBaseUrl?: string): Promise<ChatSession> {
+    void apiBaseUrl;
+    return parseChat(
+      chatSessionSchema,
+      await this.requestJson({ operation: "chatGetSession", sessionId }, "chat session detail"),
+      "chat session",
+    );
+  }
+
+  async listChatMessages(sessionId: string, apiBaseUrl?: string): Promise<ChatMessageListResponse> {
+    void apiBaseUrl;
+    return parseChat(
+      chatMessageListResponseSchema,
+      await this.requestJson({ operation: "chatListMessages", sessionId }, "chat message listing"),
+      "chat message listing",
+    );
+  }
+
+  async appendChatMessage(
+    sessionId: string,
+    request: ChatMessageAppendRequest,
+    apiBaseUrl?: string,
+  ): Promise<ChatMessage> {
+    void apiBaseUrl;
+    return parseChat(
+      chatMessageSchema,
+      await this.requestJson({ operation: "chatAppendMessage", sessionId, request }, "chat message"),
+      "chat message",
+    );
   }
 }
 
