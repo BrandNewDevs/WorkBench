@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap");
 @import "tailwindcss";
 
 @font-face {
@@ -17,7 +18,7 @@
 }
 
 :root {
-  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: "Geist", "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   color: #e9e5e1;
   background: #000;
   font-synthesis: none;
@@ -353,6 +354,303 @@ body::before {
 @keyframes drift-grid { to { background-position: 24px 24px; } }
 @keyframes flow-breathe { 50% { opacity: .48; transform: scale(1.025); } }
 
+/* ---- About Page ---- */
+.about-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 7rem 4rem 4rem;
+  min-height: 100dvh;
+}
+
+.about-content {
+  width: min(100%, 900px);
+  display: flex;
+  flex-direction: column;
+  gap: 4rem;
+}
+
+.about-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.section-title {
+  font-family: "Cardot", "Cascadia Mono", monospace;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  letter-spacing: -.04em;
+  color: #e9e5e1;
+  margin: 0;
+}
+
+.section-subtitle {
+  color: #8d7cff;
+  font-size: .85rem;
+  margin: -0.5rem 0 0;
+}
+
+/* Vision & Mission */
+.vision-mission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+}
+
+/* Principles */
+.principles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.25rem;
+}
+
+/* About Cards */
+.about-card {
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 1rem;
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+  transition: border-color 200ms ease, background 200ms ease;
+}
+
+.about-card:hover {
+  border-color: rgba(141, 124, 255, .3);
+  background: rgba(255, 255, 255, .06);
+}
+
+.about-card-label {
+  color: #e9e5e1;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.about-card p {
+  margin: 0;
+  color: #a89db8;
+  font-size: .85rem;
+  line-height: 1.7;
+}
+
+.about-card h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #e9e5e1;
+  letter-spacing: -.02em;
+}
+
+/* Tech Stack */
+.tech-stack {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.tech-item {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  padding: 1rem 1.25rem;
+  background: rgba(141, 124, 255, .08);
+  border: 1px solid rgba(141, 124, 255, .15);
+  border-radius: .75rem;
+  transition: background 200ms ease;
+}
+
+.tech-item:hover {
+  background: rgba(141, 124, 255, .12);
+}
+
+.tech-category {
+  color: #8d7cff;
+  font-size: .65rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.tech-name {
+  color: #e9e5e1;
+  font-size: .85rem;
+}
+
+/* Comparison Table */
+.comparison-table-wrapper {
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, .02);
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .82rem;
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 1rem 1.25rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, .06);
+}
+
+.comparison-table th {
+  color: #8d7cff;
+  font-weight: 600;
+  font-size: .7rem;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  background: rgba(141, 124, 255, .08);
+}
+
+.comparison-table tr:last-child td {
+  border-bottom: none;
+}
+
+.comparison-table tr:hover td {
+  background: rgba(255, 255, 255, .03);
+}
+
+.highlight-good {
+  color: #7cffb8;
+  font-weight: 500;
+}
+
+.highlight-bad {
+  color: #ff7c7c;
+  opacity: .8;
+}
+
+/* Team Grid */
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+}
+
+.team-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: .75rem;
+  padding: 2rem 1.25rem;
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 1rem;
+  transition: border-color 200ms ease, transform 200ms ease;
+}
+
+.team-card:hover {
+  border-color: rgba(141, 124, 255, .3);
+  transform: translateY(-2px);
+}
+
+.team-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #8d7cff, #ee79be);
+  display: grid;
+  place-items: center;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #0b0817;
+}
+
+.team-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #e9e5e1;
+  text-align: center;
+}
+
+.team-card h3 a {
+  color: #e9e5e1;
+  text-decoration: none;
+  transition: color 200ms ease;
+}
+
+.team-card h3 a:hover {
+  color: #8d7cff;
+}
+
+.github-link {
+  display: flex;
+  justify-content: center;
+  margin-top: 6px;
+  color: #a89db8;
+  transition: color 200ms ease;
+}
+
+.github-link:hover {
+  color: #e9e5e1;
+}
+
+.team-role {
+  color: #8d7cff;
+  font-size: .7rem;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.team-card p {
+  margin: 0;
+  color: #a89db8;
+  font-size: .78rem;
+  line-height: 1.5;
+}
+
+/* Outcomes Grid */
+.outcomes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1.25rem;
+}
+
+.outcome-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: .5rem;
+  padding: 1.75rem 1rem;
+  background: rgba(141, 124, 255, .06);
+  border: 1px solid rgba(141, 124, 255, .12);
+  border-radius: 1rem;
+  transition: background 200ms ease;
+}
+
+.outcome-card:hover {
+  background: rgba(141, 124, 255, .1);
+}
+
+.outcome-number {
+  font-family: "Cardot", "Cascadia Mono", monospace;
+  font-size: 2rem;
+  font-weight: 600;
+  color: #8d7cff;
+  letter-spacing: -.02em;
+}
+
+.outcome-label {
+  color: #e9e5e1;
+  font-size: .85rem;
+  font-weight: 500;
+}
+
+.outcome-card p {
+  margin: 0;
+  color: #a89db8;
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
 /* ---- Mobile ---- */
 @media (max-width: 640px) {
   .main-navigation { top: .75rem; }
@@ -362,6 +660,15 @@ body::before {
   .feature-card h2 { margin-top: 1.2rem; }
   .hero-actions { flex-wrap: wrap; }
   .feature-modal-content { padding: 2.5rem 1.5rem 1.75rem; }
+  .about-page { padding: 6rem 1rem 3rem; }
+  .about-content { gap: 3rem; }
+  .vision-mission-grid,
+  .principles-grid { grid-template-columns: 1fr; }
+  .team-grid { grid-template-columns: repeat(2, 1fr); }
+  .outcomes-grid { grid-template-columns: 1fr; }
+  .tech-stack { grid-template-columns: 1fr; }
+  .comparison-table th,
+  .comparison-table td { padding: .75rem; font-size: .75rem; }
 }
 
 @media (max-width: 480px) {
