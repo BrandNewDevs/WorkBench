@@ -13,6 +13,7 @@ from app.ai.schemas import (
     ApprovedVisualInput,
     Capability,
     CapabilityDecision,
+    CodeRepairContent,
     CodeRepairRequest,
     CodeRepairResult,
     ContractModel,
@@ -24,6 +25,7 @@ from app.ai.schemas import (
     Finding,
     FindingSeverity,
     GenerationLimits,
+    GroundedClaim,
     GroundedDraft,
     InferenceMetrics,
     IngestionResult,
@@ -34,12 +36,14 @@ from app.ai.schemas import (
     ModelProfile,
     ModelRuntimeHealth,
     ModelStatus,
+    PlanStep,
     ProposedToolCall,
     RetrievalMetrics,
     SourceDocument,
     SourceReference,
     TaskDescriptor,
     TaskKind,
+    TaskPlan,
     TextGenerationRequest,
     TextGenerationResult,
     ToolDefinition,
@@ -223,11 +227,43 @@ def sample_grounded_draft() -> GroundedDraft:
         summary="Surface corrosion was observed during the inspection.",
         findings=(sample_finding(),),
         recommendation="Approve a thickness measurement before deciding on repair work.",
+        critical_claims=(
+            GroundedClaim(
+                text="Surface corrosion was observed near the lower flange.",
+                evidence_source_ids=("inspection-report-page-2",),
+            ),
+            GroundedClaim(
+                text="Thickness measurement is required before repair approval.",
+                evidence_source_ids=("sop-corrosion-page-7",),
+            ),
+        ),
         evidence_source_ids=(
             "inspection-report-page-2",
             "sop-corrosion-page-7",
         ),
         uncertainties=("The image does not establish remaining wall thickness.",),
+    )
+
+
+def sample_task_plan() -> TaskPlan:
+    """Return a bounded plan whose steps remain Backend 1-controlled."""
+
+    return TaskPlan(
+        objective="Prepare a grounded approval-note draft.",
+        steps=(
+            PlanStep(
+                step_id="review-findings",
+                instruction="Review the supplied findings and evidence.",
+                expected_output="A list of supported observations and missing information.",
+            ),
+            PlanStep(
+                step_id="draft-note",
+                instruction="Prepare structured approval-note content.",
+                expected_output="A grounded draft for Backend 2 to render.",
+            ),
+        ),
+        next_step_id="review-findings",
+        uncertainties=("The unreadable gauge value must remain unresolved.",),
     )
 
 
@@ -294,6 +330,7 @@ def representative_contracts() -> tuple[ContractModel, ...]:
         ),
         sample_vision_analysis().pages[0],
         sample_vision_analysis(),
+        sample_task_plan(),
         sample_grounded_draft(),
         tool,
         tool_call,
@@ -343,6 +380,11 @@ def representative_contracts() -> tuple[ContractModel, ...]:
             code="print(sum([1, 2]))",
             test_output="1 failed",
             error_output="expected 4, got 3",
+        ),
+        CodeRepairContent(
+            language="python",
+            corrected_code="print(sum([1, 3]))",
+            change_summary="Corrected the second input value.",
         ),
         CodeRepairResult(
             language="python",

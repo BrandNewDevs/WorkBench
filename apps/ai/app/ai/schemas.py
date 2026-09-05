@@ -359,6 +359,21 @@ class VisionAnalysis(ContractModel):
         return self
 
 
+class GroundedClaim(ContractModel):
+    """One important draft claim with application-verifiable source IDs."""
+
+    text: str = Field(min_length=1)
+    evidence_source_ids: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def evidence_ids_are_unique(self) -> "GroundedClaim":
+        """Avoid duplicate citation markers within one critical claim."""
+
+        if len(self.evidence_source_ids) != len(set(self.evidence_source_ids)):
+            raise ValueError("grounded claim evidence source IDs must be unique")
+        return self
+
+
 class GroundedDraft(ContractModel):
     """Structured draft content for Backend 2 to render as an artifact."""
 
@@ -366,8 +381,9 @@ class GroundedDraft(ContractModel):
     summary: str = Field(min_length=1)
     findings: tuple[Finding, ...]
     recommendation: str = Field(min_length=1)
+    critical_claims: tuple[GroundedClaim, ...] = Field(min_length=1)
     evidence_source_ids: tuple[str, ...] = Field(min_length=1)
-    uncertainties: tuple[str, ...] = ()
+    uncertainties: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def evidence_ids_are_unique(self) -> "GroundedDraft":
@@ -375,6 +391,15 @@ class GroundedDraft(ContractModel):
 
         if len(self.evidence_source_ids) != len(set(self.evidence_source_ids)):
             raise ValueError("draft evidence source IDs must be unique")
+        claim_source_ids = {
+            source_id
+            for claim in self.critical_claims
+            for source_id in claim.evidence_source_ids
+        }
+        if claim_source_ids != set(self.evidence_source_ids):
+            raise ValueError(
+                "draft evidence source IDs must exactly match its critical claim citations"
+            )
         return self
 
 
@@ -500,6 +525,34 @@ class ConversationMessage(ContractModel):
     content: str = Field(min_length=1)
 
 
+class PlanStep(ContractModel):
+    """One proposed, non-executing step in a bounded task plan."""
+
+    step_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    instruction: str = Field(min_length=1)
+    expected_output: str = Field(min_length=1)
+
+
+class TaskPlan(ContractModel):
+    """Typed planning output that leaves execution control with Backend 1."""
+
+    objective: str = Field(min_length=1)
+    steps: tuple[PlanStep, ...] = Field(min_length=1, max_length=8)
+    next_step_id: str = Field(min_length=1)
+    uncertainties: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def next_step_is_in_unique_sequence(self) -> "TaskPlan":
+        """Keep the next action traceable to one unambiguous plan step."""
+
+        step_ids = tuple(step.step_id for step in self.steps)
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("task plan step IDs must be unique")
+        if self.next_step_id not in step_ids:
+            raise ValueError("task plan next step must reference a returned step")
+        return self
+
+
 class AgentContext(ContractModel):
     """Backend-owned workflow context made available to the AI planner."""
 
@@ -507,6 +560,15 @@ class AgentContext(ContractModel):
     conversation: tuple[ConversationMessage, ...]
     allowed_tools: tuple[ToolDefinition, ...]
     evidence: tuple[EvidenceChunk, ...] = ()
+
+    @model_validator(mode="after")
+    def tool_names_are_unique(self) -> "AgentContext":
+        """Keep Backend 1's allowed registry deterministic and unambiguous."""
+
+        names = tuple(tool.name for tool in self.allowed_tools)
+        if len(names) != len(set(names)):
+            raise ValueError("allowed tool names must be unique")
+        return self
 
 
 class CodeRepairRequest(ContractModel):
@@ -517,6 +579,14 @@ class CodeRepairRequest(ContractModel):
     code: str
     test_output: str
     error_output: str
+
+
+class CodeRepairContent(ContractModel):
+    """Model-generated repair content before application-owned metadata is attached."""
+
+    language: str = Field(min_length=1)
+    corrected_code: str = Field(min_length=1)
+    change_summary: str = Field(min_length=1)
 
 
 class CodeRepairResult(ContractModel):

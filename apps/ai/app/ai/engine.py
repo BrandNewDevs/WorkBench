@@ -21,6 +21,7 @@ from app.ai.schemas import (
     ModelProfile,
     SourceDocument,
     TaskDescriptor,
+    TaskPlan,
     VisionAnalysis,
     VisualAnalysisRequest,
 )
@@ -45,6 +46,10 @@ class AIEngine(Protocol):
 
     async def choose_capability(self, task: TaskDescriptor) -> CapabilityDecision:
         """Select the local model capability for a task."""
+        ...
+
+    async def plan_task(self, request: AgentContext) -> TaskPlan:
+        """Propose a typed sequence without executing or approving its steps."""
         ...
 
     async def analyze_visual(self, request: VisualAnalysisRequest) -> VisionAnalysis:

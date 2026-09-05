@@ -1,6 +1,7 @@
 """Recorded-response tests for structured OCR and finding extraction."""
 
 import asyncio
+import json
 from collections.abc import Sequence
 from io import BytesIO
 from typing import cast
@@ -259,6 +260,12 @@ async def test_golden_report_and_photo_produce_three_grounded_findings() -> None
         request.output_schema == VisionAnalysis.model_json_schema(by_alias=True)
         for request in adapter.requests
     )
+    expected_schema = VisionAnalysis.model_json_schema(by_alias=True)
+    assert all(
+        json.dumps(expected_schema, sort_keys=True) in request.user_prompt
+        for request in adapter.requests
+    )
+    assert all("vision-extraction-v2" in request.user_prompt for request in adapter.requests)
 
 
 async def test_invalid_structured_output_is_retried_once() -> None:
