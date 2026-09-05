@@ -451,6 +451,14 @@ class ChromaKnowledgeIngestor:
             raise KnowledgeIndexUnavailable(
                 "local Chroma collection metadata does not match its model/schema identity"
             )
+        configuration = collection.configuration
+        hnsw_configuration = configuration.get("hnsw")
+        if not isinstance(hnsw_configuration, Mapping) or (
+            hnsw_configuration.get("space") != "cosine"
+        ):
+            raise KnowledgeIndexUnavailable(
+                "local Chroma collection must use cosine distance"
+            )
         return collection
 
     async def _existing_document_metadata(

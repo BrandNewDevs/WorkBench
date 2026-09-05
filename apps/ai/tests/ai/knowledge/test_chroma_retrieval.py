@@ -13,6 +13,7 @@ from app.ai.errors import KnowledgeIndexUnavailable, NoRelevantEvidence
 from app.ai.evaluation.samples import sample_inference_metrics, sample_model_profile
 from app.ai.fakes import FakeModelAdapter
 from app.ai.knowledge.chroma_ingestion import (
+    KNOWLEDGE_SCHEMA_VERSION,
     ChromaKnowledgeIngestor,
     create_persistent_chroma_client,
 )
@@ -178,6 +179,28 @@ async def test_unrelated_query_returns_no_evidence(tmp_path: Path) -> None:
 
     with pytest.raises(NoRelevantEvidence):
         await store.search(KnowledgeQuery(text="How should the office garden be watered?"))
+
+
+async def test_existing_non_cosine_collection_is_rejected(tmp_path: Path) -> None:
+    """Never interpret L2 distances with the cosine relevance formula."""
+
+    storage_root = tmp_path / "chroma"
+    storage_root.mkdir()
+    client = create_persistent_chroma_client(ApprovedKnowledgeRoot(path=storage_root))
+    profile = sample_model_profile()
+    store = ChromaKnowledgeIngestor(client, GoldenEmbeddingAdapter(), profile)
+    client.create_collection(
+        name=store.collection_name,
+        metadata={
+            "embeddingModelId": profile.embedding_candidates[0],
+            "schemaVersion": KNOWLEDGE_SCHEMA_VERSION,
+        },
+        configuration={"hnsw": {"space": "l2"}},
+        embedding_function=None,
+    )
+
+    with pytest.raises(KnowledgeIndexUnavailable, match="cosine"):
+        await store.search(KnowledgeQuery(text="Find the applicable SOP."))
 
 
 async def test_query_can_raise_the_relevance_floor(tmp_path: Path) -> None:

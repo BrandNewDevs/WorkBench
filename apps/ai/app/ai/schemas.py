@@ -470,7 +470,7 @@ class KnowledgeQuery(ContractModel):
 
     text: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
-    minimum_score: float = Field(default=0.3, ge=0, le=1)
+    minimum_score: float = Field(default=0.3, ge=0.3, le=1)
 
     @field_validator("text")
     @classmethod

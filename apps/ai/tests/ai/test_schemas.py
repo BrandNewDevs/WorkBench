@@ -105,6 +105,16 @@ def test_knowledge_query_rejects_blank_text() -> None:
         KnowledgeQuery(text="   ")
 
 
+@pytest.mark.parametrize("minimum_score", (0.0, 0.29))
+def test_knowledge_query_cannot_lower_the_grounding_floor(
+    minimum_score: float,
+) -> None:
+    """Prevent callers from admitting unrelated evidence into drafting context."""
+
+    with pytest.raises(ValidationError):
+        KnowledgeQuery(text="Find the applicable SOP.", minimum_score=minimum_score)
+
+
 @pytest.mark.parametrize("image", ("", "not-base64", "===="))
 def test_vision_request_rejects_invalid_base64_images(image: str) -> None:
     """Reject malformed normalized image input before it reaches Ollama."""
