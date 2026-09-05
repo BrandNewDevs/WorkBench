@@ -2,7 +2,7 @@ export default function Navbar({ isFeaturesPage, isAboutPage }: { isFeaturesPage
   const isPage = isFeaturesPage || isAboutPage;
 
   return (
-    <nav aria-label="Main navigation" className="main-navigation flex w-[calc(100%-2rem)] items-center gap-3 rounded-full bg-[#0c0c0c]/75 px-3 py-3 backdrop-blur-xl md:w-[calc(100%-5rem)]">
+    <nav aria-label="Main navigation" className="main-navigation flex w-auto max-w-[600px] items-center gap-3 rounded-full bg-[#0c0c0c]/75 px-3 py-3 backdrop-blur-xl">
       <a href="#top" className="brand-link flex shrink-0 items-center gap-3 pl-1" aria-label="WorkBench home">
         <span className="brand-mark relative grid size-10 place-items-center overflow-hidden rounded-[11px] border border-[#777] bg-[#e9e5e1] text-[#161616]" aria-hidden="true">
           <span className="absolute left-1 top-1 size-2 border-l-2 border-t-2 border-[#161616]" />
