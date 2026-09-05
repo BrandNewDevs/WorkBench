@@ -1,0 +1,16 @@
+{
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "description": "Repository contribution contract, local-first security boundary, package ownership, and validation requirements."
+    },
+    {
+      "path": "PLAN.md",
+      "description": "MVP architecture, acceptance criteria, and explicitly deferred scope."
+    },
+    {
+      "path": "README.md",
+      "description": "Developer setup and verification commands."
+    }
+  ]
+}
