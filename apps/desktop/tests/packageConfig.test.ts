@@ -36,6 +36,16 @@ test("main-process service traffic is isolated from renderer traffic", () => {
   assert.match(main, /getManagedServiceSession\(\)\.webRequest\.onBeforeRequest/);
 });
 
+test("packaged renderer selects an available loopback port and service requests require a live child", () => {
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+
+  assert.match(main, /server\.listen\(0, origin\.hostname/);
+  assert.match(main, /builtRendererOrigin = `http:\/\/\$\{origin\.hostname\}:\$\{address\.port\}`/);
+  assert.match(main, /process\.kill\(localService\.pid, 0\)/);
+  assert.match(main, /!managedLocalServiceIsRunning\(\)/);
+  assert.match(main, /clearManagedLocalService\(child\)/);
+});
+
 test("startup storage cleanup is covered by the restart guard reset", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
 

@@ -13,7 +13,7 @@ const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const rendererDirectory = resolve(join(mainDirectory, "../../renderer"));
 const rendererEntryPath = join(rendererDirectory, "index.html");
 const loopbackHost = "127.0.0.1";
-const builtRendererOrigin = "http://127.0.0.1:5173";
+let builtRendererOrigin = "http://127.0.0.1:0";
 const useDevelopmentRenderer = process.env.WORKBENCH_DEV_RENDERER === "1";
 // Keep this decision in Electron main. The renderer can only receive the resulting, typed mode over trusted IPC.
 const useDevelopmentAuthBypass =
@@ -198,6 +198,26 @@ function isAllowedManagedServiceRequest(value: string): boolean {
   }
 }
 
+function clearManagedLocalService(child?: ChildProcess): void {
+  if (child && localService !== child) return;
+  localService = undefined;
+  localServiceVerified = false;
+  localServiceCapability = undefined;
+  localServicePort = undefined;
+}
+
+function managedLocalServiceIsRunning(): boolean {
+  if (!localService || localService.exitCode !== null || localService.killed || !localService.pid) {
+    return false;
+  }
+  try {
+    process.kill(localService.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function contentType(path: string): string {
   const types: Record<string, string> = {
     ".css": "text/css; charset=utf-8",
@@ -236,8 +256,14 @@ async function startBuiltRendererServer(): Promise<void> {
   try {
     await new Promise<void>((resolveServer, rejectServer) => {
       server.once("error", rejectServer);
-      server.listen(Number(origin.port), origin.hostname, () => {
+      server.listen(0, origin.hostname, () => {
         server.off("error", rejectServer);
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          rejectServer(new Error("The packaged renderer did not receive a loopback port."));
+          return;
+        }
+        builtRendererOrigin = `http://${origin.hostname}:${address.port}`;
         resolveServer();
       });
     });
@@ -448,9 +474,8 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
           attempt.sensitiveValues,
         );
         if (localService !== child) return;
-        localService = undefined;
+        clearManagedLocalService(child);
         localServiceFailed = true;
-        localServiceVerified = false;
         scheduleLocalServiceRestart();
       });
       child.once("exit", (code, signal) => {
@@ -462,8 +487,7 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
           attempt.sensitiveValues,
         );
         if (localService !== child) return;
-        localService = undefined;
-        localServiceVerified = false;
+        clearManagedLocalService(child);
         scheduleLocalServiceRestart();
       });
       try {
@@ -478,7 +502,7 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
           attempt.sensitiveValues,
         );
         localServiceVerified = false;
-        if (localService === child) localService = undefined;
+        clearManagedLocalService(child);
       }
     }
     localServiceCapability = undefined;
@@ -498,14 +522,12 @@ export function stopLocalService(): void {
   if (localService && !localService.killed) {
     localService.kill();
   }
-  localService = undefined;
-  localServiceVerified = false;
-  localServiceCapability = undefined;
-  localServicePort = undefined;
+  clearManagedLocalService();
 }
 
 async function requestLocalService(request: LocalServiceRequest): Promise<LocalServiceResponse> {
-  if (!localServiceVerified || !localServiceCapability) {
+  if (!localServiceVerified || !localServiceCapability || !managedLocalServiceIsRunning()) {
+    clearManagedLocalService();
     throw new Error("The managed local service has not completed verification.");
   }
   let path: string;
@@ -529,6 +551,12 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
       break;
     default:
       throw new Error("The local service request is not allowed.");
+  }
+  // Check the owned child immediately before sending any session cookie, capability, or credentials.
+  // Its exit handlers also clear this state, but this closes the event-loop gap before they run.
+  if (!managedLocalServiceIsRunning()) {
+    clearManagedLocalService();
+    throw new Error("The managed local service is no longer running.");
   }
   const response = await getManagedServiceSession().fetch(`${managedServiceUrl()}${path}`, {
     ...init,
