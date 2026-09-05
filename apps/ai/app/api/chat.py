@@ -1,5 +1,6 @@
 """Employee chat routes over the private managed pipe; no workflow control here."""
 
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Annotated, cast
 from uuid import UUID, uuid4
@@ -120,16 +121,19 @@ def build_chat_router() -> APIRouter:
                 "The chat session could not be created.",
                 500,
             )
-        await _audit_store(request).append(
-            AuditRecord(
-                audit_id=uuid4(),
-                action=AuditAction.SESSION_CREATED,
-                actor_user_id=user.user_id,
-                session_id=created.session_id,
-                outcome="created",
-                occurred_at=now,
+        # Best-effort like the auth service: chat creation stays available if
+        # only the independent audit writer is down.
+        with suppress(Exception):
+            await _audit_store(request).append(
+                AuditRecord(
+                    audit_id=uuid4(),
+                    action=AuditAction.SESSION_CREATED,
+                    actor_user_id=user.user_id,
+                    session_id=created.session_id,
+                    outcome="created",
+                    occurred_at=now,
+                )
             )
-        )
         return created
 
     @router.get(

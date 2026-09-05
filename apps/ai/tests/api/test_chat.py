@@ -10,9 +10,15 @@ from pwdlib import PasswordHash
 
 from app.auth.provisioning import provision_initial_employee
 from app.config import ApplicationSettings
+from app.health import ApplicationDependencies
 from app.ipc_service import _dispatch
 from app.main import create_app
-from app.storage import LocalSQLiteDatabase
+from app.storage import (
+    LocalSQLiteDatabase,
+    SQLiteAuthSessionStore,
+    SQLiteIdentityStore,
+    SQLiteWorkflowStore,
+)
 
 ORIGIN = "http://127.0.0.1:5173"
 CAPABILITY = "A" * 43
@@ -352,3 +358,70 @@ async def test_chat_data_is_scoped_to_the_owning_employee(tmp_path: Path) -> Non
     assert foreign_messages["status"] == 404
     assert foreign_append["status"] == 404
     assert _payload(own_sessions)["sessions"] == []
+
+
+class FailingAuditStore:
+    """An audit writer that is down; chat creation must stay available."""
+
+    async def append(self, record: object) -> None:
+        raise RuntimeError("audit writer unavailable")
+
+
+async def test_session_creation_survives_an_unavailable_audit_writer(tmp_path: Path) -> None:
+    database_path = tmp_path / "workbench.db"
+    await provision_initial_employee(
+        database_path=database_path,
+        username="engineer.one",
+        display_name="Engineer One",
+        password=PASSWORD,
+    )
+    database = LocalSQLiteDatabase(database_path)
+    app = create_app(
+        settings=ApplicationSettings(
+            auth_signing_secret=SECRET,
+            database_path=database_path,
+            local_service_capability=CAPABILITY,
+        ),
+        dependencies=ApplicationDependencies(
+            identity_store=SQLiteIdentityStore(database),
+            auth_session_store=SQLiteAuthSessionStore(database),
+            audit_store=FailingAuditStore(),
+            chat_store=SQLiteWorkflowStore(database),
+            startup=database.initialize,
+        ),
+    )
+    async with app.router.lifespan_context(app):
+        login = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "login",
+                    "POST",
+                    "/auth/login",
+                    body={"username": "engineer.one", "password": PASSWORD},
+                ),
+            )
+        )
+        cookie = next(
+            value for name, value in login["headers"] if name == "set-cookie"
+        ).split(";", 1)[0]
+        created = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "create",
+                    "POST",
+                    "/chat/sessions",
+                    cookie=cookie,
+                    body={"workflowType": "inspectionAnalysis", "title": "Audit down"},
+                ),
+            )
+        )
+        listed = json.loads(
+            await _dispatch(app, _frame("list", "GET", "/chat/sessions", cookie=cookie))
+        )
+
+    assert created["status"] == 200
+    assert _payload(created)["title"] == "Audit down"
+    sessions = _payload(listed)["sessions"]
+    assert isinstance(sessions, list) and len(sessions) == 1

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ChatMessage, ChatSession, LocalServiceRequest, LocalServiceResponse } from "../src/shared/contracts.ts";
-import { localApi } from "../src/renderer/api/localApi.ts";
+import { LocalApiError, localApi } from "../src/renderer/api/localApi.ts";
 
 interface StubBridge {
   requestLocalService(request: LocalServiceRequest): Promise<LocalServiceResponse>;
@@ -91,6 +91,8 @@ test("malformed chat payloads are rejected instead of trusted", async () => {
     { messages: [{ ...messagePayload, role: "system" }] },
     { messages: [{ ...messagePayload, content: "" }] },
     { messages: [{ ...messagePayload, authorUserId: 42 }] },
+    { messages: [{ ...messagePayload, createdAt: "2026-09-06T01:21:00" }] },
+    { messages: [{ ...messagePayload, reasoning: "secret chain of thought" }] },
     { messages: null },
   ];
   for (const payload of invalidMessageLists) {
@@ -100,6 +102,27 @@ test("malformed chat payloads are rejected instead of trusted", async () => {
       (error: unknown) => error instanceof Error && error.name === "LocalApiError",
     );
   }
+});
+
+test("chat resource 404s are distinguished from missing endpoints", async () => {
+  installBridge({
+    requestLocalService: async () => ({
+      status: 404,
+      body: JSON.stringify({ code: "session_not_found", message: "The chat session was not found for this employee." }),
+    }),
+  });
+  await assert.rejects(
+    localApi.listChatMessages(sessionPayload.sessionId),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "resourceNotFound" && error.status === 404,
+  );
+
+  installBridge({
+    requestLocalService: async () => ({ status: 404, body: "Not Found" }),
+  });
+  await assert.rejects(
+    localApi.listChatMessages(sessionPayload.sessionId),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "endpointUnavailable",
+  );
 });
 
 test("create and append round-trip the request bodies to the local service", async () => {

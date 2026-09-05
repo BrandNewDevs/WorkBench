@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const IPC_CHANNELS = {
   getDesktopStatus: "desktop:get-status",
   selectUploadFiles: "desktop:select-upload-files",
@@ -200,62 +202,101 @@ export interface WorkflowUploadProgress {
 
 /** Wire contracts mirroring the local FastAPI chat surface. FastAPI serializes camelCase. */
 
-export type ChatWorkflowType = "inspectionAnalysis" | "codeRepair";
+export const chatWorkflowTypeSchema = z.enum(["inspectionAnalysis", "codeRepair"]);
 
-export type ChatStage =
-  | "collectingInputs"
-  | "extracting"
-  | "retrieving"
-  | "drafting"
-  | "validating"
-  | "planning"
-  | "awaitingApproval"
-  | "exporting"
-  | "sandboxExecuting"
-  | "repairing"
-  | "approvalRejected"
-  | "completed"
-  | "failed";
+export const chatStageSchema = z.enum([
+  "collectingInputs",
+  "extracting",
+  "retrieving",
+  "drafting",
+  "validating",
+  "planning",
+  "awaitingApproval",
+  "exporting",
+  "sandboxExecuting",
+  "repairing",
+  "approvalRejected",
+  "completed",
+  "failed",
+]);
 
-export type ChatSessionStatus = "active" | "completed" | "failed" | "approvalRejected";
+export const chatSessionStatusSchema = z.enum(["active", "completed", "failed", "approvalRejected"]);
 
-export type ChatMessageRole = "user" | "assistant";
+export const chatMessageRoleSchema = z.enum(["user", "assistant"]);
+
+/** Backend timestamps are timezone-aware UTC ISO 8601. */
+export const chatTimestampSchema = z.iso.datetime({ offset: true });
+
+const uuidSchema = z.uuid();
 
 /** One owned chat thread backed by a local workflow session. */
-export interface ChatSession {
-  sessionId: string;
-  ownerUserId: string;
-  workflowType: ChatWorkflowType;
-  title: string;
-  stage: ChatStage;
-  status: ChatSessionStatus;
-  createdAt: string;
-  updatedAt: string;
-}
+export const chatSessionSchema = z.strictObject({
+  sessionId: uuidSchema,
+  ownerUserId: uuidSchema,
+  workflowType: chatWorkflowTypeSchema,
+  title: z.string().min(1).max(200),
+  stage: chatStageSchema,
+  status: chatSessionStatusSchema,
+  createdAt: chatTimestampSchema,
+  updatedAt: chatTimestampSchema,
+});
 
 /** One persisted chat message without model reasoning fields. */
-export interface ChatMessage {
-  messageId: string;
-  sessionId: string;
-  authorUserId: string | null;
-  role: ChatMessageRole;
-  content: string;
-  createdAt: string;
-}
+export const chatMessageSchema = z.strictObject({
+  messageId: uuidSchema,
+  sessionId: uuidSchema,
+  authorUserId: uuidSchema.nullable(),
+  role: chatMessageRoleSchema,
+  content: z.string().min(1).max(20_000),
+  createdAt: chatTimestampSchema,
+});
 
-export interface ChatSessionListResponse {
-  sessions: ChatSession[];
-}
+export const chatSessionListResponseSchema = z.strictObject({
+  sessions: z.array(chatSessionSchema),
+});
 
-export interface ChatMessageListResponse {
-  messages: ChatMessage[];
-}
+export const chatMessageListResponseSchema = z.strictObject({
+  messages: z.array(chatMessageSchema),
+});
 
-export interface ChatSessionCreateRequest {
-  workflowType: ChatWorkflowType;
-  title: string;
-}
+export const chatSessionCreateRequestSchema = z.strictObject({
+  workflowType: chatWorkflowTypeSchema,
+  title: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((title) => title.trim().length > 0, { message: "title must not be blank" }),
+});
 
-export interface ChatMessageAppendRequest {
-  content: string;
-}
+export const chatMessageAppendRequestSchema = z.strictObject({
+  content: z
+    .string()
+    .min(1)
+    .max(20_000)
+    .refine((content) => content.trim().length > 0, { message: "content must not be blank" }),
+});
+
+/** The renderer may build paths only from server-issued session IDs. */
+export const chatSessionIdSchema = uuidSchema;
+
+export const chatErrorCodeSchema = z.enum(["session_not_found"]);
+
+export type ChatWorkflowType = z.infer<typeof chatWorkflowTypeSchema>;
+
+export type ChatStage = z.infer<typeof chatStageSchema>;
+
+export type ChatSessionStatus = z.infer<typeof chatSessionStatusSchema>;
+
+export type ChatMessageRole = z.infer<typeof chatMessageRoleSchema>;
+
+export type ChatSession = z.infer<typeof chatSessionSchema>;
+
+export type ChatMessage = z.infer<typeof chatMessageSchema>;
+
+export type ChatSessionListResponse = z.infer<typeof chatSessionListResponseSchema>;
+
+export type ChatMessageListResponse = z.infer<typeof chatMessageListResponseSchema>;
+
+export type ChatSessionCreateRequest = z.infer<typeof chatSessionCreateRequestSchema>;
+
+export type ChatMessageAppendRequest = z.infer<typeof chatMessageAppendRequestSchema>;
