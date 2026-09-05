@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { app, BrowserWindow, dialog, session, type IpcMainInvokeEvent, type Session } from "electron";
@@ -21,6 +21,8 @@ const useDevelopmentAuthBypass =
 const configuredRendererUrl = process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173";
 const localServiceRestartDelayMs = 1_000;
 const localServiceStartAttempts = 3;
+const localServiceDiagnosticLimitBytes = 32 * 1024;
+const startupLogFileName = "startup.log";
 let managedServiceSession: Session | undefined;
 let mainWindow: BrowserWindow | undefined;
 let localService: ChildProcess | undefined;
@@ -33,6 +35,116 @@ let localServicePort: number | undefined;
 let localServiceCapability: string | undefined;
 let localServiceVerified = false;
 let startingLocalService = false;
+let startupLogQueue = Promise.resolve();
+
+class BoundedDiagnostic {
+  private readonly chunks: string[] = [];
+  private byteLength = 0;
+  private truncated = false;
+
+  append(value: string | Buffer): void {
+    if (this.truncated) return;
+    const remaining = localServiceDiagnosticLimitBytes - this.byteLength;
+    if (remaining <= 0) {
+      this.truncated = true;
+      return;
+    }
+
+    const bytes = Buffer.from(value).subarray(0, remaining);
+    this.chunks.push(bytes.toString("utf8"));
+    this.byteLength += bytes.byteLength;
+    if (Buffer.byteLength(value) > remaining) this.truncated = true;
+  }
+
+  toString(): string {
+    const output = this.chunks.join("");
+    return this.truncated ? `${output}\n[output truncated after ${localServiceDiagnosticLimitBytes} bytes]` : output;
+  }
+}
+
+interface LocalServiceAttemptDiagnostics {
+  stdout: BoundedDiagnostic;
+  stderr: BoundedDiagnostic;
+  sensitiveValues: string[];
+  exitObserved: boolean;
+  exitCode: number | null | undefined;
+  exitSignal: NodeJS.Signals | null | undefined;
+  spawnError: string | undefined;
+}
+
+function newLocalServiceAttemptDiagnostics(capability: string | undefined): LocalServiceAttemptDiagnostics {
+  return {
+    stdout: new BoundedDiagnostic(),
+    stderr: new BoundedDiagnostic(),
+    sensitiveValues: [localSigningSecret, process.env.WORKBENCH_APP_AUTH_SIGNING_SECRET, capability]
+      .filter((value): value is string => Boolean(value)),
+    exitObserved: false,
+    exitCode: undefined,
+    exitSignal: undefined,
+    spawnError: undefined,
+  };
+}
+
+function redactDiagnostic(value: string, sensitiveValues: readonly string[] = []): string {
+  let redacted = value;
+  const environmentSecrets = Object.entries(process.env)
+    .filter(([name]) => /(password|passwd|secret|token|authorization|cookie)/i.test(name))
+    .map(([, secret]) => secret);
+  const values = new Set([
+    ...sensitiveValues,
+    ...environmentSecrets,
+    process.env.WORKBENCH_APP_AUTH_SIGNING_SECRET,
+    process.env.WORKBENCH_APP_LOCAL_SERVICE_CAPABILITY,
+  ]);
+  for (const sensitiveValue of values) {
+    if (sensitiveValue) redacted = redacted.split(sensitiveValue).join("[REDACTED]");
+  }
+  redacted = redacted.replace(/\b[a-f0-9]{96}\b/gi, "[REDACTED]");
+  redacted = redacted.replace(
+    /(["']?(?:password|passwd|secret|token|authorization|cookie)[\\w-]*["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+    "$1[REDACTED]",
+  );
+  return redacted;
+}
+
+function startupLogPath(): string {
+  return join(app.getPath("userData"), startupLogFileName);
+}
+
+function writeStartupLog(message: string, sensitiveValues: readonly string[] = []): Promise<void> {
+  const line = `${new Date().toISOString()} ${redactDiagnostic(message, sensitiveValues)}\n`;
+  startupLogQueue = startupLogQueue.then(async () => {
+    try {
+      await mkdir(app.getPath("userData"), { recursive: true });
+      await appendFile(startupLogPath(), line, "utf8");
+    } catch (error) {
+      console.error(
+        "WorkBench could not write its startup log.",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  });
+  return startupLogQueue;
+}
+
+function localServiceProcessState(attempt: LocalServiceAttemptDiagnostics): string {
+  const exitCode = attempt.exitCode === undefined ? "unavailable" : attempt.exitCode === null ? "none" : String(attempt.exitCode);
+  const signal = attempt.exitSignal ?? "none";
+  return `exit code=${exitCode}, signal=${signal}`;
+}
+
+function localServiceStartupError(error: unknown, attempt: LocalServiceAttemptDiagnostics): Error {
+  const reason = redactDiagnostic(error instanceof Error ? error.message : String(error), attempt.sensitiveValues);
+  const stdout = redactDiagnostic(attempt.stdout.toString(), attempt.sensitiveValues) || "(empty)";
+  const stderr = redactDiagnostic(attempt.stderr.toString(), attempt.sensitiveValues) || "(empty)";
+  const spawnError = attempt.spawnError
+    ? `, spawn error=${redactDiagnostic(attempt.spawnError, attempt.sensitiveValues)}`
+    : "";
+  return new Error(
+    `${reason} (${localServiceProcessState(attempt)}${spawnError})\n` +
+      `FastAPI stdout:\n${stdout}\nFastAPI stderr:\n${stderr}`,
+  );
+}
 
 function isLoopbackUrl(value: string): boolean {
   try {
@@ -208,6 +320,7 @@ function localPythonExecutable(aiDirectory: string): string {
 
   const virtualEnvironmentPython = join(
     aiDirectory,
+    ".venv",
     process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
   );
   if (existsSync(virtualEnvironmentPython)) {
@@ -275,6 +388,20 @@ async function verifyLocalService(child: ChildProcess): Promise<void> {
   throw new Error("The managed local service did not prove its launch capability.");
 }
 
+async function waitForFailedLocalService(child: ChildProcess, attempt: LocalServiceAttemptDiagnostics): Promise<void> {
+  if (!child.killed) child.kill();
+  if (attempt.exitObserved || attempt.spawnError) return;
+  await new Promise<void>((resolveWait) => {
+    const timer = setTimeout(resolveWait, 500);
+    const finish = () => {
+      clearTimeout(timer);
+      resolveWait();
+    };
+    child.once("exit", finish);
+    child.once("error", finish);
+  });
+}
+
 export async function startLocalService(signingSecret?: string): Promise<void> {
   localSigningSecret = signingSecret ?? localSigningSecret;
   if (!managesLocalService() || localService || localServiceRestartTimer || startingLocalService) return;
@@ -285,16 +412,21 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
   try {
     await getManagedServiceSession().clearStorageData({ storages: ["cookies"] });
     let lastError: unknown;
-    for (let attempt = 0; attempt < localServiceStartAttempts; attempt += 1) {
+    for (let attemptNumber = 0; attemptNumber < localServiceStartAttempts; attemptNumber += 1) {
       localServicePort = allocateLocalServicePort();
       localServiceCapability = randomBytes(32).toString("base64url");
       localServiceVerified = false;
+      const attempt = newLocalServiceAttemptDiagnostics(localServiceCapability);
       const launch = localServiceLaunch();
+      await writeStartupLog(
+        `Starting FastAPI attempt ${attemptNumber + 1}/${localServiceStartAttempts}: executable=${launch.executable}, cwd=${launch.workingDirectory}, port=${localServicePort}`,
+        attempt.sensitiveValues,
+      );
       const child = spawn(launch.executable, launch.arguments, {
         cwd: launch.workingDirectory,
         shell: false,
         windowsHide: true,
-        stdio: "ignore",
+        stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
           WORKBENCH_LOCAL_ONLY: "1",
@@ -306,15 +438,29 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
           WORKBENCH_APP_DATABASE_PATH: join(app.getPath("userData"), "workbench.db"),
         },
       });
+      child.stdout?.on("data", (chunk: Buffer | string) => attempt.stdout.append(chunk));
+      child.stderr?.on("data", (chunk: Buffer | string) => attempt.stderr.append(chunk));
       localService = child;
-      child.once("error", () => {
+      child.once("error", (error) => {
+        attempt.spawnError = error.message;
+        void writeStartupLog(
+          `FastAPI attempt ${attemptNumber + 1} failed to spawn: ${error.message}`,
+          attempt.sensitiveValues,
+        );
         if (localService !== child) return;
         localService = undefined;
         localServiceFailed = true;
         localServiceVerified = false;
         scheduleLocalServiceRestart();
       });
-      child.once("exit", () => {
+      child.once("exit", (code, signal) => {
+        attempt.exitObserved = true;
+        attempt.exitCode = code;
+        attempt.exitSignal = signal;
+        void writeStartupLog(
+          `FastAPI attempt ${attemptNumber + 1} exited with ${localServiceProcessState(attempt)}. stderr=${redactDiagnostic(attempt.stderr.toString(), attempt.sensitiveValues) || "(empty)"}`,
+          attempt.sensitiveValues,
+        );
         if (localService !== child) return;
         localService = undefined;
         localServiceVerified = false;
@@ -324,10 +470,15 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
         await verifyLocalService(child);
         return;
       } catch (error) {
-        lastError = error;
+        await waitForFailedLocalService(child, attempt);
+        const detailedError = localServiceStartupError(error, attempt);
+        lastError = detailedError;
+        await writeStartupLog(
+          `FastAPI attempt ${attemptNumber + 1} failed:\n${detailedError.message}`,
+          attempt.sensitiveValues,
+        );
         localServiceVerified = false;
         if (localService === child) localService = undefined;
-        if (!child.killed) child.kill();
       }
     }
     localServiceCapability = undefined;
@@ -471,6 +622,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
 }
 
 async function startApplication(): Promise<void> {
+  await writeStartupLog("WorkBench startup begin");
   session.defaultSession.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
     callback({ cancel: !isAllowedRequestUrl(details.url) });
   });
@@ -483,16 +635,19 @@ async function startApplication(): Promise<void> {
   registerDesktopIpc({ getDesktopStatus, isTrustedSender: isTrustedIpcSender, requestLocalService });
   await startLocalService(signingSecret);
   await createMainWindow();
+  await writeStartupLog("WorkBench startup complete");
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      void createMainWindow().catch(handleStartupFailure);
+      void createMainWindow().catch((error) => void handleStartupFailure(error));
     }
   });
 }
 
-function handleStartupFailure(error: unknown): void {
-  console.error("WorkBench failed to start.", error);
+async function handleStartupFailure(error: unknown): Promise<void> {
+  const diagnostic = redactDiagnostic(error instanceof Error ? error.message : String(error));
+  console.error("WorkBench failed to start. See the local startup log for details.", diagnostic);
+  await writeStartupLog(`WorkBench startup failed:\n${diagnostic}`);
   stopLocalService();
   stopBuiltRendererServer();
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -505,7 +660,7 @@ function handleStartupFailure(error: unknown): void {
   app.quit();
 }
 
-void app.whenReady().then(startApplication).catch(handleStartupFailure);
+void app.whenReady().then(startApplication).catch((error) => void handleStartupFailure(error));
 
 app.on("before-quit", () => {
   stopLocalService();

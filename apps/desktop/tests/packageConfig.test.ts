@@ -44,3 +44,14 @@ test("startup storage cleanup is covered by the restart guard reset", () => {
     /startingLocalService = true;[\s\S]*?try \{\s+await getManagedServiceSession\(\)\.clearStorageData\(\{ storages: \["cookies"\] \}\);[\s\S]*?finally \{\s+startingLocalService = false;/,
   );
 });
+
+test("local service startup keeps bounded, redacted diagnostics", () => {
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+
+  assert.match(main, /join\(\s*aiDirectory,\s+"\.venv"/);
+  assert.match(main, /stdio: \["ignore", "pipe", "pipe"\]/);
+  assert.match(main, /localServiceDiagnosticLimitBytes = 32 \* 1024/);
+  assert.match(main, /appendFile\(startupLogPath\(\), line, "utf8"\)/);
+  assert.match(main, /exit code=\$\{exitCode\}, signal=\$\{signal\}/);
+  assert.match(main, /password\|passwd\|secret\|token\|authorization\|cookie/);
+});
