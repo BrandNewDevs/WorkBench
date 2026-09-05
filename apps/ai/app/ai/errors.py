@@ -41,6 +41,10 @@ class GroundingViolation(InvalidStructuredOutput):
     """A generated critical claim cites evidence not supplied by the application."""
 
 
+class InvalidToolProposal(InvalidStructuredOutput):
+    """A generated proposal violates Backend 1's allowed tool registry."""
+
+
 class UnsupportedVisualInput(AIError):
     """A supplied image or document cannot be safely processed."""
 

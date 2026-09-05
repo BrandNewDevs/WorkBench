@@ -561,6 +561,15 @@ class AgentContext(ContractModel):
     allowed_tools: tuple[ToolDefinition, ...]
     evidence: tuple[EvidenceChunk, ...] = ()
 
+    @model_validator(mode="after")
+    def tool_names_are_unique(self) -> "AgentContext":
+        """Keep Backend 1's allowed registry deterministic and unambiguous."""
+
+        names = tuple(tool.name for tool in self.allowed_tools)
+        if len(names) != len(set(names)):
+            raise ValueError("allowed tool names must be unique")
+        return self
+
 
 class CodeRepairRequest(ContractModel):
     """Sandbox feedback supplied by Backend 2 for a code repair attempt."""

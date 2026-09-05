@@ -5,8 +5,12 @@ from typing import TypeVar
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
-from app.ai.errors import GroundingViolation, InvalidStructuredOutput
+from app.ai.errors import GroundingViolation, InvalidStructuredOutput, InvalidToolProposal
 from app.ai.models.ports import ModelAdapter
+from app.ai.models.structured_output import (
+    validate_output_schema,
+    validate_structured_output,
+)
 from app.ai.prompts.grounded_drafting import (
     GROUNDED_DRAFTING_SYSTEM_PROMPT,
     build_grounded_drafting_prompt,
@@ -15,11 +19,17 @@ from app.ai.prompts.planning import (
     TASK_PLANNING_SYSTEM_PROMPT,
     build_task_planning_prompt,
 )
+from app.ai.prompts.tool_proposal import (
+    TOOL_PROPOSAL_SYSTEM_PROMPT,
+    build_tool_proposal_prompt,
+)
 from app.ai.schemas import (
     AgentContext,
+    AgentProposal,
     DraftRequest,
     GroundedDraft,
     ModelProfile,
+    ProposedToolCall,
     TaskPlan,
     TextGenerationRequest,
     TextGenerationResult,
@@ -93,6 +103,47 @@ class StructuredTextGenerator:
             result_validator=validate_grounding,
         )
         return result
+
+    async def propose_action(self, context: AgentContext) -> AgentProposal:
+        """Return one validated proposal while leaving execution to Backend 1."""
+
+        if not context.allowed_tools:
+            return AgentProposal(response_text="No backend-approved tools are available.")
+
+        allowed_tools = {tool.name: tool for tool in context.allowed_tools}
+        for tool in allowed_tools.values():
+            validate_output_schema(tool.input_schema)
+
+        def validate_proposal(
+            proposal: ProposedToolCall,
+            generation: TextGenerationResult,
+        ) -> None:
+            del generation
+            tool = allowed_tools.get(proposal.tool_name)
+            if tool is None:
+                raise InvalidToolProposal(
+                    f"tool proposal named an unapproved tool: {proposal.tool_name}"
+                )
+            try:
+                validate_structured_output(tool.input_schema, proposal.arguments)
+            except InvalidStructuredOutput as error:
+                raise InvalidToolProposal(
+                    f"tool proposal arguments did not match {proposal.tool_name}"
+                ) from error
+
+        result, _ = await self._generate_structured(
+            result_type=ProposedToolCall,
+            system_prompt=TOOL_PROPOSAL_SYSTEM_PROMPT,
+            prompt_builder=lambda schema, retry: build_tool_proposal_prompt(
+                context,
+                schema,
+                retry=retry,
+            ),
+            temperature=0,
+            operation_name="tool proposal",
+            result_validator=validate_proposal,
+        )
+        return AgentProposal(tool_call=result)
 
     async def _generate_structured(
         self,

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 import pytest
 from pydantic import JsonValue
 
-from app.ai.errors import GroundingViolation
+from app.ai.errors import GroundingViolation, InvalidToolProposal
 from app.ai.evaluation.samples import (
     sample_evidence_chunk,
     sample_finding,
@@ -21,9 +21,11 @@ from app.ai.schemas import (
     ConversationMessage,
     DraftRequest,
     GroundedDraft,
+    ProposedToolCall,
     TaskPlan,
     TextGenerationRequest,
     TextGenerationResult,
+    ToolDefinition,
 )
 
 
@@ -184,3 +186,105 @@ async def test_unsupported_critical_claim_is_retried_then_rejected() -> None:
 
     assert len(adapter.requests) == 2
     assert "previous draft was invalid" in adapter.requests[1].user_prompt
+
+
+def export_tool() -> ToolDefinition:
+    """Return one Backend 1-owned tool contract for proposal tests."""
+
+    return ToolDefinition(
+        name="request_document_export",
+        description="Ask Backend 1 to consider exporting the approved draft.",
+        input_schema={
+            "type": "object",
+            "properties": {"format": {"type": "string", "enum": ["docx", "pdf"]}},
+            "required": ["format"],
+            "additionalProperties": False,
+        },
+    )
+
+
+async def test_tool_proposal_returns_only_an_allowed_validated_call() -> None:
+    """Propose one Backend 1-supplied tool without invoking it."""
+
+    output: dict[str, JsonValue] = {
+        "toolName": "request_document_export",
+        "arguments": {"format": "docx"},
+        "explanation": "The employee requested a Word deliverable.",
+    }
+    adapter = ScriptedTextAdapter((recorded_output(output),))
+    generator = StructuredTextGenerator(adapter, sample_model_profile())
+    context = AgentContext(
+        task=sample_task(),
+        conversation=(
+            ConversationMessage(role="user", content="Export the draft as a Word file."),
+        ),
+        allowed_tools=(export_tool(),),
+    )
+
+    result = await generator.propose_action(context)
+
+    assert result.response_text is None
+    assert result.tool_call is not None
+    assert result.tool_call.tool_name == "request_document_export"
+    assert result.tool_call.arguments == {"format": "docx"}
+    request = adapter.requests[0]
+    expected_schema = ProposedToolCall.model_json_schema(by_alias=True)
+    assert request.output_schema == expected_schema
+    assert json.dumps(expected_schema, sort_keys=True) in request.user_prompt
+    assert "request_document_export" in request.user_prompt
+    assert "tool-proposal-v1" in request.user_prompt
+    assert request.temperature == 0
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        {
+            "toolName": "arbitrary_shell",
+            "arguments": {},
+            "explanation": "Use an unapproved tool.",
+        },
+        {
+            "toolName": "request_document_export",
+            "arguments": {"format": "xlsx"},
+            "explanation": "Use an argument outside the allowed schema.",
+        },
+    ),
+    ids=("unknown-tool", "invalid-arguments"),
+)
+async def test_unknown_tools_and_invalid_arguments_are_retried_then_rejected(
+    output: dict[str, JsonValue],
+) -> None:
+    """Enforce Backend 1's exact registry after structured model generation."""
+
+    adapter = ScriptedTextAdapter((recorded_output(output), recorded_output(output)))
+    generator = StructuredTextGenerator(adapter, sample_model_profile())
+    context = AgentContext(
+        task=sample_task(),
+        conversation=(ConversationMessage(role="user", content="Export the draft."),),
+        allowed_tools=(export_tool(),),
+    )
+
+    with pytest.raises(InvalidToolProposal, match="after one retry"):
+        await generator.propose_action(context)
+
+    assert len(adapter.requests) == 2
+    assert "previous tool proposal was invalid" in adapter.requests[1].user_prompt
+
+
+async def test_no_allowed_tools_returns_text_without_model_inference() -> None:
+    """Avoid asking a model to invent an action when Backend 1 allows none."""
+
+    adapter = ScriptedTextAdapter(())
+    generator = StructuredTextGenerator(adapter, sample_model_profile())
+    context = AgentContext(
+        task=sample_task(),
+        conversation=(),
+        allowed_tools=(),
+    )
+
+    result = await generator.propose_action(context)
+
+    assert result.response_text == "No backend-approved tools are available."
+    assert result.tool_call is None
+    assert adapter.requests == []
