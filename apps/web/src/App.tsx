@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import AnimatedField from "./components/AnimatedField";
 import Navbar from "./components/Navbar";
 import Features from "./pages/Features";
+import About from "./pages/About";
 
 export function App() {
   const shellRef = useRef<HTMLElement>(null);
-  const isFeaturesPage = window.location.pathname === "/features";
+  const pathname = window.location.pathname;
+  const isFeaturesPage = pathname === "/features";
+  const isAboutPage = pathname === "/about";
+  const isPage = isFeaturesPage || isAboutPage;
   const [activeFeature, setActiveFeature] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,12 +40,13 @@ export function App() {
 
   return (
     <>
-      {!isFeaturesPage && <AnimatedField />}
+      {!isPage && <AnimatedField />}
       <main ref={shellRef} className="site-shell min-h-screen">
-        <Navbar isFeaturesPage={isFeaturesPage} />
-        <section id="top" className={`hero-panel ${isFeaturesPage ? "features-page" : ""}`} aria-label={isFeaturesPage ? "WorkBench features" : "WorkBench home"}>
-          {!isFeaturesPage && <div className="home-content" />}
+        <Navbar isFeaturesPage={isFeaturesPage} isAboutPage={isAboutPage} />
+        <section id="top" className={`hero-panel ${isPage ? "features-page" : ""}`} aria-label={isFeaturesPage ? "WorkBench features" : isAboutPage ? "About WorkBench" : "WorkBench home"}>
+          {!isPage && <div className="home-content" />}
           {isFeaturesPage && <Features activeFeature={activeFeature} setActiveFeature={setActiveFeature} />}
+          {isAboutPage && <About />}
         </section>
       </main>
     </>
