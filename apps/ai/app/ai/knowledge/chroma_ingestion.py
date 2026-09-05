@@ -4,6 +4,7 @@ import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
+from math import isfinite
 from pathlib import Path
 
 import chromadb
@@ -15,6 +16,7 @@ from pydantic import ValidationError
 from app.ai.errors import (
     CorruptKnowledgeInput,
     KnowledgeIndexUnavailable,
+    NoRelevantEvidence,
 )
 from app.ai.knowledge.chunking import KnowledgeChunker
 from app.ai.knowledge.config import KnowledgeProcessingSettings
@@ -29,13 +31,16 @@ from app.ai.models.ports import ModelAdapter
 from app.ai.schemas import (
     ApprovedKnowledgeRoot,
     EmbeddingRequest,
+    EvidenceChunk,
     IngestionResult,
+    KnowledgeQuery,
     ModelProfile,
     SourceDocument,
 )
 
 KNOWLEDGE_SCHEMA_VERSION = "v1"
 _COLLECTION_PREFIX = "workbench-knowledge"
+_WORD = re.compile(r"\w+")
 
 
 def collection_name_for(embedding_model_id: str) -> str:
@@ -80,7 +85,7 @@ def _validated_storage_root(path: Path) -> Path:
 
 
 class ChromaKnowledgeIngestor:
-    """Parse, chunk, embed, and idempotently persist one approved document."""
+    """Persist approved documents and retrieve their grounded local evidence."""
 
     def __init__(
         self,
@@ -163,6 +168,189 @@ class ChromaKnowledgeIngestor:
                 unchanged_chunks=len(unchanged_ids),
                 replaced_chunks=len(obsolete_ids),
             )
+
+    async def search(self, query: KnowledgeQuery) -> list[EvidenceChunk]:
+        """Embed one query and return relevant evidence from its matching vector space."""
+
+        collection = await asyncio.to_thread(self._get_or_create_collection)
+        collection_count = await asyncio.to_thread(collection.count)
+        if collection_count == 0:
+            raise NoRelevantEvidence("the active local knowledge collection is empty")
+
+        embedding = await self._model_adapter.create_embeddings(
+            EmbeddingRequest(model=self._embedding_model_id, inputs=(query.text,))
+        )
+        if embedding.model != self._embedding_model_id:
+            raise KnowledgeIndexUnavailable(
+                "query embedding model does not match the active collection"
+            )
+        if len(embedding.vectors) != 1:
+            raise KnowledgeIndexUnavailable("query embedding result count is invalid")
+
+        query_embeddings: list[Sequence[float] | Sequence[int]] = [
+            list(embedding.vectors[0])
+        ]
+        try:
+            result = await asyncio.to_thread(
+                collection.query,
+                query_embeddings=query_embeddings,
+                n_results=min(collection_count, max(query.top_k, 5)),
+                include=["metadatas", "documents", "distances"],
+            )
+        except Exception as error:
+            raise KnowledgeIndexUnavailable("local Chroma retrieval failed") from error
+
+        evidence = self._deduplicate_overlapping_evidence(
+            self._validated_evidence(
+                result,
+                collection_count=collection_count,
+                minimum_score=query.minimum_score,
+            )
+        )
+        if not evidence:
+            raise NoRelevantEvidence("no local evidence passed the relevance threshold")
+        return evidence[: min(query.top_k, 5)]
+
+    def _validated_evidence(
+        self,
+        result: Mapping[str, object],
+        *,
+        collection_count: int,
+        minimum_score: float,
+    ) -> list[EvidenceChunk]:
+        try:
+            id_rows = result["ids"]
+            metadata_rows = result["metadatas"]
+            document_rows = result["documents"]
+            distance_rows = result["distances"]
+            ids = id_rows[0]  # type: ignore[index]
+            metadatas = metadata_rows[0]  # type: ignore[index]
+            documents = document_rows[0]  # type: ignore[index]
+            distances = distance_rows[0]  # type: ignore[index]
+        except (KeyError, IndexError, TypeError) as error:
+            raise KnowledgeIndexUnavailable(
+                "local Chroma retrieval result is incomplete"
+            ) from error
+        if not (len(ids) == len(metadatas) == len(documents) == len(distances)):
+            raise KnowledgeIndexUnavailable("local Chroma retrieval result is incomplete")
+
+        evidence: list[EvidenceChunk] = []
+        for stored_id, raw_metadata, content, raw_distance in zip(
+            ids,
+            metadatas,
+            documents,
+            distances,
+            strict=True,
+        ):
+            if not isinstance(stored_id, str) or not isinstance(content, str):
+                raise KnowledgeIndexUnavailable("local Chroma retrieval result is incomplete")
+            if not isinstance(raw_metadata, Mapping):
+                raise KnowledgeIndexUnavailable("local Chroma retrieval metadata is incomplete")
+            try:
+                metadata = IndexedChunkMetadata.model_validate(raw_metadata, strict=True)
+            except ValidationError as error:
+                raise KnowledgeIndexUnavailable(
+                    "local Chroma retrieval metadata is invalid"
+                ) from error
+            if (
+                metadata.chunk_id != stored_id
+                or metadata.embedding_model_id != self._embedding_model_id
+                or metadata.schema_version != KNOWLEDGE_SCHEMA_VERSION
+                or not any(
+                    knowledge_chunk_id(metadata.identity, occurrence) == stored_id
+                    for occurrence in range(collection_count)
+                )
+            ):
+                raise KnowledgeIndexUnavailable(
+                    "local Chroma retrieval metadata is not application-controlled"
+                )
+            if (
+                isinstance(raw_distance, bool)
+                or not isinstance(raw_distance, (int, float))
+                or not isfinite(raw_distance)
+            ):
+                raise KnowledgeIndexUnavailable("local Chroma retrieval distance is invalid")
+            score = max(0.0, min(1.0, 1.0 - float(raw_distance)))
+            if score < minimum_score:
+                continue
+            evidence.append(
+                EvidenceChunk(
+                    source_id=metadata.source_id,
+                    chunk_id=metadata.chunk_id,
+                    document_id=metadata.document_id,
+                    document_name=metadata.document_name,
+                    mime_type=metadata.mime_type,
+                    page_number=metadata.page_number,
+                    section=metadata.section,
+                    content=content,
+                    score=score,
+                    content_hash=metadata.content_hash,
+                    embedding_model=metadata.embedding_model_id,
+                )
+            )
+        return sorted(
+            evidence,
+            key=lambda chunk: (
+                -chunk.score,
+                chunk.document_id,
+                chunk.page_number or 0,
+                chunk.section or "",
+                chunk.chunk_id,
+            ),
+        )
+
+    @classmethod
+    def _deduplicate_overlapping_evidence(
+        cls,
+        candidates: list[EvidenceChunk],
+    ) -> list[EvidenceChunk]:
+        accepted: list[EvidenceChunk] = []
+        for candidate in candidates:
+            same_location = [
+                evidence
+                for evidence in accepted
+                if (
+                    evidence.source_id,
+                    evidence.document_id,
+                    evidence.page_number,
+                    evidence.section,
+                )
+                == (
+                    candidate.source_id,
+                    candidate.document_id,
+                    candidate.page_number,
+                    candidate.section,
+                )
+            ]
+            if len(same_location) >= 3:
+                continue
+            if any(
+                cls._has_substantial_text_overlap(candidate.content, evidence.content)
+                for evidence in same_location
+            ):
+                continue
+            accepted.append(candidate)
+        return accepted
+
+    @staticmethod
+    def _has_substantial_text_overlap(left: str, right: str) -> bool:
+        left_tokens = tuple(_WORD.findall(left.casefold()))
+        right_tokens = tuple(_WORD.findall(right.casefold()))
+        shorter_length = min(len(left_tokens), len(right_tokens))
+        if shorter_length == 0:
+            return False
+        minimum_run = max(4, (shorter_length + 2) // 3)
+        if shorter_length < minimum_run:
+            return left_tokens == right_tokens
+
+        left_runs = {
+            left_tokens[index : index + minimum_run]
+            for index in range(len(left_tokens) - minimum_run + 1)
+        }
+        return any(
+            right_tokens[index : index + minimum_run] in left_runs
+            for index in range(len(right_tokens) - minimum_run + 1)
+        )
 
     def _get_or_create_collection(self) -> Collection:
         metadata = {
