@@ -11,6 +11,10 @@ from app.ai.models.structured_output import (
     validate_output_schema,
     validate_structured_output,
 )
+from app.ai.prompts.code_repair import (
+    CODE_REPAIR_SYSTEM_PROMPT,
+    build_code_repair_prompt,
+)
 from app.ai.prompts.grounded_drafting import (
     GROUNDED_DRAFTING_SYSTEM_PROMPT,
     build_grounded_drafting_prompt,
@@ -26,6 +30,9 @@ from app.ai.prompts.tool_proposal import (
 from app.ai.schemas import (
     AgentContext,
     AgentProposal,
+    CodeRepairContent,
+    CodeRepairRequest,
+    CodeRepairResult,
     DraftRequest,
     GroundedDraft,
     ModelProfile,
@@ -144,6 +151,38 @@ class StructuredTextGenerator:
             result_validator=validate_proposal,
         )
         return AgentProposal(tool_call=result)
+
+    async def repair_code(self, request: CodeRepairRequest) -> CodeRepairResult:
+        """Suggest corrected code from feedback without running any source."""
+
+        def validate_language(
+            content: CodeRepairContent,
+            generation: TextGenerationResult,
+        ) -> None:
+            del generation
+            if content.language != request.language:
+                raise InvalidStructuredOutput(
+                    "code repair changed the application-supplied language"
+                )
+
+        content, generation = await self._generate_structured(
+            result_type=CodeRepairContent,
+            system_prompt=CODE_REPAIR_SYSTEM_PROMPT,
+            prompt_builder=lambda schema, retry: build_code_repair_prompt(
+                request,
+                schema,
+                retry=retry,
+            ),
+            temperature=0,
+            operation_name="code repair",
+            result_validator=validate_language,
+        )
+        return CodeRepairResult(
+            language=content.language,
+            corrected_code=content.corrected_code,
+            change_summary=content.change_summary,
+            model=generation.model,
+        )
 
     async def _generate_structured(
         self,

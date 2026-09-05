@@ -13,6 +13,7 @@ from app.ai.schemas import (
     ApprovedVisualInput,
     Capability,
     CapabilityDecision,
+    CodeRepairContent,
     CodeRepairRequest,
     CodeRepairResult,
     ContractModel,
@@ -379,6 +380,11 @@ def representative_contracts() -> tuple[ContractModel, ...]:
             code="print(sum([1, 2]))",
             test_output="1 failed",
             error_output="expected 4, got 3",
+        ),
+        CodeRepairContent(
+            language="python",
+            corrected_code="print(sum([1, 3]))",
+            change_summary="Corrected the second input value.",
         ),
         CodeRepairResult(
             language="python",

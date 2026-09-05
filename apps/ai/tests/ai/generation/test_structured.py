@@ -18,6 +18,8 @@ from app.ai.fakes import FakeModelAdapter
 from app.ai.generation import StructuredTextGenerator
 from app.ai.schemas import (
     AgentContext,
+    CodeRepairContent,
+    CodeRepairRequest,
     ConversationMessage,
     DraftRequest,
     GroundedDraft,
@@ -288,3 +290,67 @@ async def test_no_allowed_tools_returns_text_without_model_inference() -> None:
     assert result.response_text == "No backend-approved tools are available."
     assert result.tool_call is None
     assert adapter.requests == []
+
+
+def code_repair_output(*, language: str = "python") -> dict[str, JsonValue]:
+    """Return recorded corrected code without model-controlled runtime metadata."""
+
+    return {
+        "language": language,
+        "correctedCode": "def total(values):\n    return sum(values)\n",
+        "changeSummary": "Replaced the fixed total with a sum of the supplied values.",
+    }
+
+
+def code_repair_request() -> CodeRepairRequest:
+    """Return sanitized sandbox feedback for a failed Python test."""
+
+    return CodeRepairRequest(
+        task="Correct the total calculation without changing the function name.",
+        language="python",
+        code="def total(values):\n    return 3\n",
+        test_output="test_total: expected 4, got 3",
+        error_output="AssertionError: 3 != 4",
+    )
+
+
+async def test_code_repair_uses_sandbox_feedback_and_returns_corrected_code() -> None:
+    """Return structured source for Backend 2 to test in a later sandbox run."""
+
+    adapter = ScriptedTextAdapter(
+        (recorded_output(code_repair_output(), model="qwen3:1.7b"),)
+    )
+    generator = StructuredTextGenerator(adapter, sample_model_profile())
+
+    result = await generator.repair_code(code_repair_request())
+
+    assert result.language == "python"
+    assert "return sum(values)" in result.corrected_code
+    assert result.change_summary
+    assert result.model == "qwen3:1.7b"
+    request = adapter.requests[0]
+    expected_schema = CodeRepairContent.model_json_schema(by_alias=True)
+    assert request.output_schema == expected_schema
+    assert json.dumps(expected_schema, sort_keys=True) in request.user_prompt
+    assert "expected 4, got 3" in request.user_prompt
+    assert "AssertionError: 3 != 4" in request.user_prompt
+    assert "code-repair-v1" in request.user_prompt
+    assert request.temperature == 0
+
+
+async def test_code_repair_retries_when_model_changes_the_language() -> None:
+    """Keep the requested language application-controlled across one correction."""
+
+    adapter = ScriptedTextAdapter(
+        (
+            recorded_output(code_repair_output(language="javascript")),
+            recorded_output(code_repair_output()),
+        )
+    )
+    generator = StructuredTextGenerator(adapter, sample_model_profile())
+
+    result = await generator.repair_code(code_repair_request())
+
+    assert result.language == "python"
+    assert len(adapter.requests) == 2
+    assert "previous repair response was invalid" in adapter.requests[1].user_prompt

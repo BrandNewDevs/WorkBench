@@ -581,6 +581,14 @@ class CodeRepairRequest(ContractModel):
     error_output: str
 
 
+class CodeRepairContent(ContractModel):
+    """Model-generated repair content before application-owned metadata is attached."""
+
+    language: str = Field(min_length=1)
+    corrected_code: str = Field(min_length=1)
+    change_summary: str = Field(min_length=1)
+
+
 class CodeRepairResult(ContractModel):
     """Corrected source only; the AI layer never executes it."""
 
