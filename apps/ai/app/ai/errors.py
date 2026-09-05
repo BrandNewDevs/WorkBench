@@ -37,6 +37,18 @@ class UnsupportedVisualInput(AIError):
     """A supplied image or document cannot be safely processed."""
 
 
+class VisualInputTooLarge(UnsupportedVisualInput):
+    """A supplied visual exceeds a configured local processing bound."""
+
+
+class EncryptedVisualInput(UnsupportedVisualInput):
+    """A supplied PDF is encrypted and cannot be inspected without a secret."""
+
+
+class CorruptVisualInput(UnsupportedVisualInput):
+    """A supplied image or PDF cannot be decoded safely."""
+
+
 class KnowledgeIndexUnavailable(AIError):
     """The local knowledge index is unavailable or incompatible."""
 

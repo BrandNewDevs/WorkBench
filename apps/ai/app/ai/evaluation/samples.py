@@ -9,6 +9,7 @@ from app.ai.schemas import (
     AgentProposal,
     AIHealthReport,
     ApprovedPath,
+    ApprovedVisualInput,
     Capability,
     CapabilityDecision,
     CodeRepairRequest,
@@ -44,6 +45,7 @@ from app.ai.schemas import (
     VisionGenerationRequest,
     VisionPageResult,
     VisualAnalysisRequest,
+    VisualMimeType,
 )
 
 
@@ -282,7 +284,16 @@ def representative_contracts() -> tuple[ContractModel, ...]:
         tool,
         tool_call,
         AgentProposal(tool_call=tool_call),
-        VisualAnalysisRequest(inputs=(approved_path,), task=task),
+        VisualAnalysisRequest(
+            inputs=(
+                ApprovedVisualInput(
+                    approved_path=approved_path,
+                    mime_type=VisualMimeType.PDF,
+                    document_name="inspection-report.pdf",
+                ),
+            ),
+            task=task,
+        ),
         SourceDocument(
             document_id="inspection-report",
             document_name="inspection-report.pdf",

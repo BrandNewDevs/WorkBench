@@ -31,7 +31,9 @@ async def test_fake_model_returns_structured_vision_output() -> None:
 
     result = await adapter.generate_vision(request)
 
-    assert result.structured_output == {"findings": []}
+    assert result.structured_output == adapter.vision_result.model_dump(
+        mode="json", by_alias=True
+    )
     assert adapter.calls == ["generate_vision:qwen3-vl:4b"]
 
 
