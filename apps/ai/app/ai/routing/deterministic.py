@@ -105,7 +105,10 @@ class DeterministicCapabilityRouter:
         modalities = frozenset(task.modalities)
 
         if task.kind in _KNOWLEDGE_TASKS:
-            if modalities.intersection({InputModality.IMAGE, InputModality.SCANNED_PDF}):
+            if (
+                modalities.intersection({InputModality.IMAGE, InputModality.SCANNED_PDF})
+                or file_types.intersection(_SUPPORTED_IMAGE_MIME_TYPES)
+            ):
                 raise NoEligibleCapability(
                     "visual input must complete local visual extraction before knowledge ingestion "
                     "or search"

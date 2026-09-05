@@ -222,6 +222,24 @@ def test_missing_preferred_model_selects_the_profile_fallback() -> None:
     assert decision.fallback_reason == fallback_health.fallback_reason
 
 
+def test_image_mime_on_knowledge_search_requires_visual_extraction() -> None:
+    """Do not silently discard an image whose modality was mislabeled as text."""
+
+    task = TaskDescriptor(
+        task_id="image-search",
+        kind=TaskKind.KNOWLEDGE_SEARCH,
+        summary="Search the corpus using information in an attached image.",
+        modalities=(InputModality.TEXT,),
+        file_types=("image/png",),
+    )
+
+    with pytest.raises(NoEligibleCapability, match="visual extraction"):
+        DeterministicCapabilityRouter(sample_model_profile()).choose(
+            task,
+            sample_health_report(),
+        )
+
+
 @pytest.mark.parametrize(
     ("task", "reason_fragment"),
     (
