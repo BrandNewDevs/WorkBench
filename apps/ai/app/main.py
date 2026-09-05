@@ -15,6 +15,12 @@ from app.api.health_contracts import HealthResponse, HealthStatus
 from app.auth.service import AuthError, AuthService
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies, build_health_response
+from app.storage import (
+    LocalSQLiteDatabase,
+    SQLiteAuditStore,
+    SQLiteAuthSessionStore,
+    SQLiteIdentityStore,
+)
 
 
 def _health_router(
@@ -46,11 +52,27 @@ def _health_router(
 
 @asynccontextmanager
 async def _lifespan(dependencies: ApplicationDependencies) -> AsyncIterator[None]:
-    """Run only composition-owned cleanup during a controlled application shutdown."""
+    """Initialize and close composition-owned local resources."""
 
-    yield
-    if dependencies.shutdown is not None:
-        await dependencies.shutdown()
+    if dependencies.startup is not None:
+        await dependencies.startup()
+    try:
+        yield
+    finally:
+        if dependencies.shutdown is not None:
+            await dependencies.shutdown()
+
+
+def compose_runtime_dependencies(settings: ApplicationSettings) -> ApplicationDependencies:
+    """Compose the local SQLite auth stores for a normal service process."""
+
+    database = LocalSQLiteDatabase(settings.database_path)
+    return ApplicationDependencies(
+        identity_store=SQLiteIdentityStore(database),
+        auth_session_store=SQLiteAuthSessionStore(database),
+        audit_store=SQLiteAuditStore(database),
+        startup=database.initialize,
+    )
 
 
 async def _validation_error_handler(request: Request, error: Exception) -> JSONResponse:
@@ -94,7 +116,7 @@ def create_app(
 
     resolved_settings = settings or ApplicationSettings()
     _ = resolved_settings.signing_secret
-    resolved_dependencies = dependencies or ApplicationDependencies()
+    resolved_dependencies = dependencies or compose_runtime_dependencies(resolved_settings)
     application = FastAPI(
         title="WorkBench Local AI Service",
         version="v1",

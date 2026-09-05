@@ -1,11 +1,57 @@
 """Validated local-only configuration for the FastAPI application."""
 
+import os
+import platform
 from ipaddress import ip_address
+from pathlib import Path
 
 from pydantic import AnyHttpUrl, Field, TypeAdapter, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _http_url_adapter = TypeAdapter(AnyHttpUrl)
+
+
+def _configured_data_home(variable_name: str, fallback: Path) -> Path:
+    """Return a validated application-data root, treating blank values as unset."""
+
+    configured = os.environ.get(variable_name, "").strip()
+    if not configured:
+        return fallback
+    if "\x00" in configured:
+        raise ValueError(f"{variable_name} must be a valid absolute directory path")
+
+    try:
+        path = Path(configured).expanduser()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError(f"{variable_name} must be a valid absolute directory path") from error
+    if not path.is_absolute():
+        raise ValueError(f"{variable_name} must be an absolute directory path")
+    if path.exists() and not path.is_dir():
+        raise ValueError(f"{variable_name} must name a directory")
+    return path
+
+
+def _state_directory(data_home: Path, application_name: str) -> Path:
+    """Build the application directory and reject a conflicting existing file."""
+
+    state_directory = data_home / application_name
+    if state_directory.exists() and not state_directory.is_dir():
+        raise ValueError("application state path must name a directory")
+    return state_directory
+
+
+def default_state_directory() -> Path:
+    """Return the per-user application-state location for the current platform."""
+
+    if platform.system() == "Windows":
+        data_home = _configured_data_home(
+            "LOCALAPPDATA", Path.home() / "AppData" / "Local"
+        )
+        return _state_directory(data_home, "WorkBench")
+    if platform.system() == "Darwin":
+        return _state_directory(Path.home() / "Library" / "Application Support", "WorkBench")
+    data_home = _configured_data_home("XDG_DATA_HOME", Path.home() / ".local" / "share")
+    return _state_directory(data_home, "workbench")
 
 
 class ApplicationSettings(BaseSettings):
@@ -26,6 +72,7 @@ class ApplicationSettings(BaseSettings):
     auth_jwt_audience: str = Field(default="workbench-employee", min_length=1, max_length=200)
     auth_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=60, le=8 * 60 * 60)
     auth_cookie_secure: bool = False
+    database_path: Path = Field(default_factory=lambda: default_state_directory() / "workbench.db")
 
     @field_validator("auth_signing_secret")
     @classmethod
@@ -53,6 +100,29 @@ class ApplicationSettings(BaseSettings):
         if self.auth_signing_secret is None:
             raise ValueError("WORKBENCH_APP_AUTH_SIGNING_SECRET must be provisioned before startup")
         return self.auth_signing_secret
+
+    @field_validator("database_path", mode="before")
+    @classmethod
+    def require_database_file_path(cls, path: Path | str) -> Path:
+        """Require a valid local SQLite file path, not an in-memory database."""
+
+        if not isinstance(path, (str, Path)):
+            raise ValueError("database path must name a local SQLite file")
+        rendered = str(path).strip()
+        if not rendered or rendered == ":memory:" or "\x00" in rendered:
+            raise ValueError("database path must name a local SQLite file")
+        try:
+            expanded = Path(rendered).expanduser()
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ValueError("database path must name a local SQLite file") from error
+        if expanded.is_symlink():
+            raise ValueError("database path must not be a symbolic link")
+        if expanded.exists() and not expanded.is_file():
+            raise ValueError("database path must name a file")
+        try:
+            return expanded.resolve(strict=False)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ValueError("database path must name a local SQLite file") from error
 
     @field_validator("host")
     @classmethod

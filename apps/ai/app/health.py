@@ -18,6 +18,7 @@ from app.ports.backend2 import (
 )
 
 ShutdownCallback = Callable[[], Awaitable[None]]
+StartupCallback = Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,7 @@ class ApplicationDependencies:
     auth_session_store: AuthSessionStore | None = None
     audit_store: AuditStore | None = None
     shutdown: ShutdownCallback | None = None
+    startup: StartupCallback | None = None
 
 
 def _unavailable_subsystem() -> SubsystemReadiness:

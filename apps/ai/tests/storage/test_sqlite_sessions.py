@@ -1,5 +1,7 @@
 """Tests for local SQLite initialization and session metadata persistence."""
 
+import os
+import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -33,7 +35,7 @@ def _session_metadata(
 
 
 @pytest.mark.asyncio
-async def test_initialize_is_idempotent_and_creates_only_sessions_table(
+async def test_initialize_is_idempotent_and_creates_required_local_tables(
     tmp_path: Path,
 ) -> None:
     database = LocalSQLiteDatabase(tmp_path / "metadata" / "workbench.db")
@@ -49,7 +51,24 @@ async def test_initialize_is_idempotent_and_creates_only_sessions_table(
         rows = await cursor.fetchall()
 
     assert database.database_path.is_file()
-    assert [row["name"] for row in rows] == ["sessions"]
+    assert [row["name"] for row in rows] == [
+        "audit_records",
+        "auth_sessions",
+        "identities",
+        "sessions",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_database_directory_and_file_permissions_are_restricted(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits are not authoritative on Windows")
+
+    database = LocalSQLiteDatabase(tmp_path / "state" / "workbench.db")
+    await database.initialize()
+
+    assert stat.S_IMODE(database.database_path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(database.database_path.stat().st_mode) == 0o600
 
 
 @pytest.mark.asyncio

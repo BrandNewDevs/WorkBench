@@ -10,11 +10,19 @@ Install the workspace dependencies, then run:
 pnpm --filter @workbench/desktop dev
 ```
 
-`dev` builds main and preload concurrently through Vite's API, starts Vite on `127.0.0.1:5173`, and launches Electron once the server is listening. It does not spawn package-manager shell wrappers. To run the built renderer without packaging the app, run `pnpm --filter @workbench/desktop build` followed by `pnpm --filter @workbench/desktop start`. Both launch commands remove an inherited `ELECTRON_RUN_AS_NODE` flag so they work from Electron-based editors and agent terminals. `start` forces the built renderer and does not build first.
+`dev` builds main and preload concurrently through Vite's API, starts Vite on `127.0.0.1:5173`, and launches Electron once the server is listening. It does not spawn package-manager shell wrappers. To run the built renderer from this checkout, run `pnpm --filter @workbench/desktop build` followed by `pnpm --filter @workbench/desktop start`. `start` serves the built renderer on `http://127.0.0.1:5173`, the default attached FastAPI CORS origin. Both launch commands remove an inherited `ELECTRON_RUN_AS_NODE` flag so they work from Electron-based editors and agent terminals.
+
+This repository does not configure an Electron packager, embedded Python runtime, installer, or service bundle. Packaged Electron execution fails closed instead of looking for an unshipped `resources/ai` directory. The supported delivery contract is a checked-out workspace with the Python environment installed as described in the root README. A Windows package requires a separate packaging decision that includes the FastAPI application, its Python runtime and dependencies, and a service-startup test.
 
 For local UI work, `WORKBENCH_SKIP_AUTH=1 pnpm --filter @workbench/desktop dev` opens the workspace without calling the employee login or session-restore endpoints. This bypass is enabled only by the development renderer, creates no FastAPI session, and grants no backend permissions. The workspace keeps a visible `Development mode: authentication disabled` notice. The flag is ignored when the development renderer is not active, including `start` and packaged builds. Leave it unset to exercise normal authentication.
 
-The client connects to FastAPI only at the configured origin `http://127.0.0.1:8000`. The same origin is used by Electron, the renderer, and its content security policy. Set `WORKBENCH_START_LOCAL_SERVICE=1` only when `apps/ai` contains the configured FastAPI entry point and local Python environment. See `.env.example` for the local development variables.
+The client connects to FastAPI only at `http://127.0.0.1:8000`. The same origin is used by Electron, the renderer, and its content security policy. Set `WORKBENCH_START_LOCAL_SERVICE=1` to make Electron run FastAPI from `apps/ai`. Electron uses `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then Python on `PATH`; an empty override is treated as unset. Set `WORKBENCH_PYTHON` to the Python 3.11+ executable when it is not already on `PATH`. Before the first authenticated launch, provision the one local employee account from an interactive terminal:
+
+```sh
+pnpm --filter @workbench/ai provision-account
+```
+
+The command reads the password without echoing it, creates an employee only when the database has no identities, and has no HTTP equivalent. It does not ship a default account or password. See `.env.example` for the local development variables.
 
 ## Checks
 
@@ -31,4 +39,4 @@ The renderer has no Node.js access. Electron enables context isolation and Chrom
 
 The desktop client expects the local FastAPI service to provide `POST /auth/login`, `GET /auth/session`, and `POST /auth/logout`. Login and session restoration use a `{ "session": ... }` envelope with `sessionId`, `user` (`employeeId`, `username`, `displayName`, `role`), and `expiresAt` fields. Logout uses its own `{ "revoked": boolean }` response so the client can report server revocation separately from local UI sign-out. The client sends credentials with `credentials: "include"` and does not store a bearer token in the renderer.
 
-These routes are not present in `apps/ai` yet. Until Backend 1 implements them, the login screen reports the unavailable endpoint or service error. It never treats a failed request as a successful sign-in. Expired session payloads are rejected, and the client revalidates when an accepted session reaches its expiry time. Sign-out clears the local UI even when FastAPI is unavailable, but it reports server revocation as unconfirmed in that case.
+FastAPI implements these routes with local SQLite-backed identities and revocable sessions. The login screen reports unavailable or service errors and never treats a failed request as a successful sign-in. Expired session payloads are rejected, and the client revalidates when an accepted session reaches its expiry time. Sign-out clears the local UI even when FastAPI is unavailable, but it reports server revocation as unconfirmed in that case.

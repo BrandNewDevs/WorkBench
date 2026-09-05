@@ -11,6 +11,9 @@ from app.storage.sqlite import (
     LocalSQLiteDatabase,
     SessionAlreadyExistsError,
     SessionMetadata,
+    SQLiteAuditStore,
+    SQLiteAuthSessionStore,
+    SQLiteIdentityStore,
     SQLiteSessionMetadataStore,
 )
 
@@ -18,6 +21,9 @@ __all__ = [
     "InvalidSessionStatusError",
     "LocalSQLiteDatabase",
     "LocalSessionWorkspaceStore",
+    "SQLiteAuditStore",
+    "SQLiteAuthSessionStore",
+    "SQLiteIdentityStore",
     "SQLiteSessionMetadataStore",
     "SessionAlreadyExistsError",
     "SessionMetadata",
