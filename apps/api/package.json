@@ -1,10 +1,4 @@
 {
   "name": "@workbench/api",
-  "private": true,
-  "scripts": {
-    "dev": "node -e \"console.log('api dev placeholder')\"",
-    "build": "node -e \"console.log('api build placeholder')\"",
-    "lint": "node -e \"console.log('api lint placeholder')\"",
-    "typecheck": "node -e \"console.log('api typecheck placeholder')\""
-  }
+  "private": true
 }

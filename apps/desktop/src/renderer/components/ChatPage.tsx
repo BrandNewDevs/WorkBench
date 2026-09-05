@@ -117,8 +117,7 @@ function ChatComposer({ draft, isSelecting, onDraftChange, onSelectAttachments }
         >
           <Paperclip aria-hidden="true" className="size-4" strokeWidth={1.75} />
         </Button>
-        {/* Sending stays inert until the message contract is defined. */}
-        <Button aria-label="Send message" size="icon" type="button" variant="ghost">
+        <Button aria-label="Sending is unavailable in this preview" disabled size="icon" type="button" variant="ghost">
           <Send aria-hidden="true" className="size-4" strokeWidth={1.75} />
         </Button>
       </div>

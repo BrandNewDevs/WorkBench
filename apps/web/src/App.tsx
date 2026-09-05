@@ -6,7 +6,6 @@ export function App() {
         <p className="mt-4 text-lg text-gray-600">
           The Agentic tool that doesn't leak your data.
         </p>
-        <img src="" alt="" />
       </section>
     </main>
   );

@@ -2,12 +2,17 @@
   "name": "workbench",
   "private": true,
   "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "check": "pnpm lint && pnpm typecheck"
+    "check": "turbo run lint typecheck --continue",
+    "test": "turbo run test --continue",
+    "verify": "pnpm check && pnpm test && pnpm build"
   },
   "devDependencies": {
     "turbo": "^2.5.8"
