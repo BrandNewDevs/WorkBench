@@ -44,6 +44,8 @@ from app.ai.schemas import (
 
 KNOWLEDGE_SCHEMA_VERSION = "v1"
 _COLLECTION_PREFIX = "workbench-knowledge"
+_MAX_RETURNED_EVIDENCE = 5
+_RETRIEVAL_OVERFETCH_FACTOR = 4
 _WORD = re.compile(r"\w+")
 _LOGGER = logging.getLogger(__name__)
 
@@ -219,11 +221,16 @@ class ChromaKnowledgeIngestor:
         query_embeddings: list[Sequence[float] | Sequence[int]] = [
             list(embedding.vectors[0])
         ]
+        result_limit = min(query.top_k, _MAX_RETURNED_EVIDENCE)
+        candidate_limit = max(
+            _MAX_RETURNED_EVIDENCE,
+            result_limit * _RETRIEVAL_OVERFETCH_FACTOR,
+        )
         try:
             result = await asyncio.to_thread(
                 collection.query,
                 query_embeddings=query_embeddings,
-                n_results=min(collection_count, max(query.top_k, 5)),
+                n_results=min(collection_count, candidate_limit),
                 include=["metadatas", "documents", "distances"],
             )
         except Exception as error:
@@ -234,9 +241,7 @@ class ChromaKnowledgeIngestor:
             collection_count=collection_count,
             minimum_score=query.minimum_score,
         )
-        evidence = self._deduplicate_overlapping_evidence(relevant)[
-            : min(query.top_k, 5)
-        ]
+        evidence = self._deduplicate_overlapping_evidence(relevant)[:result_limit]
         self._record_retrieval_metrics(
             started=started,
             embedding_elapsed_ms=embedding.metrics.client_elapsed_ms,
@@ -300,6 +305,10 @@ class ChromaKnowledgeIngestor:
             ):
                 raise KnowledgeIndexUnavailable(
                     "local Chroma retrieval metadata is not application-controlled"
+                )
+            if sha256(content.encode("utf-8")).hexdigest() != metadata.content_hash:
+                raise KnowledgeIndexUnavailable(
+                    "local Chroma retrieval content hash does not match its citation"
                 )
             if (
                 isinstance(raw_distance, bool)
@@ -368,7 +377,15 @@ class ChromaKnowledgeIngestor:
         candidates: list[EvidenceChunk],
     ) -> list[EvidenceChunk]:
         accepted: list[EvidenceChunk] = []
+        section_counts: dict[tuple[str, str, str | None], int] = {}
         for candidate in candidates:
+            section_key = (
+                candidate.source_id,
+                candidate.document_id,
+                candidate.section,
+            )
+            if section_counts.get(section_key, 0) >= 3:
+                continue
             same_location = [
                 evidence
                 for evidence in accepted
@@ -385,14 +402,13 @@ class ChromaKnowledgeIngestor:
                     candidate.section,
                 )
             ]
-            if len(same_location) >= 3:
-                continue
             if any(
                 cls._has_substantial_text_overlap(candidate.content, evidence.content)
                 for evidence in same_location
             ):
                 continue
             accepted.append(candidate)
+            section_counts[section_key] = section_counts.get(section_key, 0) + 1
         return accepted
 
     @staticmethod

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 from chromadb.api import ClientAPI
 
-from app.ai.errors import NoRelevantEvidence
+from app.ai.errors import KnowledgeIndexUnavailable, NoRelevantEvidence
 from app.ai.evaluation.samples import sample_inference_metrics, sample_model_profile
 from app.ai.fakes import FakeModelAdapter
 from app.ai.knowledge.chroma_ingestion import (
@@ -226,6 +227,31 @@ async def test_retrieval_is_deterministic_and_returns_real_chunk_ids(
     assert all(chunk.embedding_model == "qwen3-embedding:0.6b" for chunk in first)
 
 
+async def test_tampered_retrieved_content_is_rejected(tmp_path: Path) -> None:
+    """Never attach trusted citation metadata to a modified document body."""
+
+    store, client = await populated_knowledge_store(tmp_path)
+    collection = client.get_collection(store.collection_name, embedding_function=None)
+    stored = collection.get(
+        where={"documentId": "approval-template"},
+        include=["documents", "embeddings"],
+    )
+    (chunk_id,) = stored["ids"]
+    embeddings = stored["embeddings"]
+    assert embeddings is not None
+    embedding_values: list[Sequence[float] | Sequence[int]] = [
+        cast(Sequence[float], embeddings[0])
+    ]
+    collection.update(
+        ids=[chunk_id],
+        embeddings=embedding_values,
+        documents=["Modified text that was never indexed or approved."],
+    )
+
+    with pytest.raises(KnowledgeIndexUnavailable, match="content hash"):
+        await store.search(KnowledgeQuery(text="What belongs in an approval note?"))
+
+
 async def test_overlapping_chunks_from_one_page_and_section_are_deduplicated(
     tmp_path: Path,
 ) -> None:
@@ -253,6 +279,46 @@ async def test_overlapping_chunks_from_one_page_and_section_are_deduplicated(
     evidence = await store.search(KnowledgeQuery(text="isolation procedure"))
 
     assert len(evidence) == 1
+
+
+async def test_deduplication_uses_bounded_overfetch_to_fill_with_other_sources(
+    tmp_path: Path,
+) -> None:
+    """Consider lower-ranked unique evidence when the nearest chunks overlap."""
+
+    storage_root = tmp_path / "chroma"
+    storage_root.mkdir()
+    client = create_persistent_chroma_client(ApprovedKnowledgeRoot(path=storage_root))
+    store = ChromaKnowledgeIngestor(
+        client,
+        GoldenEmbeddingAdapter(),
+        sample_model_profile(),
+        KnowledgeProcessingSettings(max_chunk_chars=512),
+    )
+    repeated_rule = " ".join("isolation" for _ in range(45))
+    await store.ingest(
+        source_document(
+            "duplicate-sop",
+            "Duplicate SOP.md",
+            "source-duplicate-sop",
+            "# PROCEDURE\n\n" + "\n\n".join(repeated_rule for _ in range(5)),
+        )
+    )
+    await store.ingest(
+        source_document(
+            "alternative-note",
+            "Alternative note.md",
+            "source-alternative-note",
+            "# GUIDANCE\n\nmoderate-match alternative local guidance.",
+        )
+    )
+
+    evidence = await store.search(KnowledgeQuery(text="isolation procedure"))
+
+    assert {chunk.source_id for chunk in evidence} == {
+        "source-duplicate-sop",
+        "source-alternative-note",
+    }
 
 
 async def test_drafting_context_keeps_at_most_three_chunks_per_source_section(
@@ -289,6 +355,38 @@ async def test_drafting_context_keeps_at_most_three_chunks_per_source_section(
     assert {
         (chunk.source_id, chunk.page_number, chunk.section) for chunk in evidence
     } == {("source-long-sop", 1, "PROCEDURE")}
+
+
+async def test_section_limit_applies_across_page_boundaries(tmp_path: Path) -> None:
+    """Cap one source section globally even when that section spans several pages."""
+
+    storage_root = tmp_path / "chroma"
+    storage_root.mkdir()
+    client = create_persistent_chroma_client(ApprovedKnowledgeRoot(path=storage_root))
+    store = ChromaKnowledgeIngestor(
+        client,
+        GoldenEmbeddingAdapter(),
+        sample_model_profile(),
+    )
+    pages = (
+        "# PROCEDURE\n\nIsolation requirement alpha.",
+        "Isolation requirement bravo.",
+        "Isolation requirement charlie.",
+        "Isolation requirement delta.",
+    )
+    await store.ingest(
+        source_document(
+            "paged-sop",
+            "Paged SOP.md",
+            "source-paged-sop",
+            "\f".join(pages),
+        )
+    )
+
+    evidence = await store.search(KnowledgeQuery(text="isolation procedure"))
+
+    assert len(evidence) == 3
+    assert {chunk.section for chunk in evidence} == {"PROCEDURE"}
 
 
 async def test_retrieval_records_safe_latency_and_score_metrics(tmp_path: Path) -> None:
