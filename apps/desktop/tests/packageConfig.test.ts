@@ -25,24 +25,24 @@ test("Windows distribution includes the frozen local service", () => {
   assert.equal(existsSync(new URL("../scripts/package-smoke.mjs", import.meta.url)), true);
 });
 
-test("main-process service traffic is isolated from renderer traffic", () => {
+test("main-process service traffic uses the child-owned pipe", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
 
   assert.match(main, /session\.fromPartition\("workbench-managed-service"\)/);
-  assert.match(main, /credentials: "omit",\s*headers: \{ "X-Workbench-Readiness-Nonce": nonce \}/);
-  assert.doesNotMatch(main, /internal\/ready[\s\S]{0,200}X-Workbench-Capability/);
-  assert.match(main, /credentials: "include"/);
+  assert.match(main, /arguments: \["-m", "app\.ipc_service"\]/);
+  assert.match(main, /stdio: \["pipe", "pipe", "pipe"\]/);
+  assert.match(main, /sendLocalServiceRequest\("\/internal\/ready", "GET", \{ "X-Workbench-Readiness-Nonce": nonce \}\)/);
+  assert.doesNotMatch(main, /managedServiceUrl|allocateLocalServicePort|process\.kill\(localService\.pid, 0\)/);
   assert.match(main, /localServiceStartAttempts = 3/);
-  assert.match(main, /getManagedServiceSession\(\)\.webRequest\.onBeforeRequest/);
 });
 
-test("packaged renderer selects an available loopback port and service requests require a live child", () => {
+test("packaged renderer retains its loopback origin while credentials stay off TCP", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
 
   assert.match(main, /server\.listen\(0, origin\.hostname/);
   assert.match(main, /builtRendererOrigin = `http:\/\/\$\{origin\.hostname\}:\$\{address\.port\}`/);
-  assert.match(main, /process\.kill\(localService\.pid, 0\)/);
-  assert.match(main, /!managedLocalServiceIsRunning\(\)/);
+  assert.match(main, /cookies\.get\(\{ url: managedServiceCookieUrl \}\)/);
+  assert.match(main, /replacement local listener has no path to it/);
   assert.match(main, /clearManagedLocalService\(child\)/);
 });
 
@@ -59,7 +59,7 @@ test("local service startup keeps bounded, redacted diagnostics", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
 
   assert.match(main, /join\(\s*aiDirectory,\s+"\.venv"/);
-  assert.match(main, /stdio: \["ignore", "pipe", "pipe"\]/);
+  assert.match(main, /stdio: \["pipe", "pipe", "pipe"\]/);
   assert.match(main, /localServiceDiagnosticLimitBytes = 32 \* 1024/);
   assert.match(main, /appendFile\(startupLogPath\(\), line, "utf8"\)/);
   assert.match(main, /exit code=\$\{exitCode\}, signal=\$\{signal\}/);

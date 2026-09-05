@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { app, BrowserWindow, dialog, session, type IpcMainInvokeEvent, type Session } from "electron";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,6 @@ import type { DesktopStatus, LocalServiceRequest, LocalServiceResponse } from ".
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const rendererDirectory = resolve(join(mainDirectory, "../../renderer"));
 const rendererEntryPath = join(rendererDirectory, "index.html");
-const loopbackHost = "127.0.0.1";
 let builtRendererOrigin = "http://127.0.0.1:0";
 const useDevelopmentRenderer = process.env.WORKBENCH_DEV_RENDERER === "1";
 // Keep this decision in Electron main. The renderer can only receive the resulting, typed mode over trusted IPC.
@@ -31,10 +30,16 @@ let localServiceFailed = false;
 let stoppingLocalService = false;
 let builtRendererServer: Server | undefined;
 let localSigningSecret: string | undefined;
-let localServicePort: number | undefined;
+const managedServiceCookieUrl = "http://127.0.0.1/";
+const localServiceFrameLimitBytes = 1024 * 1024;
 let localServiceCapability: string | undefined;
 let localServiceVerified = false;
 let startingLocalService = false;
+let localServiceResponseBuffer = "";
+const localServiceRequests = new Map<string, {
+  resolve: (response: LocalServiceResponse & { headers: readonly [string, string][] }) => void;
+  reject: (error: Error) => void;
+}>();
 let startupLogQueue = Promise.resolve();
 
 class BoundedDiagnostic {
@@ -184,38 +189,20 @@ function getManagedServiceSession(): Session {
   return managedServiceSession;
 }
 
-function isAllowedManagedServiceRequest(value: string): boolean {
-  if (localServicePort === undefined) return false;
-  try {
-    const url = new URL(value);
-    if (url.origin !== managedServiceUrl() || url.username || url.password || url.search || url.hash) {
-      return false;
-    }
-    if (!localServiceVerified) return url.pathname === "/internal/ready";
-    return ["/health", "/auth/login", "/auth/session", "/auth/logout"].includes(url.pathname);
-  } catch {
-    return false;
-  }
-}
-
 function clearManagedLocalService(child?: ChildProcess): void {
   if (child && localService !== child) return;
+  for (const request of localServiceRequests.values()) {
+    request.reject(new Error("The managed local service pipe closed."));
+  }
+  localServiceRequests.clear();
+  localServiceResponseBuffer = "";
   localService = undefined;
   localServiceVerified = false;
   localServiceCapability = undefined;
-  localServicePort = undefined;
 }
 
 function managedLocalServiceIsRunning(): boolean {
-  if (!localService || localService.exitCode !== null || localService.killed || !localService.pid) {
-    return false;
-  }
-  try {
-    process.kill(localService.pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return Boolean(localService && localService.exitCode === null && !localService.killed && localService.stdin?.writable);
 }
 
 function contentType(path: string): string {
@@ -377,18 +364,70 @@ function localServiceLaunch(): LocalServiceLaunch {
   const aiDirectory = resolve(app.getAppPath(), "../ai");
   return {
     executable: localPythonExecutable(aiDirectory),
-    arguments: ["-m", "uvicorn", "app.main:app", "--host", loopbackHost, "--port", String(localServicePort)],
+    arguments: ["-m", "app.ipc_service"],
     workingDirectory: aiDirectory,
   };
 }
 
-function allocateLocalServicePort(): number {
-  return randomInt(49_152, 65_536);
+interface LocalServiceFrame {
+  id: string;
+  status: number;
+  headers: readonly [string, string][];
+  body: string;
 }
 
-function managedServiceUrl(): string {
-  if (localServicePort === undefined) throw new Error("The managed local service has no port.");
-  return `http://${loopbackHost}:${localServicePort}`;
+function receiveLocalServiceFrame(value: string): void {
+  let frame: LocalServiceFrame;
+  try {
+    frame = JSON.parse(value) as LocalServiceFrame;
+  } catch {
+    return;
+  }
+  if (!frame || typeof frame.id !== "string" || !Number.isInteger(frame.status) ||
+    !Array.isArray(frame.headers) || typeof frame.body !== "string") return;
+  const request = localServiceRequests.get(frame.id);
+  if (!request) return;
+  localServiceRequests.delete(frame.id);
+  try {
+    request.resolve({ status: frame.status, headers: frame.headers, body: Buffer.from(frame.body, "base64").toString("utf8") });
+  } catch {
+    request.reject(new Error("The managed local service sent an invalid response."));
+  }
+}
+
+function handleLocalServiceOutput(chunk: Buffer | string): void {
+  localServiceResponseBuffer += Buffer.from(chunk).toString("utf8");
+  if (Buffer.byteLength(localServiceResponseBuffer) > localServiceFrameLimitBytes * 2) {
+    clearManagedLocalService();
+    return;
+  }
+  let lineEnd = localServiceResponseBuffer.indexOf("\n");
+  while (lineEnd >= 0) {
+    const line = localServiceResponseBuffer.slice(0, lineEnd);
+    localServiceResponseBuffer = localServiceResponseBuffer.slice(lineEnd + 1);
+    if (Buffer.byteLength(line) <= localServiceFrameLimitBytes) receiveLocalServiceFrame(line);
+    lineEnd = localServiceResponseBuffer.indexOf("\n");
+  }
+}
+
+async function sendLocalServiceRequest(
+  path: string,
+  method: "GET" | "POST",
+  headers: Record<string, string>,
+  body?: string,
+): Promise<LocalServiceResponse & { headers: readonly [string, string][] }> {
+  if (!managedLocalServiceIsRunning()) throw new Error("The managed local service is no longer running.");
+  const id = randomUUID();
+  const frame = JSON.stringify({ id, path, method, headers, body: Buffer.from(body ?? "").toString("base64") });
+  if (Buffer.byteLength(frame) > localServiceFrameLimitBytes) throw new Error("The local service request is too large.");
+  return new Promise((resolve, reject) => {
+    localServiceRequests.set(id, { resolve, reject });
+    localService?.stdin?.write(`${frame}\n`, (error) => {
+      if (!error) return;
+      localServiceRequests.delete(id);
+      reject(error);
+    });
+  });
 }
 
 async function verifyLocalService(child: ChildProcess): Promise<void> {
@@ -398,17 +437,14 @@ async function verifyLocalService(child: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     if (localService !== child) throw new Error("The managed local service stopped during startup.");
     try {
-      const response = await getManagedServiceSession().fetch(`${managedServiceUrl()}/internal/ready`, {
-        credentials: "omit",
-        headers: { "X-Workbench-Readiness-Nonce": nonce },
-      });
-      const body = await response.json() as { proof?: unknown };
+      const response = await sendLocalServiceRequest("/internal/ready", "GET", { "X-Workbench-Readiness-Nonce": nonce });
+      const body = JSON.parse(response.body) as { proof?: unknown };
       const expected = createHmac("sha256", capability).update(nonce).digest("hex");
       if (typeof body.proof === "string" && body.proof.length === expected.length && timingSafeEqual(Buffer.from(body.proof), Buffer.from(expected))) {
         localServiceVerified = true;
         return;
       }
-    } catch { /* The service may still be binding its private launch port. */ }
+    } catch { /* The child may still be starting its private pipe loop. */ }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
   throw new Error("The managed local service did not prove its launch capability.");
@@ -439,32 +475,32 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
     await getManagedServiceSession().clearStorageData({ storages: ["cookies"] });
     let lastError: unknown;
     for (let attemptNumber = 0; attemptNumber < localServiceStartAttempts; attemptNumber += 1) {
-      localServicePort = allocateLocalServicePort();
       localServiceCapability = randomBytes(32).toString("base64url");
       localServiceVerified = false;
       const attempt = newLocalServiceAttemptDiagnostics(localServiceCapability);
       const launch = localServiceLaunch();
       await writeStartupLog(
-        `Starting FastAPI attempt ${attemptNumber + 1}/${localServiceStartAttempts}: executable=${launch.executable}, cwd=${launch.workingDirectory}, port=${localServicePort}`,
+        `Starting FastAPI IPC attempt ${attemptNumber + 1}/${localServiceStartAttempts}: executable=${launch.executable}, cwd=${launch.workingDirectory}`,
         attempt.sensitiveValues,
       );
       const child = spawn(launch.executable, launch.arguments, {
         cwd: launch.workingDirectory,
         shell: false,
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        // These inherited anonymous pipes are the only Electron-to-FastAPI transport.
+        // A different local process cannot bind or replace either endpoint after child launch.
+        stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
           WORKBENCH_LOCAL_ONLY: "1",
           WORKBENCH_APP_AUTH_SIGNING_SECRET:
             localSigningSecret ?? process.env.WORKBENCH_APP_AUTH_SIGNING_SECRET,
           WORKBENCH_APP_CORS_ALLOWED_ORIGINS: JSON.stringify([rendererOrigin()]),
-          WORKBENCH_APP_PORT: String(localServicePort),
           WORKBENCH_APP_LOCAL_SERVICE_CAPABILITY: localServiceCapability,
           WORKBENCH_APP_DATABASE_PATH: join(app.getPath("userData"), "workbench.db"),
         },
       });
-      child.stdout?.on("data", (chunk: Buffer | string) => attempt.stdout.append(chunk));
+      child.stdout?.on("data", handleLocalServiceOutput);
       child.stderr?.on("data", (chunk: Buffer | string) => attempt.stderr.append(chunk));
       localService = child;
       child.once("error", (error) => {
@@ -506,7 +542,6 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
       }
     }
     localServiceCapability = undefined;
-    localServicePort = undefined;
     throw lastError ?? new Error("The managed local service could not start.");
   } finally {
     startingLocalService = false;
@@ -552,23 +587,38 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
     default:
       throw new Error("The local service request is not allowed.");
   }
-  // Check the owned child immediately before sending any session cookie, capability, or credentials.
-  // Its exit handlers also clear this state, but this closes the event-loop gap before they run.
-  if (!managedLocalServiceIsRunning()) {
-    clearManagedLocalService();
-    throw new Error("The managed local service is no longer running.");
+  // The cookie remains in Electron's private partition. It is serialized only into the
+  // child-owned pipe after capability verification, so a replacement local listener has no path to it.
+  const cookies = await getManagedServiceSession().cookies.get({ url: managedServiceCookieUrl });
+  const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+  const response = await sendLocalServiceRequest(path, init.method as "GET" | "POST", {
+    Accept: "application/json",
+    Origin: rendererOrigin(),
+    "X-Workbench-Capability": localServiceCapability,
+    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    ...(init.headers as Record<string, string> | undefined),
+  }, typeof init.body === "string" ? init.body : undefined);
+  for (const [name, value] of response.headers) {
+    if (name.toLowerCase() !== "set-cookie") continue;
+    const [pair, ...attributes] = value.split(";").map((part) => part.trim());
+    const separator = pair.indexOf("=");
+    if (separator <= 0) continue;
+    const cookieName = pair.slice(0, separator);
+    const cookieValue = pair.slice(separator + 1);
+    const maxAge = attributes.find((attribute) => attribute.toLowerCase().startsWith("max-age="));
+    const seconds = maxAge ? Number(maxAge.slice("max-age=".length)) : undefined;
+    await getManagedServiceSession().cookies.set({
+      url: managedServiceCookieUrl,
+      name: cookieName,
+      value: cookieValue,
+      path: "/",
+      httpOnly: attributes.some((attribute) => attribute.toLowerCase() === "httponly"),
+      secure: attributes.some((attribute) => attribute.toLowerCase() === "secure"),
+      sameSite: attributes.some((attribute) => attribute.toLowerCase() === "samesite=strict") ? "strict" : "unspecified",
+      ...(Number.isFinite(seconds) ? { expirationDate: Date.now() / 1000 + (seconds as number) } : {}),
+    });
   }
-  const response = await getManagedServiceSession().fetch(`${managedServiceUrl()}${path}`, {
-    ...init,
-    credentials: "include",
-    headers: {
-      Accept: "application/json",
-      Origin: rendererOrigin(),
-      "X-Workbench-Capability": localServiceCapability,
-      ...init.headers,
-    },
-  });
-  return { status: response.status, body: await response.text() };
+  return { status: response.status, body: response.body };
 }
 
 function getDesktopStatus(): DesktopStatus {
@@ -576,7 +626,7 @@ function getDesktopStatus(): DesktopStatus {
   const baseStatus = {
     serviceMode: managed ? ("managed" as const) : ("attached" as const),
     serviceRunning: managed ? Boolean(localService) && !localServiceFailed : ("unknown" as const),
-    apiBaseUrl: localServiceVerified ? managedServiceUrl() : "http://127.0.0.1:0",
+    apiBaseUrl: "ipc://electron-managed",
   };
 
   return useDevelopmentAuthBypass
@@ -654,10 +704,6 @@ async function startApplication(): Promise<void> {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
     callback({ cancel: !isAllowedRequestUrl(details.url) });
   });
-  getManagedServiceSession().webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
-    callback({ cancel: !isAllowedManagedServiceRequest(details.url) });
-  });
-
   await startBuiltRendererServer();
   const signingSecret = await provisionSigningSecret();
   registerDesktopIpc({ getDesktopStatus, isTrustedSender: isTrustedIpcSender, requestLocalService });
