@@ -98,6 +98,7 @@ def finding(
     document_name: str,
     page_number: int | None = None,
     image_id: str | None = None,
+    section: str | None = None,
     uncertainty: str | None = None,
 ) -> Finding:
     """Create a recorded finding tied to the current visual source."""
@@ -113,6 +114,7 @@ def finding(
                 document_name=document_name,
                 page_number=page_number,
                 image_id=image_id,
+                section=section,
             ),
         ),
         uncertainty=uncertainty,
@@ -349,6 +351,49 @@ async def test_model_cannot_change_application_controlled_source_metadata() -> N
     result = await analyzer.analyze_visual(request)
 
     assert result.pages[0].source_id == "photo-1"
+    assert len(adapter.requests) == 2
+
+
+async def test_model_cannot_invent_a_visual_evidence_section() -> None:
+    """Reject section labels because visual inputs provide no trusted section metadata."""
+
+    invented_section_finding = finding(
+        finding_id="invented-section",
+        title="Visible label",
+        source_id="photo-1",
+        document_name="equipment.png",
+        image_id="photo-1",
+        section="Model-invented section",
+    )
+    wrong_section = recorded_response(
+        source_id="photo-1",
+        document_name="equipment.png",
+        image_id="photo-1",
+        findings=(invented_section_finding,),
+    )
+    correct_source = recorded_response(
+        source_id="photo-1",
+        document_name="equipment.png",
+        image_id="photo-1",
+        findings=(),
+    )
+    adapter = ScriptedVisionAdapter((wrong_section, correct_source))
+    analyzer = VisionAnalyzer(adapter, sample_model_profile(), LocalVisualNormalizer())
+    request = VisualAnalysisRequest(
+        inputs=(
+            visual_input(
+                source_id="photo-1",
+                document_name="equipment.png",
+                mime_type=VisualMimeType.PNG,
+                content=png_bytes(),
+            ),
+        ),
+        task=sample_task(),
+    )
+
+    result = await analyzer.analyze_visual(request)
+
+    assert result.pages[0].findings == ()
     assert len(adapter.requests) == 2
 
 

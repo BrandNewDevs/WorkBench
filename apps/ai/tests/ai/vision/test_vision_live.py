@@ -4,7 +4,7 @@ import os
 from io import BytesIO
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from app.ai.evaluation.samples import sample_task
 from app.ai.models import create_ollama_adapter, load_model_profile
@@ -29,7 +29,13 @@ async def test_preloaded_vision_model_returns_grounded_analysis() -> None:
 
     output = BytesIO()
     with Image.new("RGB", (640, 240), "white") as image:
-        ImageDraw.Draw(image).text((40, 90), "VALVE 17 - INSPECTION", fill="black")
+        font = ImageFont.load_default(size=48)
+        ImageDraw.Draw(image).text(
+            (40, 80),
+            "VALVE 17 - INSPECTION",
+            fill="black",
+            font=font,
+        )
         image.save(output, format="PNG")
 
     profile = load_model_profile()
@@ -55,3 +61,6 @@ async def test_preloaded_vision_model_returns_grounded_analysis() -> None:
 
     assert result.pages[0].source_id == "live-photo-1"
     assert result.pages[0].image_id == "live-photo-1"
+    transcription = " ".join(result.extracted_text.upper().split())
+    assert "VALVE" in transcription
+    assert "17" in transcription

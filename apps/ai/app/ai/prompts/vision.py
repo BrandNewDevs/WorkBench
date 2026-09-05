@@ -56,6 +56,7 @@ def build_vision_user_prompt(
         f"Required source metadata: {json.dumps(source_metadata, sort_keys=True)}\n"
         "The pages array must contain exactly one item. The top-level extractedText must equal "
         "that page's extractedText. The top-level findings and warnings must equal that page's "
-        "findings and warnings. Every evidence item must use the required source metadata."
+        "findings and warnings. Every evidence item must use the required source metadata and "
+        "must set section to null."
         f"{correction}"
     )

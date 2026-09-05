@@ -127,6 +127,7 @@ class VisionAnalyzer:
             expected.page_number,
             expected.image_id,
             expected.document_name,
+            None,
         )
         for finding in analysis.findings:
             for evidence in finding.evidence:
@@ -138,10 +139,11 @@ class VisionAnalyzer:
     @staticmethod
     def _evidence_location(
         evidence: SourceReference,
-    ) -> tuple[str, int | None, str | None, str | None]:
+    ) -> tuple[str, int | None, str | None, str | None, str | None]:
         return (
             evidence.source_id,
             evidence.page_number,
             evidence.image_id,
             evidence.document_name,
+            evidence.section,
         )
