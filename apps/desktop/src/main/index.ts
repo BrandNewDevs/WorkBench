@@ -282,8 +282,8 @@ export async function startLocalService(signingSecret?: string): Promise<void> {
   startingLocalService = true;
   stoppingLocalService = false;
   localServiceFailed = false;
-  await getManagedServiceSession().clearStorageData({ storages: ["cookies"] });
   try {
+    await getManagedServiceSession().clearStorageData({ storages: ["cookies"] });
     let lastError: unknown;
     for (let attempt = 0; attempt < localServiceStartAttempts; attempt += 1) {
       localServicePort = allocateLocalServicePort();

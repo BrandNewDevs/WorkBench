@@ -35,3 +35,12 @@ test("main-process service traffic is isolated from renderer traffic", () => {
   assert.match(main, /localServiceStartAttempts = 3/);
   assert.match(main, /getManagedServiceSession\(\)\.webRequest\.onBeforeRequest/);
 });
+
+test("startup storage cleanup is covered by the restart guard reset", () => {
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+
+  assert.match(
+    main,
+    /startingLocalService = true;[\s\S]*?try \{\s+await getManagedServiceSession\(\)\.clearStorageData\(\{ storages: \["cookies"\] \}\);[\s\S]*?finally \{\s+startingLocalService = false;/,
+  );
+});
