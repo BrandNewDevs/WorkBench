@@ -24,6 +24,15 @@ The command builds the renderer, freezes FastAPI and its Python dependencies int
 
 PyInstaller produces binaries for its build platform. Build the Windows installer on Windows. The installer does not download Python, dependencies, models, Ollama, Docker, or LibreOffice at runtime.
 
+Before the first packaged login, a local administrator must provision the initial employee into the packaged database. Electron uses `%APPDATA%\\WorkBench\\workbench.db` for the default Windows `userData` path:
+
+```bat
+set WORKBENCH_APP_DATABASE_PATH=%APPDATA%\\WorkBench\\workbench.db
+pnpm --filter @workbench/ai provision-account
+```
+
+The provisioning command remains interactive and has no HTTP route. It requires a checkout with the approved Python environment. The installer does not provide a default account.
+
 For local UI work, `WORKBENCH_SKIP_AUTH=1 pnpm --filter @workbench/desktop dev` opens the workspace without calling the employee login or session-restore endpoints. This bypass is enabled only by the development renderer, creates no FastAPI session, and grants no backend permissions. The workspace keeps a visible `Development mode: authentication disabled` notice. The flag is ignored when the development renderer is not active, including `start` and packaged builds. Leave it unset to exercise normal authentication.
 
 The client connects to FastAPI only at `http://127.0.0.1:8000`. The same origin is used by Electron, the renderer, and its content security policy. During checkout-based development, set `WORKBENCH_START_LOCAL_SERVICE=1` to run FastAPI from `apps/ai`. Electron uses `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then Python on `PATH`; an empty override is treated as unset. Set `WORKBENCH_PYTHON` to the Python 3.11+ executable when it is not already on `PATH`. Before the first authenticated launch, provision the one local employee account from an interactive terminal:
