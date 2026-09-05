@@ -36,6 +36,17 @@ test("main-process service traffic uses the child-owned pipe", () => {
   assert.match(main, /localServiceStartAttempts = 3/);
 });
 
+test("child-pipe requests time out and restart the managed service", () => {
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+
+  assert.match(main, /const localServiceRequestTimeoutMs = 5_000/);
+  assert.match(main, /const timeout = setTimeout\(\(\) => timeoutLocalServiceRequest\(id, child\), localServiceRequestTimeoutMs\)/);
+  assert.match(
+    main,
+    /localServiceRequests\.delete\(id\);[\s\S]*?request\.reject\(new Error\("The managed local service request timed out\."\)\)[\s\S]*?child\.kill\(\)[\s\S]*?clearManagedLocalService\(child\)[\s\S]*?scheduleLocalServiceRestart\(\)/,
+  );
+});
+
 test("packaged renderer retains its loopback origin while credentials stay off TCP", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
 

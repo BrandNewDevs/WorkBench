@@ -32,14 +32,17 @@ let builtRendererServer: Server | undefined;
 let localSigningSecret: string | undefined;
 const managedServiceCookieUrl = "http://127.0.0.1/";
 const localServiceFrameLimitBytes = 1024 * 1024;
+const localServiceRequestTimeoutMs = 5_000;
 let localServiceCapability: string | undefined;
 let localServiceVerified = false;
 let startingLocalService = false;
 let localServiceResponseBuffer = "";
-const localServiceRequests = new Map<string, {
+interface PendingLocalServiceRequest {
   resolve: (response: LocalServiceResponse & { headers: readonly [string, string][] }) => void;
   reject: (error: Error) => void;
-}>();
+  timeout: ReturnType<typeof setTimeout>;
+}
+const localServiceRequests = new Map<string, PendingLocalServiceRequest>();
 let startupLogQueue = Promise.resolve();
 
 class BoundedDiagnostic {
@@ -192,6 +195,7 @@ function getManagedServiceSession(): Session {
 function clearManagedLocalService(child?: ChildProcess): void {
   if (child && localService !== child) return;
   for (const request of localServiceRequests.values()) {
+    clearTimeout(request.timeout);
     request.reject(new Error("The managed local service pipe closed."));
   }
   localServiceRequests.clear();
@@ -388,11 +392,25 @@ function receiveLocalServiceFrame(value: string): void {
   const request = localServiceRequests.get(frame.id);
   if (!request) return;
   localServiceRequests.delete(frame.id);
+  clearTimeout(request.timeout);
   try {
     request.resolve({ status: frame.status, headers: frame.headers, body: Buffer.from(frame.body, "base64").toString("utf8") });
   } catch {
     request.reject(new Error("The managed local service sent an invalid response."));
   }
+}
+
+function timeoutLocalServiceRequest(id: string, child: ChildProcess): void {
+  const request = localServiceRequests.get(id);
+  if (!request) return;
+  localServiceRequests.delete(id);
+  clearTimeout(request.timeout);
+  request.reject(new Error("The managed local service request timed out."));
+  if (localService !== child) return;
+  if (!child.killed) child.kill();
+  clearManagedLocalService(child);
+  localServiceFailed = true;
+  scheduleLocalServiceRestart();
 }
 
 function handleLocalServiceOutput(chunk: Buffer | string): void {
@@ -416,14 +434,19 @@ async function sendLocalServiceRequest(
   headers: Record<string, string>,
   body?: string,
 ): Promise<LocalServiceResponse & { headers: readonly [string, string][] }> {
-  if (!managedLocalServiceIsRunning()) throw new Error("The managed local service is no longer running.");
+  const child = localService;
+  if (!child || !managedLocalServiceIsRunning()) throw new Error("The managed local service is no longer running.");
   const id = randomUUID();
   const frame = JSON.stringify({ id, path, method, headers, body: Buffer.from(body ?? "").toString("base64") });
   if (Buffer.byteLength(frame) > localServiceFrameLimitBytes) throw new Error("The local service request is too large.");
   return new Promise((resolve, reject) => {
-    localServiceRequests.set(id, { resolve, reject });
-    localService?.stdin?.write(`${frame}\n`, (error) => {
+    const timeout = setTimeout(() => timeoutLocalServiceRequest(id, child), localServiceRequestTimeoutMs);
+    localServiceRequests.set(id, { resolve, reject, timeout });
+    child.stdin?.write(`${frame}\n`, (error) => {
       if (!error) return;
+      const request = localServiceRequests.get(id);
+      if (!request) return;
+      clearTimeout(request.timeout);
       localServiceRequests.delete(id);
       reject(error);
     });
