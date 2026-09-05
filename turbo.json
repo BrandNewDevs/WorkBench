@@ -3,16 +3,23 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": []
+      "outputs": ["dist/**"]
     },
     "dev": {
-      "cache": false
+      "cache": false,
+      "persistent": true
     },
     "lint": {
-      "outputs": []
+      "cache": false,
+      "passThroughEnv": ["WORKBENCH_PYTHON", "CONDA_PREFIX", "VIRTUAL_ENV"]
     },
     "typecheck": {
-      "outputs": []
+      "cache": false,
+      "passThroughEnv": ["WORKBENCH_PYTHON", "CONDA_PREFIX", "VIRTUAL_ENV"]
+    },
+    "test": {
+      "cache": false,
+      "passThroughEnv": ["WORKBENCH_PYTHON", "CONDA_PREFIX", "VIRTUAL_ENV"]
     }
   }
 }

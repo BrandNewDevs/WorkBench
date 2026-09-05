@@ -51,5 +51,8 @@ WorkBench is a sovereign, local-first agentic AI workbench for confidential indu
 ## Validate changes
 
 - Run `pnpm check` for repository-level TypeScript/lint validation.
+- Run `pnpm test` for offline unit tests and `pnpm verify` for checks, tests, and production builds together. Use `pnpm --filter @workbench/ai test tests/<area>` for a focused Python loop.
+- Python tasks use `WORKBENCH_PYTHON`, `apps/ai/.venv`, an activated environment, or Python 3.11+ on PATH. Setup instructions are in `README.md`; do not make Conda a prerequisite for validation.
+- Use `pnpm --filter @workbench/ai test:live` only with preloaded local models. Report live-model and Windows acceptance results separately from unit tests.
 - Exercise the relevant end-to-end MVP acceptance path in `PLAN.md`; a screen existing is not proof that the workflow works.
 - Do not substitute prepared output for a failed live model/tool result. The allowed demo fallback is a tested smaller local model.

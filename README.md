@@ -1,68 +1,48 @@
 # WorkBench
 
-A framework-neutral monorepo managed with pnpm workspaces and Turborepo. The apps are placeholders for now, so their frameworks and runtimes can be chosen later.
+A local-first AI workbench for confidential industrial documents. The Windows employee client uses Electron, React, and TypeScript; Python services use FastAPI and Ollama. [PLAN.md](PLAN.md) defines the MVP architecture and acceptance path.
 
-## Structure
+## Current implementation
 
-```text
-.
-├── apps/
-│   ├── desktop/
-│   ├── web/
-│   ├── api/
-│   └── ai/
-├── packages/
-│   └── .gitkeep
-├── package.json
-├── pnpm-workspace.yaml
-├── pnpm-lock.yaml
-└── turbo.json
-```
+- `apps/desktop`: employee UI, memory-only drafts, native file selection, and pending local API integration. [Desktop setup](apps/desktop/README.md).
+- `apps/ai`: Ollama adapter, typed service contracts, workflow transitions, and approval policy. The FastAPI entry point and complete inspection workflow are not implemented on this branch.
+- `apps/web`: static product-site placeholder.
+- `apps/api`: reserved and unused; it has no validation tasks.
+- `packages`: reserved for framework-neutral code with multiple consumers. Applications must not import one another.
 
-- `apps/desktop` is the desktop application boundary.
-- `apps/web` is the web application boundary.
-- `apps/api` is the API boundary.
-- `apps/ai` is the AI and Python integration boundary.
+## Developer setup
 
-## Commands
+Use Node 22.18+ and the pnpm version in `package.json`. Python 3.11 is the tested service baseline. Install development dependencies before going offline; application execution must not download models or contact cloud services.
 
 ```sh
-pnpm install
-pnpm dev
-pnpm build
-pnpm lint
-pnpm typecheck
-pnpm check
+pnpm install --frozen-lockfile
+python3.11 -m venv apps/ai/.venv
+apps/ai/.venv/bin/python -m pip install -r apps/ai/requirements.txt
 ```
 
-The root scripts run the matching task across workspaces through Turbo. `check` runs lint and typecheck.
+On Windows, create the environment with `py -3.11 -m venv apps/ai/.venv`, then install with `apps/ai/.venv/Scripts/python.exe -m pip install -r apps/ai/requirements.txt`.
 
-## Packages
+Python workspace commands select `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then an activated virtualenv/Conda environment, then Python on PATH. An explicit invalid interpreter fails instead of silently switching environments. Commands run from `apps/ai`; never patch `sys.path`. No runner command installs dependencies automatically.
 
-`packages/` is for reusable code shared by two or more apps. Examples include UI components, shared types, validation, and framework-neutral utilities. Keep app-specific code in its app.
+## Verification loop
 
-Create a package when code has a clear shared owner and a second consumer, or when extracting it gives an app a clean boundary. Do not create a package for a single app's code just to fill the directory.
-
-Use the `@workbench/` scope and a specific name, such as `@workbench/config` or `@workbench/ui`. A minimal package can start with:
-
-```json
-{
-  "name": "@workbench/shared",
-  "version": "0.0.0",
-  "private": true
-}
+```sh
+pnpm check                                      # all lint and typechecks; report independent failures together
+pnpm test                                       # Python unit tests and desktop state tests; no live models
+pnpm build                                      # desktop and web production assets
+pnpm verify                                     # all three, in that order
+pnpm --filter @workbench/ai test tests/tools      # focused Python tests
+pnpm --filter @workbench/desktop test             # fast desktop state checks without Electron
 ```
 
-An app references a workspace package in its `package.json` like this:
+Validation tasks always execute. Production builds cache and restore `dist/**`. CI runs `pnpm verify` on Linux and Windows; a bot-review request is not a substitute for these checks. Python requirements currently use version ranges, so environments are not fully pinned.
 
-```json
-{
-  "dependencies": {
-    "@workbench/shared": "workspace:*"
-  }
-}
+Live model verification is separate and requires Ollama with approved models already loaded onto the workstation:
+
+```sh
+pnpm --filter @workbench/ai test:live
 ```
 
-Keep dependencies moving in one direction. Apps may depend on shared packages. Shared packages must not depend on apps. Keep database and server-only code out of packages used by clients. Do not import database or server code into `apps/web` or `apps/desktop`, and do not have one app import another app. Use a shared package for code that truly belongs across those boundaries.
+That command enables the opt-in model tests; it does not download a model or substitute fixtures. Unit tests, a successful build, and the live adapter test do not establish the full inspection demo. Follow the acceptance checklist in `PLAN.md` on the target Windows machine and report any untested steps.
 
-Python can later live in `apps/ai` beside its `pyproject.toml` and virtual environment. pnpm can still run workspace tasks while that app's scripts call Python tools or a small task runner.
+For UI work, run `pnpm --filter @workbench/desktop dev`. The development-only bypass is documented in the desktop README. Source changes to Electron main/preload require restarting the development command; renderer changes use Vite hot reload.
