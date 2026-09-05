@@ -500,6 +500,34 @@ class ConversationMessage(ContractModel):
     content: str = Field(min_length=1)
 
 
+class PlanStep(ContractModel):
+    """One proposed, non-executing step in a bounded task plan."""
+
+    step_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    instruction: str = Field(min_length=1)
+    expected_output: str = Field(min_length=1)
+
+
+class TaskPlan(ContractModel):
+    """Typed planning output that leaves execution control with Backend 1."""
+
+    objective: str = Field(min_length=1)
+    steps: tuple[PlanStep, ...] = Field(min_length=1, max_length=8)
+    next_step_id: str = Field(min_length=1)
+    uncertainties: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def next_step_is_in_unique_sequence(self) -> "TaskPlan":
+        """Keep the next action traceable to one unambiguous plan step."""
+
+        step_ids = tuple(step.step_id for step in self.steps)
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("task plan step IDs must be unique")
+        if self.next_step_id not in step_ids:
+            raise ValueError("task plan next step must reference a returned step")
+        return self
+
+
 class AgentContext(ContractModel):
     """Backend-owned workflow context made available to the AI planner."""
 

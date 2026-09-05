@@ -34,12 +34,14 @@ from app.ai.schemas import (
     ModelProfile,
     ModelRuntimeHealth,
     ModelStatus,
+    PlanStep,
     ProposedToolCall,
     RetrievalMetrics,
     SourceDocument,
     SourceReference,
     TaskDescriptor,
     TaskKind,
+    TaskPlan,
     TextGenerationRequest,
     TextGenerationResult,
     ToolDefinition,
@@ -231,6 +233,28 @@ def sample_grounded_draft() -> GroundedDraft:
     )
 
 
+def sample_task_plan() -> TaskPlan:
+    """Return a bounded plan whose steps remain Backend 1-controlled."""
+
+    return TaskPlan(
+        objective="Prepare a grounded approval-note draft.",
+        steps=(
+            PlanStep(
+                step_id="review-findings",
+                instruction="Review the supplied findings and evidence.",
+                expected_output="A list of supported observations and missing information.",
+            ),
+            PlanStep(
+                step_id="draft-note",
+                instruction="Prepare structured approval-note content.",
+                expected_output="A grounded draft for Backend 2 to render.",
+            ),
+        ),
+        next_step_id="review-findings",
+        uncertainties=("The unreadable gauge value must remain unresolved.",),
+    )
+
+
 def representative_contracts() -> tuple[ContractModel, ...]:
     """Instantiate a representative example of every Phase 0 Pydantic model."""
 
@@ -294,6 +318,7 @@ def representative_contracts() -> tuple[ContractModel, ...]:
         ),
         sample_vision_analysis().pages[0],
         sample_vision_analysis(),
+        sample_task_plan(),
         sample_grounded_draft(),
         tool,
         tool_call,
