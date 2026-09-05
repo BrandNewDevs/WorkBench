@@ -12,11 +12,21 @@ pnpm --filter @workbench/desktop dev
 
 `dev` builds main and preload concurrently through Vite's API, starts Vite on `127.0.0.1:5173`, and launches Electron once the server is listening. It does not spawn package-manager shell wrappers. To run the built renderer from this checkout, run `pnpm --filter @workbench/desktop build` followed by `pnpm --filter @workbench/desktop start`. `start` serves the built renderer on `http://127.0.0.1:5173`, the default attached FastAPI CORS origin. Both launch commands remove an inherited `ELECTRON_RUN_AS_NODE` flag so they work from Electron-based editors and agent terminals.
 
-This repository does not configure an Electron packager, embedded Python runtime, installer, or service bundle. Packaged Electron execution fails closed instead of looking for an unshipped `resources/ai` directory. The supported delivery contract is a checked-out workspace with the Python environment installed as described in the root README. A Windows package requires a separate packaging decision that includes the FastAPI application, its Python runtime and dependencies, and a service-startup test.
+## Windows package
+
+Build the installer on a Windows workstation with the approved Python environment and all `apps/ai/requirements.txt` packages installed:
+
+```sh
+pnpm --filter @workbench/desktop dist:win
+```
+
+The command builds the renderer, freezes FastAPI and its Python dependencies into `resources/service`, then creates an NSIS installer under `apps/desktop/dist`. The packaged client always starts that service. It serves the renderer at `http://127.0.0.1:5173`, passes that exact origin to FastAPI CORS, and writes both the SQLite database and persistent signing secret under Electron `userData`. It never accepts `Origin: null`.
+
+PyInstaller produces binaries for its build platform. Build the Windows installer on Windows. The installer does not download Python, dependencies, models, Ollama, Docker, or LibreOffice at runtime.
 
 For local UI work, `WORKBENCH_SKIP_AUTH=1 pnpm --filter @workbench/desktop dev` opens the workspace without calling the employee login or session-restore endpoints. This bypass is enabled only by the development renderer, creates no FastAPI session, and grants no backend permissions. The workspace keeps a visible `Development mode: authentication disabled` notice. The flag is ignored when the development renderer is not active, including `start` and packaged builds. Leave it unset to exercise normal authentication.
 
-The client connects to FastAPI only at `http://127.0.0.1:8000`. The same origin is used by Electron, the renderer, and its content security policy. Set `WORKBENCH_START_LOCAL_SERVICE=1` to make Electron run FastAPI from `apps/ai`. Electron uses `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then Python on `PATH`; an empty override is treated as unset. Set `WORKBENCH_PYTHON` to the Python 3.11+ executable when it is not already on `PATH`. Before the first authenticated launch, provision the one local employee account from an interactive terminal:
+The client connects to FastAPI only at `http://127.0.0.1:8000`. The same origin is used by Electron, the renderer, and its content security policy. During checkout-based development, set `WORKBENCH_START_LOCAL_SERVICE=1` to run FastAPI from `apps/ai`. Electron uses `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then Python on `PATH`; an empty override is treated as unset. Set `WORKBENCH_PYTHON` to the Python 3.11+ executable when it is not already on `PATH`. Before the first authenticated launch, provision the one local employee account from an interactive terminal:
 
 ```sh
 pnpm --filter @workbench/ai provision-account

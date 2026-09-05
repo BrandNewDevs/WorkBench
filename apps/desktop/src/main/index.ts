@@ -118,14 +118,22 @@ function stopBuiltRendererServer(): void {
   builtRendererServer = undefined;
 }
 
+function isSigningSecret(value: string): boolean {
+  return /^[a-f0-9]{96}$/i.test(value);
+}
+
+async function readSigningSecret(secretPath: string): Promise<string> {
+  const secret = (await readFile(secretPath, "utf8")).trim();
+  if (!isSigningSecret(secret)) {
+    throw new Error("The local authentication signing secret is invalid.");
+  }
+  return secret;
+}
+
 async function provisionSigningSecret(): Promise<string> {
   const secretPath = join(app.getPath("userData"), "auth-signing-secret");
   try {
-    const secret = (await readFile(secretPath, "utf8")).trim();
-    if (!/^[a-f0-9]{96}$/i.test(secret)) {
-      throw new Error("The local authentication signing secret is invalid.");
-    }
-    return secret;
+    return await readSigningSecret(secretPath);
   } catch (error: unknown) {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
       throw error;
@@ -140,17 +148,16 @@ async function provisionSigningSecret(): Promise<string> {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") {
       throw error;
     }
-    return (await readFile(secretPath, "utf8")).trim();
+    return readSigningSecret(secretPath);
   }
 }
 
+function managesLocalService(): boolean {
+  return app.isPackaged || process.env.WORKBENCH_START_LOCAL_SERVICE === "1";
+}
+
 function scheduleLocalServiceRestart(): void {
-  if (
-    process.env.WORKBENCH_START_LOCAL_SERVICE !== "1" ||
-    stoppingLocalService ||
-    localService ||
-    localServiceRestartTimer
-  ) {
+  if (!managesLocalService() || stoppingLocalService || localService || localServiceRestartTimer) {
     return;
   }
 
@@ -176,21 +183,47 @@ function localPythonExecutable(aiDirectory: string): string {
   return process.platform === "win32" ? "python.exe" : "python3";
 }
 
+interface LocalServiceLaunch {
+  executable: string;
+  arguments: string[];
+  workingDirectory: string;
+}
+
+function localServiceLaunch(): LocalServiceLaunch {
+  if (app.isPackaged) {
+    const serviceDirectory = join(process.resourcesPath, "service");
+    const executable = join(
+      serviceDirectory,
+      process.platform === "win32" ? "workbench-service.exe" : "workbench-service",
+    );
+    if (!existsSync(executable)) {
+      throw new Error("The packaged local service is missing.");
+    }
+    return { executable, arguments: [], workingDirectory: serviceDirectory };
+  }
+
+  const aiDirectory = resolve(app.getAppPath(), "../ai");
+  return {
+    executable: localPythonExecutable(aiDirectory),
+    arguments: ["-m", "uvicorn", "app.main:app", "--host", localApiUrl.hostname, "--port", localApiUrl.port],
+    workingDirectory: aiDirectory,
+  };
+}
+
 export function startLocalService(signingSecret?: string): void {
   localSigningSecret = signingSecret ?? localSigningSecret;
-  if (process.env.WORKBENCH_START_LOCAL_SERVICE !== "1" || localService || localServiceRestartTimer) {
+  if (!managesLocalService() || localService || localServiceRestartTimer) {
     return;
   }
 
+  const launch = localServiceLaunch();
   stoppingLocalService = false;
   localServiceFailed = false;
-  const aiDirectory = resolve(app.getAppPath(), "../ai");
-  const executable = localPythonExecutable(aiDirectory);
   const child = spawn(
-    executable,
-    ["-m", "uvicorn", "app.main:app", "--host", localApiUrl.hostname, "--port", localApiUrl.port],
+    launch.executable,
+    launch.arguments,
     {
-      cwd: aiDirectory,
+      cwd: launch.workingDirectory,
       shell: false,
       windowsHide: true,
       stdio: "ignore",
@@ -200,6 +233,7 @@ export function startLocalService(signingSecret?: string): void {
         WORKBENCH_APP_AUTH_SIGNING_SECRET:
           localSigningSecret ?? process.env.WORKBENCH_APP_AUTH_SIGNING_SECRET,
         WORKBENCH_APP_CORS_ALLOWED_ORIGINS: JSON.stringify([rendererOrigin()]),
+        WORKBENCH_APP_DATABASE_PATH: join(app.getPath("userData"), "workbench.db"),
       },
     },
   );
@@ -232,7 +266,7 @@ export function stopLocalService(): void {
 }
 
 function getDesktopStatus(): DesktopStatus {
-  const managed = process.env.WORKBENCH_START_LOCAL_SERVICE === "1";
+  const managed = managesLocalService();
   const baseStatus = {
     serviceMode: managed ? ("managed" as const) : ("attached" as const),
     serviceRunning: managed ? Boolean(localService) && !localServiceFailed : ("unknown" as const),
@@ -310,15 +344,6 @@ async function createMainWindow(): Promise<BrowserWindow> {
 }
 
 async function startApplication(): Promise<void> {
-  if (app.isPackaged) {
-    dialog.showErrorBox(
-      "Unsupported installation",
-      "Packaged desktop delivery is not configured. Use the documented build and start contract.",
-    );
-    app.quit();
-    return;
-  }
-
   session.defaultSession.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
     callback({ cancel: !isAllowedRequestUrl(details.url) });
   });
