@@ -2,6 +2,7 @@ export const IPC_CHANNELS = {
   getDesktopStatus: "desktop:get-status",
   selectUploadFiles: "desktop:select-upload-files",
   selectChatAttachments: "desktop:select-chat-attachments",
+  requestLocalService: "desktop:request-local-service",
 } as const;
 
 /** The only FastAPI origin the desktop client may contact. */
@@ -74,8 +75,20 @@ export type ChatAttachmentSelectionResult =
       limitCount?: number;
     };
 
+export type LocalServiceRequest =
+  | { operation: "health" }
+  | { operation: "login"; request: EmployeeLoginRequest }
+  | { operation: "restoreSession" }
+  | { operation: "logout" };
+
+export interface LocalServiceResponse {
+  status: number;
+  body: string;
+}
+
 export interface DesktopBridge {
   getDesktopStatus(): Promise<DesktopStatus>;
+  requestLocalService(request: LocalServiceRequest): Promise<LocalServiceResponse>;
   selectUploadFiles(requestedKind: UploadKind): Promise<UploadSelectionResult>;
   selectChatAttachments(): Promise<ChatAttachmentSelectionResult>;
 }

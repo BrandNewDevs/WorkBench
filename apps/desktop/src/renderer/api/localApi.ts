@@ -1,4 +1,3 @@
-import { LOCAL_API_ORIGIN } from "../../shared/contracts";
 import type {
   EmployeeLoginRequest,
   EmployeeLoginResponse,
@@ -7,21 +6,10 @@ import type {
   EmployeeSessionRestoreResponse,
   HealthResponse,
   OutboundStatus,
+  LocalServiceRequest,
 } from "../../shared/contracts";
 
 const requestTimeoutMs = 5_000;
-
-/**
- * These paths are the pending frontend expectation for Backend 1. No FastAPI
- * route is added by the desktop client. Keep the assumptions here until the
- * backend contract is agreed and verified.
- */
-const localApiEndpoints = {
-  health: "/health",
-  employeeLogin: "/auth/login",
-  employeeLogout: "/auth/logout",
-  restoreEmployeeSession: "/auth/session",
-} as const;
 
 export type LocalApiErrorKind =
   | "invalidUrl"
@@ -44,31 +32,6 @@ export class LocalApiError extends Error {
     this.kind = kind;
     this.status = status;
   }
-}
-
-function getApiBaseUrl(): string {
-  return LOCAL_API_ORIGIN;
-}
-
-function getApiBaseUrlFromValue(configuredUrl: string): string {
-  let url: URL;
-  try {
-    url = new URL(configuredUrl);
-  } catch {
-    throw new LocalApiError("The local API URL is invalid.", "invalidUrl");
-  }
-
-  if (
-    url.origin !== LOCAL_API_ORIGIN ||
-    url.pathname !== "/" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    url.username !== "" ||
-    url.password !== ""
-  ) {
-    throw new LocalApiError("WorkBench only permits its configured FastAPI origin.", "invalidUrl");
-  }
-  return LOCAL_API_ORIGIN;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -163,108 +126,48 @@ function parseHealthResponse(value: unknown): HealthResponse {
 }
 
 export class LocalApiClient {
-  private async requestJson(path: string, init: RequestInit, apiBaseUrl: string, operation: string): Promise<unknown> {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), requestTimeoutMs);
-
+  private async requestJson(request: LocalServiceRequest, operation: string): Promise<unknown> {
+    let timeout: number | undefined;
     try {
-      const response = await fetch(`${getApiBaseUrlFromValue(apiBaseUrl)}${path}`, {
-        ...init,
-        credentials: "include",
-        headers: {
-          Accept: "application/json",
-          ...init.headers,
-        },
-        signal: controller.signal,
-      });
-      if (response.status === 401 || response.status === 403) {
-        throw new LocalApiError(`The local employee ${operation} was not authorized.`, "unauthorized", response.status);
-      }
-      if (response.status === 404) {
-        throw new LocalApiError(
-          `The local employee ${operation} endpoint is unavailable on FastAPI.`,
-          "endpointUnavailable",
-          response.status,
-        );
-      }
-      if (!response.ok) {
-        throw new LocalApiError(`FastAPI ${operation} returned HTTP ${response.status}.`, "http", response.status);
-      }
-      let responseText: string;
-      try {
-        responseText = await response.text();
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          throw new LocalApiError(`FastAPI ${operation} timed out.`, "timeout");
-        }
-        throw new LocalApiError(`FastAPI ${operation} response could not be read.`, "network");
-      }
-      try {
-        return JSON.parse(responseText) as unknown;
-      } catch {
-        throw new LocalApiError(`FastAPI returned malformed JSON for ${operation}.`, "malformedJson");
-      }
+      const pending = window.workbench.requestLocalService(request);
+      const response = await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          timeout = window.setTimeout(() => reject(new LocalApiError(`FastAPI ${operation} timed out.`, "timeout")), requestTimeoutMs);
+        }),
+      ]);
+      if (response.status === 401 || response.status === 403) throw new LocalApiError(`The local employee ${operation} was not authorized.`, "unauthorized", response.status);
+      if (response.status === 404) throw new LocalApiError(`The local employee ${operation} endpoint is unavailable on FastAPI.`, "endpointUnavailable", response.status);
+      if (response.status < 200 || response.status >= 300) throw new LocalApiError(`FastAPI ${operation} returned HTTP ${response.status}.`, "http", response.status);
+      try { return JSON.parse(response.body) as unknown; } catch { throw new LocalApiError(`FastAPI returned malformed JSON for ${operation}.`, "malformedJson"); }
     } catch (error) {
-      if (error instanceof LocalApiError) {
-        throw error;
-      }
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw new LocalApiError(`FastAPI ${operation} timed out.`, "timeout");
-      }
+      if (error instanceof LocalApiError) throw error;
       throw new LocalApiError(`FastAPI is unavailable for local employee ${operation}.`, "network");
     } finally {
-      window.clearTimeout(timeout);
+      if (timeout !== undefined) window.clearTimeout(timeout);
     }
   }
 
-  async login(request: EmployeeLoginRequest, apiBaseUrl = getApiBaseUrl()): Promise<EmployeeSession> {
-    const response: EmployeeLoginResponse = {
-      session: parseEmployeeSession(
-        await this.requestJson(
-          localApiEndpoints.employeeLogin,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(request),
-          },
-          apiBaseUrl,
-          "employee login",
-        ),
-        "employee login",
-      ),
-    };
+  async login(request: EmployeeLoginRequest, apiBaseUrl?: string): Promise<EmployeeSession> {
+    void apiBaseUrl;
+    const response: EmployeeLoginResponse = { session: parseEmployeeSession(await this.requestJson({ operation: "login", request }, "employee login"), "employee login") };
     return response.session;
   }
 
-  async logout(apiBaseUrl = getApiBaseUrl()): Promise<EmployeeLogoutResponse> {
-    return parseLogoutResponse(
-      await this.requestJson(
-        localApiEndpoints.employeeLogout,
-        { method: "POST" },
-        apiBaseUrl,
-        "employee logout",
-      ),
-    );
+  async logout(apiBaseUrl?: string): Promise<EmployeeLogoutResponse> {
+    void apiBaseUrl;
+    return parseLogoutResponse(await this.requestJson({ operation: "logout" }, "employee logout"));
   }
 
-  async restoreSession(apiBaseUrl = getApiBaseUrl()): Promise<EmployeeSession> {
-    const response: EmployeeSessionRestoreResponse = {
-      session: parseEmployeeSession(
-        await this.requestJson(
-          localApiEndpoints.restoreEmployeeSession,
-          { method: "GET" },
-          apiBaseUrl,
-          "session restoration",
-        ),
-        "session restoration",
-      ),
-    };
+  async restoreSession(apiBaseUrl?: string): Promise<EmployeeSession> {
+    void apiBaseUrl;
+    const response: EmployeeSessionRestoreResponse = { session: parseEmployeeSession(await this.requestJson({ operation: "restoreSession" }, "session restoration"), "session restoration") };
     return response.session;
   }
 
-  async getHealth(apiBaseUrl = getApiBaseUrl()): Promise<HealthResponse> {
-    const value = await this.requestJson(localApiEndpoints.health, { method: "GET" }, apiBaseUrl, "health check");
-    return parseHealthResponse(value);
+  async getHealth(apiBaseUrl?: string): Promise<HealthResponse> {
+    void apiBaseUrl;
+    return parseHealthResponse(await this.requestJson({ operation: "health" }, "health check"));
   }
 }
 

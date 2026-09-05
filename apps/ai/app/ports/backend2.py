@@ -37,6 +37,7 @@ class StoredIdentity(ApiContractModel):
 
     user_id: UUID
     username: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=200)
     role: UserRole
     password_hash: str = Field(min_length=1)
     disabled: bool = False
@@ -121,6 +122,10 @@ class IdentityStore(Protocol):
 
     async def get_by_username(self, username: str) -> StoredIdentity | None:
         """Return an identity by normalized username."""
+        ...
+
+    async def get_by_id(self, user_id: UUID) -> StoredIdentity | None:
+        """Return an identity by immutable user ID for session restoration."""
         ...
 
 

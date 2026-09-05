@@ -9,12 +9,16 @@ from app.ai.engine import AIEngine
 from app.ai.schemas import AIHealthReport, Capability, ModelStatus
 from app.api.health_contracts import HealthResponse, HealthStatus
 from app.ports.backend2 import (
+    AuditStore,
+    AuthSessionStore,
+    IdentityStore,
     SubsystemReadiness,
     SystemHealthProvider,
     SystemHealthReport,
 )
 
 ShutdownCallback = Callable[[], Awaitable[None]]
+StartupCallback = Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +27,11 @@ class ApplicationDependencies:
 
     ai_engine: AIEngine | None = None
     system_health_provider: SystemHealthProvider | None = None
+    identity_store: IdentityStore | None = None
+    auth_session_store: AuthSessionStore | None = None
+    audit_store: AuditStore | None = None
     shutdown: ShutdownCallback | None = None
+    startup: StartupCallback | None = None
 
 
 def _unavailable_subsystem() -> SubsystemReadiness:
@@ -108,6 +116,16 @@ def _system_is_ready(report: SystemHealthReport) -> bool:
     )
 
 
+def _auth_dependencies_are_ready(dependencies: ApplicationDependencies) -> bool:
+    """Require the stores that make the Phase 2 employee API usable at runtime."""
+
+    return (
+        dependencies.identity_store is not None
+        and dependencies.auth_session_store is not None
+        and dependencies.audit_store is not None
+    )
+
+
 async def build_health_response(
     dependencies: ApplicationDependencies, *, timeout_seconds: float
 ) -> HealthResponse:
@@ -117,7 +135,11 @@ async def build_health_response(
         _check_ai(dependencies.ai_engine, timeout_seconds),
         _check_system(dependencies.system_health_provider, timeout_seconds),
     )
-    is_ready = _ai_is_ready(ai) and _system_is_ready(system)
+    is_ready = (
+        _ai_is_ready(ai)
+        and _system_is_ready(system)
+        and _auth_dependencies_are_ready(dependencies)
+    )
     return HealthResponse(
         status=HealthStatus.READY if is_ready else HealthStatus.DEGRADED,
         ai=ai,

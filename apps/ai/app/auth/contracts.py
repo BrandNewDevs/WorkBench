@@ -20,5 +20,6 @@ class AuthenticatedUser(ApiContractModel):
 
     user_id: UUID
     username: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=200)
     role: UserRole
     auth_session_id: UUID

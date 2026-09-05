@@ -21,3 +21,10 @@ __pycache__/
 
 # Local AI implementation notes
 /ai-llm-implementation-plan.md
+
+# Local service state. The runtime default is outside the repository, but these
+# patterns keep an explicit development override or an older in-tree database out of Git.
+/apps/ai/data/
+*.db
+*.db-shm
+*.db-wal

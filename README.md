@@ -22,7 +22,15 @@ apps/ai/.venv/bin/python -m pip install -r apps/ai/requirements.txt
 
 On Windows, create the environment with `py -3.11 -m venv apps/ai/.venv`, then install with `apps/ai/.venv/Scripts/python.exe -m pip install -r apps/ai/requirements.txt`.
 
-Python workspace commands select `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then an activated virtualenv/Conda environment, then Python on PATH. An explicit invalid interpreter fails instead of silently switching environments. Commands run from `apps/ai`; never patch `sys.path`. No runner command installs dependencies automatically.
+Python workspace commands select `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then an activated virtualenv/Conda environment, then Python on PATH. An explicit invalid interpreter fails instead of silently switching environments. Commands run from `apps/ai`; never patch `sys.path`. No runner command installs dependencies automatically. Electron follows the same `WORKBENCH_PYTHON`, `apps/ai/.venv`, then PATH order when it starts FastAPI.
+
+FastAPI stores its default SQLite database in the current user's application-data directory, not in the source tree: `%LOCALAPPDATA%\\WorkBench` on Windows, `~/Library/Application Support/WorkBench` on macOS, and `$XDG_DATA_HOME/workbench` or `~/.local/share/workbench` on Linux. Electron uses that same FastAPI default when it manages the service. For a fresh database, create the first employee from an interactive local terminal before starting the client:
+
+```sh
+pnpm --filter @workbench/ai provision-account
+```
+
+The command prompts for the account details and password, accepts only an empty identity store, and has no HTTP route. It does not include a default username or password.
 
 ## Verification loop
 
