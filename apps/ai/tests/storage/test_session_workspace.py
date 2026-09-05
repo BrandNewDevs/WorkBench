@@ -105,6 +105,23 @@ def test_save_file_rejects_unknown_workspace_area(tmp_path: Path) -> None:
         store.save_file("abc123", "private", "secret.txt", b"secret")
 
 
+def test_save_file_cannot_follow_a_symlink_into_another_session(tmp_path: Path) -> None:
+    """An existing symlink must not let one session overwrite another's file."""
+
+    store = LocalSessionWorkspaceStore(tmp_path / "sessions")
+    first = store.create_session_workspace("first")
+    store.create_session_workspace("second")
+    protected_file = store.save_file(
+        "second", WorkspaceArea.UPLOADS, "protected.txt", b"second session data"
+    )
+    (first.uploads / "replacement.txt").symlink_to(protected_file)
+
+    with pytest.raises(WorkspacePathError, match="Symbolic links"):
+        store.save_file("first", WorkspaceArea.UPLOADS, "replacement.txt", b"overwrite")
+
+    assert protected_file.read_bytes() == b"second session data"
+
+
 def test_cleanup_removes_only_the_requested_session(tmp_path: Path) -> None:
     store = LocalSessionWorkspaceStore(tmp_path / "sessions")
     first = store.create_session_workspace("first")

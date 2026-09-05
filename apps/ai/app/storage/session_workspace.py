@@ -112,8 +112,9 @@ class LocalSessionWorkspaceStore:
         workspace_area = self._validate_area(area)
         safe_file_name = self._validate_file_name(file_name)
         area_path = workspace.path_for(workspace_area)
-        destination = self._contained_path(area_path / safe_file_name)
-        self._reject_symlink(destination)
+        unresolved_destination = area_path / safe_file_name
+        self._reject_symlink(unresolved_destination)
+        destination = self._contained_path(unresolved_destination)
 
         descriptor, temporary_name = tempfile.mkstemp(
             dir=area_path,
