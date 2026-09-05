@@ -1,6 +1,6 @@
 # WorkBench
 
-A framework-neutral monorepo managed with pnpm workspaces and Turborepo. The apps are placeholders for now, so their frameworks and runtimes can be chosen later.
+A monorepo managed with pnpm workspaces and Turborepo. The employee desktop client is an Electron, React, and TypeScript application. Other application boundaries can be filled in as their plans are approved.
 
 ## Structure
 
