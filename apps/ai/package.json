@@ -2,10 +2,9 @@
   "name": "@workbench/ai",
   "private": true,
   "scripts": {
-    "dev": "node -e \"console.log('ai dev placeholder')\"",
-    "build": "conda run -n workbench-ai python -m compileall -q app",
-    "lint": "conda run -n workbench-ai ruff check app tests",
-    "typecheck": "conda run -n workbench-ai mypy app tests",
-    "test": "conda run -n workbench-ai pytest"
+    "lint": "node scripts/python.mjs -m ruff check app tests",
+    "typecheck": "node scripts/python.mjs -m mypy app tests",
+    "test": "node --test scripts/*.test.mjs && node scripts/python.mjs -m pytest -m \"not live_ollama\"",
+    "test:live": "node scripts/python.mjs --live -m pytest -m live_ollama"
   }
 }
