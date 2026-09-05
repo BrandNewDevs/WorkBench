@@ -217,6 +217,8 @@ class StructuredTextGenerator:
             return result, generation
 
         message = f"{operation_name} returned invalid structured output after one retry"
-        if isinstance(last_error, InvalidStructuredOutput):
-            raise type(last_error)(message) from last_error
+        if isinstance(last_error, GroundingViolation):
+            raise GroundingViolation(message) from last_error
+        if isinstance(last_error, InvalidToolProposal):
+            raise InvalidToolProposal(message) from last_error
         raise InvalidStructuredOutput(message) from last_error

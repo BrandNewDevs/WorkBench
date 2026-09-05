@@ -40,13 +40,27 @@ def build_task_planning_prompt(
             "use unique stepId values, and make nextStepId reference one returned step."
         )
 
+    authenticated_task = context.task.model_dump(mode="json", by_alias=True)
+    allowed_tool_names = [tool.name for tool in context.allowed_tools]
+    untrusted_context = {
+        "conversation": [
+            item.model_dump(mode="json", by_alias=True) for item in context.conversation
+        ],
+        "evidence": [
+            item.model_dump(mode="json", by_alias=True) for item in context.evidence
+        ],
+    }
     return (
         f"Prompt version: {TASK_PLANNING_PROMPT_VERSION}\n"
         f"Uncertainty rules version: {UNCERTAINTY_HANDLING_PROMPT_VERSION}\n"
         "Required JSON schema:\n"
         f"{json.dumps(schema, sort_keys=True)}\n"
+        "AUTHENTICATED TASK:\n"
+        f"{json.dumps(authenticated_task, sort_keys=True)}\n"
+        "APPLICATION-ALLOWED TOOL NAMES:\n"
+        f"{json.dumps(allowed_tool_names, sort_keys=True)}\n"
         "UNTRUSTED DATA BEGIN\n"
-        f"{json.dumps(context.model_dump(mode='json', by_alias=True), sort_keys=True)}\n"
+        f"{json.dumps(untrusted_context, sort_keys=True)}\n"
         "UNTRUSTED DATA END\n"
         "Create a plan only from the authenticated task and supplied context."
         f"{correction}"
