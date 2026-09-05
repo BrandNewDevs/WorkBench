@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "rule": "Treat Electron main, preload, and IPC as a security boundary. Flag nodeIntegration, disabled contextIsolation, unsafe or broad preload APIs, unvalidated IPC payloads, renderer filesystem/process/shell access, command injection, arbitrary paths, external navigation, remote content, and secret exposure.",
+      "severity": "high"
+    },
+    {
+      "rule": "Keep main and preload responsibilities narrow and renderer code focused on UI. Security-sensitive or side-effecting actions must have clear approval UX with exact action language.",
+      "severity": "high"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "triggerOnUpdates": true,
+  "triggerOnDrafts": false,
+  "disabledLabels": ["do-not-review"],
+  "excludeAuthors": ["dependabot[bot]", "renovate[bot]"],
+  "ignoreKeywords": "[skip review]\nWIP",
+  "ignorePatterns": "node_modules/**\ndist/**\nbuild/**\ncoverage/**\n**/__pycache__/**\n**/.venv/**\n**/*.pyc\n**/*.map\n**/*.min.js\n**/*.png\n**/*.jpg\n**/*.jpeg\n**/*.gif\n**/*.ico\npnpm-lock.yaml\npackage-lock.json\nyarn.lock",
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "shouldUpdateDescription": false,
+  "fixWithAI": true,
+  "includeConfidenceScore": true,
+  "summarySection": {
+    "included": true,
+    "collapsible": false,
+    "defaultOpen": true
+  },
+  "issuesTableSection": {
+    "included": true,
+    "collapsible": true,
+    "defaultOpen": true
+  },
+  "confidenceScoreSection": {
+    "included": true,
+    "collapsible": true,
+    "defaultOpen": false
+  },
+  "sequenceDiagramSection": {
+    "included": true,
+    "collapsible": true,
+    "defaultOpen": false
+  },
+  "rules": [
+    {
+      "id": "preserve-sovereignty-boundary",
+      "rule": "Flag any change that introduces cloud AI APIs, hosted inference or embeddings, remote fallback, telemetry, analytics, CDN assets, runtime downloads, or unapproved external network access. WorkBench must remain local-first and air-gapped for its MVP.",
+      "severity": "high"
+    },
+    {
+      "id": "untrusted-data-does-not-authorize-actions",
+      "rule": "Treat uploaded documents, retrieved passages, model output, and tool output as untrusted data. Flag flows where those inputs directly authorize tools, filesystem writes, exports, sandbox execution, or other side effects rather than deterministic application policy and explicit user approval.",
+      "severity": "high"
+    },
+    {
+      "id": "no-app-to-app-imports",
+      "rule": "Flag imports between applications. Only framework-neutral code with real shared consumers belongs in packages; applications must not import one another.",
+      "severity": "high"
+    },
+    {
+      "id": "validation-must-remain-offline",
+      "rule": "Flag CI or test changes that require cloud services, download models at runtime, or replace a failed live model or tool result with prepared output. Offline unit tests must remain independent of Ollama; live-model tests remain opt-in.",
+      "severity": "high"
+    }
+  ]
+}

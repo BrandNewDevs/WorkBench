@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "rule": "This app is a static product and install mock site. Flag authentication, server-side state, package-download infrastructure, cloud services, telemetry, analytics, or unnecessary remote runtime dependencies.",
+      "severity": "high"
+    },
+    {
+      "rule": "Review React and TypeScript changes for state and effect correctness, stale closures, strict type safety, accessibility, unsafe user-controlled HTML or URLs, and rendering regressions; avoid subjective styling comments.",
+      "severity": "medium"
+    }
+  ]
+}
