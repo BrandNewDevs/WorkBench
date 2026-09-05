@@ -1,6 +1,8 @@
 """API tests for the Phase 1 local readiness endpoint."""
 
 import asyncio
+from datetime import datetime
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +14,13 @@ from app.ai.schemas import AIHealthReport
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies
 from app.main import create_app
-from app.ports.backend2 import SubsystemReadiness, SystemHealthReport
+from app.ports.backend2 import (
+    AuditRecord,
+    AuthSessionRecord,
+    StoredIdentity,
+    SubsystemReadiness,
+    SystemHealthReport,
+)
 
 
 class FakeSystemHealthProvider:
@@ -42,6 +50,40 @@ class SlowAIEngine(FakeAIEngine):
         return await super().health()
 
 
+class ReadyIdentityStore:
+    """Minimal available identity port for readiness-only tests."""
+
+    async def get_by_username(self, username: str) -> StoredIdentity | None:
+        del username
+        return None
+
+    async def get_by_id(self, user_id: UUID) -> StoredIdentity | None:
+        del user_id
+        return None
+
+
+class ReadyAuthSessionStore:
+    """Minimal available auth-session port for readiness-only tests."""
+
+    async def create(self, record: AuthSessionRecord) -> None:
+        del record
+
+    async def get_active(self, token_id: UUID, now: datetime) -> AuthSessionRecord | None:
+        del token_id, now
+        return None
+
+    async def revoke(self, token_id: UUID, revoked_at: datetime) -> bool:
+        del token_id, revoked_at
+        return False
+
+
+class ReadyAuditStore:
+    """Minimal available audit port for readiness-only tests."""
+
+    async def append(self, record: AuditRecord) -> None:
+        del record
+
+
 def _ready_system_report() -> SystemHealthReport:
     ready = SubsystemReadiness(ready=True, detail="Ready")
     return SystemHealthReport(
@@ -56,20 +98,26 @@ def _client(dependencies: ApplicationDependencies) -> TestClient:
     return TestClient(create_app(dependencies=dependencies))
 
 
-def test_app_registers_only_the_phase_one_health_route() -> None:
-    """The composition root exposes no later Backend 1 endpoint."""
+def test_app_registers_health_and_only_phase_two_auth_routes() -> None:
+    """The composition root exposes the completed auth lifecycle but no workflow routes."""
 
     app = create_app()
     documented_paths = set(app.openapi()["paths"])
 
-    assert documented_paths == {"/health"}
+    assert documented_paths == {"/health", "/auth/login", "/auth/session", "/auth/logout"}
 
 
 def test_health_returns_ready_camel_case_contract() -> None:
     """Ready local providers produce the documented success response."""
 
     system = FakeSystemHealthProvider(_ready_system_report())
-    dependencies = ApplicationDependencies(ai_engine=FakeAIEngine(), system_health_provider=system)
+    dependencies = ApplicationDependencies(
+        ai_engine=FakeAIEngine(),
+        system_health_provider=system,
+        identity_store=ReadyIdentityStore(),
+        auth_session_store=ReadyAuthSessionStore(),
+        audit_store=ReadyAuditStore(),
+    )
 
     with _client(dependencies) as client:
         response = client.get("/health")
@@ -86,6 +134,21 @@ def test_health_returns_ready_camel_case_contract() -> None:
     assert "api_version" not in payload
     assert payload["ai"]["runtimeReady"] is True
     assert system.calls == 1
+
+
+def test_health_is_degraded_when_required_auth_dependencies_are_not_composed() -> None:
+    """A healthy AI/system report cannot mask an unusable employee authentication API."""
+
+    dependencies = ApplicationDependencies(
+        ai_engine=FakeAIEngine(),
+        system_health_provider=FakeSystemHealthProvider(_ready_system_report()),
+    )
+
+    with _client(dependencies) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
 
 
 def test_health_returns_degraded_when_any_required_dependency_is_unavailable() -> None:

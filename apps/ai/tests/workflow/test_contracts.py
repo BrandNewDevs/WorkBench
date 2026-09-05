@@ -29,6 +29,7 @@ def test_contracts_use_camel_case_json_and_uuid_strings() -> None:
         user_id=uuid4(),
         auth_session_id=uuid4(),
         username="inspector",
+        display_name="Inspector",
         role=UserRole.EMPLOYEE,
     )
 

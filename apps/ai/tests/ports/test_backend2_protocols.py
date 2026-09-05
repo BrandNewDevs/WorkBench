@@ -2,7 +2,16 @@
 
 import inspect
 
-from app.ports.backend2 import ApprovalStore, WorkflowStore
+from app.ports.backend2 import ApprovalStore, IdentityStore, WorkflowStore
+
+
+def test_identity_store_supports_immutable_lookup_for_session_restoration() -> None:
+    """The auth dependency can reload the current identity rather than trust JWT claims."""
+
+    signature = inspect.signature(IdentityStore.get_by_id)
+
+    assert tuple(signature.parameters) == ("self", "user_id")
+    assert inspect.iscoroutinefunction(IdentityStore.get_by_id)
 
 
 def test_workflow_store_exposes_atomic_stage_compare_and_set() -> None:

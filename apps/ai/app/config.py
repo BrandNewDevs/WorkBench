@@ -19,8 +19,40 @@ class ApplicationSettings(BaseSettings):
 
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
-    cors_allowed_origins: tuple[str, ...] = ("http://localhost:5173",)
+    cors_allowed_origins: tuple[str, ...] = ("http://127.0.0.1:5173",)
     health_check_timeout_seconds: float = Field(default=5, gt=0, le=30)
+    auth_signing_secret: str | None = None
+    auth_jwt_issuer: str = Field(default="workbench-local", min_length=1, max_length=200)
+    auth_jwt_audience: str = Field(default="workbench-employee", min_length=1, max_length=200)
+    auth_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=60, le=8 * 60 * 60)
+    auth_cookie_secure: bool = False
+
+    @field_validator("auth_signing_secret")
+    @classmethod
+    def require_non_default_signing_secret(cls, secret: str | None) -> str | None:
+        """Require a locally provisioned secret rather than a committed default."""
+
+        if secret is None:
+            return None
+        normalized = secret.strip()
+        disallowed = {
+            "change-me",
+            "changeme",
+            "development-secret",
+            "default-secret",
+            "workbench-secret",
+        }
+        if len(normalized.encode("utf-8")) < 32 or normalized.lower() in disallowed:
+            raise ValueError("auth signing secret must be a non-default value of at least 32 bytes")
+        return normalized
+
+    @property
+    def signing_secret(self) -> str:
+        """Return the required secret, rejecting an unconfigured service before use."""
+
+        if self.auth_signing_secret is None:
+            raise ValueError("WORKBENCH_APP_AUTH_SIGNING_SECRET must be provisioned before startup")
+        return self.auth_signing_secret
 
     @field_validator("host")
     @classmethod
