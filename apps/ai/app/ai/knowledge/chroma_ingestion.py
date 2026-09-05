@@ -1,11 +1,13 @@
-"""Persistent local Chroma ingestion using embeddings supplied by Ollama."""
+"""Persistent local Chroma ingestion and retrieval using Ollama embeddings."""
 
 import asyncio
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from math import isfinite
 from pathlib import Path
+from time import perf_counter
 
 import chromadb
 from chromadb import Collection
@@ -27,6 +29,7 @@ from app.ai.knowledge.contracts import (
     knowledge_chunk_id,
 )
 from app.ai.knowledge.document_parser import LocalDocumentParser
+from app.ai.knowledge.ports import RetrievalMetricsSink
 from app.ai.models.ports import ModelAdapter
 from app.ai.schemas import (
     ApprovedKnowledgeRoot,
@@ -35,12 +38,26 @@ from app.ai.schemas import (
     IngestionResult,
     KnowledgeQuery,
     ModelProfile,
+    RetrievalMetrics,
     SourceDocument,
 )
 
 KNOWLEDGE_SCHEMA_VERSION = "v1"
 _COLLECTION_PREFIX = "workbench-knowledge"
 _WORD = re.compile(r"\w+")
+_LOGGER = logging.getLogger(__name__)
+
+
+class LocalRetrievalMetricsLogger:
+    """Write content-free retrieval observations to the local application log."""
+
+    def record(self, metrics: RetrievalMetrics) -> None:
+        """Log structured metrics without query text or retrieved document content."""
+
+        _LOGGER.info(
+            "knowledge_retrieval_metrics %s",
+            metrics.model_dump_json(by_alias=True),
+        )
 
 
 def collection_name_for(embedding_model_id: str) -> str:
@@ -93,6 +110,8 @@ class ChromaKnowledgeIngestor:
         model_adapter: ModelAdapter,
         model_profile: ModelProfile,
         settings: KnowledgeProcessingSettings | None = None,
+        *,
+        metrics_sink: RetrievalMetricsSink | None = None,
     ) -> None:
         self._client = client
         self._model_adapter = model_adapter
@@ -100,6 +119,9 @@ class ChromaKnowledgeIngestor:
         self._settings = settings or KnowledgeProcessingSettings()
         self._parser = LocalDocumentParser(self._settings)
         self._chunker = KnowledgeChunker(self._settings)
+        self._metrics_sink = (
+            metrics_sink if metrics_sink is not None else LocalRetrievalMetricsLogger()
+        )
         self._ingestion_lock = asyncio.Lock()
 
     @property
@@ -172,9 +194,16 @@ class ChromaKnowledgeIngestor:
     async def search(self, query: KnowledgeQuery) -> list[EvidenceChunk]:
         """Embed one query and return relevant evidence from its matching vector space."""
 
+        started = perf_counter()
         collection = await asyncio.to_thread(self._get_or_create_collection)
         collection_count = await asyncio.to_thread(collection.count)
         if collection_count == 0:
+            self._record_retrieval_metrics(
+                started=started,
+                embedding_elapsed_ms=0,
+                candidate_scores=(),
+                returned=(),
+            )
             raise NoRelevantEvidence("the active local knowledge collection is empty")
 
         embedding = await self._model_adapter.create_embeddings(
@@ -200,16 +229,23 @@ class ChromaKnowledgeIngestor:
         except Exception as error:
             raise KnowledgeIndexUnavailable("local Chroma retrieval failed") from error
 
-        evidence = self._deduplicate_overlapping_evidence(
-            self._validated_evidence(
-                result,
-                collection_count=collection_count,
-                minimum_score=query.minimum_score,
-            )
+        relevant, candidate_scores = self._validated_evidence(
+            result,
+            collection_count=collection_count,
+            minimum_score=query.minimum_score,
+        )
+        evidence = self._deduplicate_overlapping_evidence(relevant)[
+            : min(query.top_k, 5)
+        ]
+        self._record_retrieval_metrics(
+            started=started,
+            embedding_elapsed_ms=embedding.metrics.client_elapsed_ms,
+            candidate_scores=candidate_scores,
+            returned=tuple(evidence),
         )
         if not evidence:
             raise NoRelevantEvidence("no local evidence passed the relevance threshold")
-        return evidence[: min(query.top_k, 5)]
+        return evidence
 
     def _validated_evidence(
         self,
@@ -217,7 +253,7 @@ class ChromaKnowledgeIngestor:
         *,
         collection_count: int,
         minimum_score: float,
-    ) -> list[EvidenceChunk]:
+    ) -> tuple[list[EvidenceChunk], tuple[float, ...]]:
         try:
             id_rows = result["ids"]
             metadata_rows = result["metadatas"]
@@ -235,6 +271,7 @@ class ChromaKnowledgeIngestor:
             raise KnowledgeIndexUnavailable("local Chroma retrieval result is incomplete")
 
         evidence: list[EvidenceChunk] = []
+        candidate_scores: list[float] = []
         for stored_id, raw_metadata, content, raw_distance in zip(
             ids,
             metadatas,
@@ -271,6 +308,7 @@ class ChromaKnowledgeIngestor:
             ):
                 raise KnowledgeIndexUnavailable("local Chroma retrieval distance is invalid")
             score = max(0.0, min(1.0, 1.0 - float(raw_distance)))
+            candidate_scores.append(score)
             if score < minimum_score:
                 continue
             evidence.append(
@@ -288,15 +326,40 @@ class ChromaKnowledgeIngestor:
                     embedding_model=metadata.embedding_model_id,
                 )
             )
-        return sorted(
-            evidence,
-            key=lambda chunk: (
-                -chunk.score,
-                chunk.document_id,
-                chunk.page_number or 0,
-                chunk.section or "",
-                chunk.chunk_id,
+        return (
+            sorted(
+                evidence,
+                key=lambda chunk: (
+                    -chunk.score,
+                    chunk.document_id,
+                    chunk.page_number or 0,
+                    chunk.section or "",
+                    chunk.chunk_id,
+                ),
             ),
+            tuple(candidate_scores),
+        )
+
+    def _record_retrieval_metrics(
+        self,
+        *,
+        started: float,
+        embedding_elapsed_ms: float,
+        candidate_scores: tuple[float, ...],
+        returned: tuple[EvidenceChunk, ...],
+    ) -> None:
+        self._metrics_sink.record(
+            RetrievalMetrics(
+                profile_id=self._model_profile.profile_id,
+                collection_name=self.collection_name,
+                embedding_model_id=self._embedding_model_id,
+                elapsed_ms=(perf_counter() - started) * 1_000,
+                embedding_elapsed_ms=embedding_elapsed_ms,
+                candidate_count=len(candidate_scores),
+                returned_count=len(returned),
+                candidate_scores=candidate_scores,
+                returned_scores=tuple(chunk.score for chunk in returned),
+            )
         )
 
     @classmethod

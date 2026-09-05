@@ -1,6 +1,9 @@
 """Integration tests for grounded retrieval from the local Chroma corpus."""
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 from chromadb.api import ClientAPI
@@ -21,6 +24,34 @@ from app.ai.schemas import (
     SourceDocument,
 )
 
+if TYPE_CHECKING:
+    from app.ai.knowledge.ports import RetrievalMetricsSink
+
+
+class RetrievalMetricsView(Protocol):
+    """Fields required by the hardware-comparison acceptance check."""
+
+    collection_name: str
+    embedding_model_id: str
+    elapsed_ms: float
+    embedding_elapsed_ms: float
+    candidate_count: int
+    returned_count: int
+    candidate_scores: tuple[float, ...]
+    returned_scores: tuple[float, ...]
+
+
+class RecordingMetricsSink:
+    """Capture non-confidential retrieval measurements at the output boundary."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def record(self, metrics: object) -> None:
+        """Keep the emitted observation for assertions."""
+
+        self.records.append(metrics)
+
 
 class GoldenEmbeddingAdapter(FakeModelAdapter):
     """Map sanitized corpus topics to stable vectors at the Ollama boundary."""
@@ -38,6 +69,8 @@ class GoldenEmbeddingAdapter(FakeModelAdapter):
     @staticmethod
     def _vector_for(text: str) -> tuple[float, ...]:
         normalized = text.casefold()
+        if "moderate-match" in normalized:
+            return (0.6, 0.0, 0.0, 0.8)
         if "isolation" in normalized or "inlet valve" in normalized:
             return (1.0, 0.0, 0.0, 0.0)
         if "corrosion" in normalized or "thickness" in normalized:
@@ -66,17 +99,27 @@ def source_document(
 
 async def populated_knowledge_store(
     tmp_path: Path,
+    *,
+    metrics_sink: RetrievalMetricsSink | None = None,
 ) -> tuple[ChromaKnowledgeIngestor, ClientAPI]:
     """Index the sanitized SOP, prior note, and approval template locally."""
 
     storage_root = tmp_path / "chroma"
     storage_root.mkdir()
     client = create_persistent_chroma_client(ApprovedKnowledgeRoot(path=storage_root))
-    store = ChromaKnowledgeIngestor(
-        client,
-        GoldenEmbeddingAdapter(),
-        sample_model_profile(),
-    )
+    if metrics_sink is None:
+        store = ChromaKnowledgeIngestor(
+            client,
+            GoldenEmbeddingAdapter(),
+            sample_model_profile(),
+        )
+    else:
+        store = ChromaKnowledgeIngestor(
+            client,
+            GoldenEmbeddingAdapter(),
+            sample_model_profile(),
+            metrics_sink=metrics_sink,
+        )
     documents = (
         source_document(
             "isolation-sop",
@@ -134,6 +177,35 @@ async def test_unrelated_query_returns_no_evidence(tmp_path: Path) -> None:
 
     with pytest.raises(NoRelevantEvidence):
         await store.search(KnowledgeQuery(text="How should the office garden be watered?"))
+
+
+async def test_query_can_raise_the_relevance_floor(tmp_path: Path) -> None:
+    """Apply the caller's bounded threshold to normalized cosine scores."""
+
+    storage_root = tmp_path / "chroma"
+    storage_root.mkdir()
+    client = create_persistent_chroma_client(ApprovedKnowledgeRoot(path=storage_root))
+    store = ChromaKnowledgeIngestor(
+        client,
+        GoldenEmbeddingAdapter(),
+        sample_model_profile(),
+    )
+    await store.ingest(
+        source_document(
+            "isolation-sop",
+            "Isolation SOP.md",
+            "source-isolation-sop",
+            "# PROCEDURE\n\nFollow the isolation steps before inspection.",
+        )
+    )
+
+    accepted = await store.search(
+        KnowledgeQuery(text="moderate-match", minimum_score=0.59)
+    )
+
+    assert accepted[0].score == pytest.approx(0.6)
+    with pytest.raises(NoRelevantEvidence):
+        await store.search(KnowledgeQuery(text="moderate-match", minimum_score=0.61))
 
 
 async def test_retrieval_is_deterministic_and_returns_real_chunk_ids(
@@ -217,3 +289,69 @@ async def test_drafting_context_keeps_at_most_three_chunks_per_source_section(
     assert {
         (chunk.source_id, chunk.page_number, chunk.section) for chunk in evidence
     } == {("source-long-sop", 1, "PROCEDURE")}
+
+
+async def test_retrieval_records_safe_latency_and_score_metrics(tmp_path: Path) -> None:
+    """Emit enough non-confidential data for workstation and Jetson comparison."""
+
+    sink = RecordingMetricsSink()
+    store, _ = await populated_knowledge_store(tmp_path, metrics_sink=sink)
+
+    evidence = await store.search(KnowledgeQuery(text="What belongs in an approval note?"))
+
+    assert len(sink.records) == 1
+    metrics = cast(RetrievalMetricsView, sink.records[0])
+    assert metrics.collection_name == store.collection_name
+    assert metrics.embedding_model_id == "qwen3-embedding:0.6b"
+    assert metrics.elapsed_ms >= 0
+    assert metrics.embedding_elapsed_ms == 12.5
+    assert metrics.candidate_count == 3
+    assert metrics.returned_count == len(evidence)
+    assert len(metrics.candidate_scores) == 3
+    assert metrics.returned_scores == tuple(chunk.score for chunk in evidence)
+
+
+async def test_rejected_retrieval_records_candidate_scores_without_content(
+    tmp_path: Path,
+) -> None:
+    """Preserve threshold evidence for tuning even when no chunk is returned."""
+
+    sink = RecordingMetricsSink()
+    store, _ = await populated_knowledge_store(tmp_path, metrics_sink=sink)
+
+    with pytest.raises(NoRelevantEvidence):
+        await store.search(KnowledgeQuery(text="How should the office garden be watered?"))
+
+    metrics = cast(RetrievalMetricsView, sink.records[0])
+    assert metrics.candidate_count == 3
+    assert metrics.returned_count == 0
+    assert metrics.candidate_scores == (0.0, 0.0, 0.0)
+    assert metrics.returned_scores == ()
+
+
+async def test_retrieval_returns_no_more_than_five_candidates(tmp_path: Path) -> None:
+    """Keep the public retrieval result bounded even if a caller asks for more."""
+
+    storage_root = tmp_path / "chroma"
+    storage_root.mkdir()
+    client = create_persistent_chroma_client(ApprovedKnowledgeRoot(path=storage_root))
+    store = ChromaKnowledgeIngestor(
+        client,
+        GoldenEmbeddingAdapter(),
+        sample_model_profile(),
+    )
+    for index in range(6):
+        await store.ingest(
+            source_document(
+                f"isolation-sop-{index}",
+                f"Isolation SOP {index}.md",
+                f"source-isolation-sop-{index}",
+                f"# RULE {index}\n\nIsolation requirement for equipment {index}.",
+            )
+        )
+
+    evidence = await store.search(
+        KnowledgeQuery(text="isolation requirements", top_k=20)
+    )
+
+    assert len(evidence) == 5

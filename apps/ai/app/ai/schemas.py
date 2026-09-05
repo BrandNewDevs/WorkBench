@@ -297,6 +297,20 @@ class EvidenceChunk(ContractModel):
     embedding_model: str = Field(min_length=1)
 
 
+class RetrievalMetrics(ContractModel):
+    """Non-confidential measurements for comparing local retrieval hardware."""
+
+    profile_id: str = Field(min_length=1)
+    collection_name: str = Field(min_length=1)
+    embedding_model_id: str = Field(min_length=1)
+    elapsed_ms: float = Field(ge=0)
+    embedding_elapsed_ms: float = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+    returned_count: int = Field(ge=0)
+    candidate_scores: tuple[Annotated[float, Field(ge=0, le=1)], ...]
+    returned_scores: tuple[Annotated[float, Field(ge=0, le=1)], ...]
+
+
 class VisionPageResult(ContractModel):
     """Structured output for one page or image."""
 
