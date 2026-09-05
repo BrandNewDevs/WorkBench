@@ -1,13 +1,16 @@
 """FastAPI composition root for the local WorkBench service."""
 
+import hmac
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from hashlib import sha256
 
 import uvicorn
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from starlette.middleware.base import RequestResponseEndpoint
 
 from app.api.auth import build_auth_router, clear_session_cookie
 from app.api.contracts import ErrorResponse
@@ -29,6 +32,21 @@ def _health_router(
     """Build the sole Phase 1 route with its injected readiness dependencies."""
 
     router = APIRouter(tags=["service"])
+
+    @router.get("/internal/ready", response_model=None, include_in_schema=False)
+    async def get_ready(request: Request) -> Response:
+        """Prove possession of the launch capability to Electron main."""
+
+        nonce = request.headers.get("x-workbench-readiness-nonce", "")
+        if not nonce or len(nonce) > 512:
+            return JSONResponse(status_code=400, content={"detail": "invalid readiness request"})
+        capability = settings.local_service_capability
+        if capability is None:
+            return JSONResponse(
+                status_code=503, content={"detail": "managed capability unavailable"}
+            )
+        proof = hmac.new(capability.encode(), nonce.encode(), sha256).hexdigest()
+        return JSONResponse(content={"proof": proof})
 
     @router.get(
         "/health",
@@ -122,6 +140,17 @@ def create_app(
         version="v1",
         lifespan=lambda _: _lifespan(resolved_dependencies),
     )
+    @application.middleware("http")
+    async def require_managed_capability(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        capability = resolved_settings.local_service_capability
+        if capability is not None and not hmac.compare_digest(
+            request.headers.get("x-workbench-capability", ""), capability
+        ):
+            return JSONResponse(status_code=403, content={"detail": "managed capability required"})
+        return await call_next(request)
+
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),

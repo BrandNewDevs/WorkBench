@@ -19,39 +19,25 @@ if (process.platform !== "win32") {
 }
 
 rmSync(outputRoot, { recursive: true, force: true });
-const result = spawnSync(
-  python,
-  [
-    "-m",
-    "PyInstaller",
-    "--noconfirm",
-    "--clean",
-    "--onedir",
-    "--name",
-    "workbench-service",
-    "--distpath",
-    outputRoot,
-    "--workpath",
-    join(desktopRoot, ".pyinstaller-work"),
-    "--specpath",
-    join(desktopRoot, ".pyinstaller-spec"),
-    "--collect-all",
-    "pwdlib",
-    "--collect-all",
-    "pydantic",
-    "--collect-all",
-    "pydantic_core",
-    "app/packaged_service.py",
-  ],
-  { cwd: aiRoot, shell: false, stdio: "inherit" },
-);
+function freeze(name, entryPoint) {
+  const result = spawnSync(
+    python,
+    [
+      "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--name", name,
+      "--distpath", outputRoot, "--workpath", join(desktopRoot, ".pyinstaller-work", name),
+      "--specpath", join(desktopRoot, ".pyinstaller-spec"), "--collect-all", "pwdlib",
+      "--collect-all", "pydantic", "--collect-all", "pydantic_core", entryPoint,
+    ],
+    { cwd: aiRoot, shell: false, stdio: "inherit" },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`PyInstaller exited with status ${result.status ?? "unknown"}.`);
+}
 
-if (result.error) {
-  throw result.error;
-}
-if (result.status !== 0) {
-  throw new Error(`PyInstaller exited with status ${result.status ?? "unknown"}.`);
-}
-if (!existsSync(join(outputRoot, "workbench-service", "workbench-service.exe"))) {
-  throw new Error("PyInstaller did not produce dist/service/workbench-service/workbench-service.exe.");
+freeze("workbench-service", "app/packaged_service.py");
+freeze("workbench-provision-account", "app/provision_account.py");
+for (const executable of ["workbench-service", "workbench-provision-account"]) {
+  if (!existsSync(join(outputRoot, executable, `${executable}.exe`))) {
+    throw new Error(`PyInstaller did not produce dist/service/${executable}/${executable}.exe.`);
+  }
 }

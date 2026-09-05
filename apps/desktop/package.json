@@ -11,7 +11,7 @@
     "build:preload": "vite build --config vite.preload.config.ts",
     "start": "node scripts/dev.mjs --built",
     "build:service": "node scripts/build-service.mjs",
-    "dist:win": "pnpm build && pnpm build:service && electron-builder --win nsis",
+    "dist:win": "pnpm build && pnpm build:service && electron-builder --win nsis && node scripts/package-smoke.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.ts"

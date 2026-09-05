@@ -5,6 +5,8 @@ import {
   IPC_CHANNELS,
   type ChatAttachmentSelectionResult,
   type DesktopStatus,
+  type LocalServiceRequest,
+  type LocalServiceResponse,
   type SelectedChatAttachment,
   type UploadKind,
   type UploadMimeType,
@@ -19,6 +21,7 @@ let uploadDialogActive = false;
 interface DesktopIpcDependencies {
   getDesktopStatus: () => DesktopStatus;
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean;
+  requestLocalService: (request: LocalServiceRequest) => Promise<LocalServiceResponse>;
 }
 
 interface UploadDialogConfig {
@@ -201,6 +204,10 @@ export function registerDesktopIpc(dependencies: DesktopIpcDependencies): void {
   ipcMain.handle(IPC_CHANNELS.getDesktopStatus, (event) => {
     assertTrustedSender(event, dependencies);
     return dependencies.getDesktopStatus();
+  });
+  ipcMain.handle(IPC_CHANNELS.requestLocalService, (event, request: LocalServiceRequest) => {
+    assertTrustedSender(event, dependencies);
+    return dependencies.requestLocalService(request);
   });
   ipcMain.handle(IPC_CHANNELS.selectUploadFiles, (event, requestedKind: unknown) => {
     assertTrustedSender(event, dependencies);

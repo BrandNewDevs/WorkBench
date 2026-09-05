@@ -2,18 +2,17 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { app, BrowserWindow, dialog, session, type IpcMainInvokeEvent } from "electron";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerDesktopIpc } from "./ipc";
-import { LOCAL_API_ORIGIN } from "../shared/contracts";
-import type { DesktopStatus } from "../shared/contracts";
+import type { DesktopStatus, LocalServiceRequest, LocalServiceResponse } from "../shared/contracts";
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const rendererDirectory = resolve(join(mainDirectory, "../../renderer"));
 const rendererEntryPath = join(rendererDirectory, "index.html");
-const localApiUrl = new URL(LOCAL_API_ORIGIN);
+const loopbackHost = "127.0.0.1";
 const builtRendererOrigin = "http://127.0.0.1:5173";
 const useDevelopmentRenderer = process.env.WORKBENCH_DEV_RENDERER === "1";
 // Keep this decision in Electron main. The renderer can only receive the resulting, typed mode over trusted IPC.
@@ -28,6 +27,9 @@ let localServiceFailed = false;
 let stoppingLocalService = false;
 let builtRendererServer: Server | undefined;
 let localSigningSecret: string | undefined;
+let localServicePort: number | undefined;
+let localServiceCapability: string | undefined;
+let localServiceVerified = false;
 
 function isLoopbackUrl(value: string): boolean {
   try {
@@ -57,7 +59,7 @@ function isAllowedRendererUrl(value: string): boolean {
 function isAllowedRequestUrl(value: string): boolean {
   try {
     const origin = new URL(value).origin;
-    return origin === LOCAL_API_ORIGIN || origin === rendererOrigin();
+    return origin === rendererOrigin();
   } catch {
     return false;
   }
@@ -153,7 +155,8 @@ async function provisionSigningSecret(): Promise<string> {
 }
 
 function managesLocalService(): boolean {
-  return app.isPackaged || process.env.WORKBENCH_START_LOCAL_SERVICE === "1";
+  // The renderer never attaches to an independently selected local port.
+  return true;
 }
 
 function scheduleLocalServiceRestart(): void {
@@ -163,7 +166,10 @@ function scheduleLocalServiceRestart(): void {
 
   localServiceRestartTimer = setTimeout(() => {
     localServiceRestartTimer = undefined;
-    startLocalService();
+    void startLocalService().catch(() => {
+      localServiceFailed = true;
+      scheduleLocalServiceRestart();
+    });
   }, localServiceRestartDelayMs);
 }
 
@@ -205,17 +211,49 @@ function localServiceLaunch(): LocalServiceLaunch {
   const aiDirectory = resolve(app.getAppPath(), "../ai");
   return {
     executable: localPythonExecutable(aiDirectory),
-    arguments: ["-m", "uvicorn", "app.main:app", "--host", localApiUrl.hostname, "--port", localApiUrl.port],
+    arguments: ["-m", "uvicorn", "app.main:app", "--host", loopbackHost, "--port", String(localServicePort)],
     workingDirectory: aiDirectory,
   };
 }
 
-export function startLocalService(signingSecret?: string): void {
-  localSigningSecret = signingSecret ?? localSigningSecret;
-  if (!managesLocalService() || localService || localServiceRestartTimer) {
-    return;
-  }
+function allocateLocalServicePort(): number {
+  return randomInt(49_152, 65_536);
+}
 
+function managedServiceUrl(): string {
+  if (localServicePort === undefined) throw new Error("The managed local service has no port.");
+  return `http://${loopbackHost}:${localServicePort}`;
+}
+
+async function verifyLocalService(child: ChildProcess): Promise<void> {
+  const capability = localServiceCapability;
+  if (!capability) throw new Error("The managed local service has no capability.");
+  const nonce = randomBytes(32).toString("hex");
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (localService !== child) throw new Error("The managed local service stopped during startup.");
+    try {
+      const response = await session.defaultSession.fetch(`${managedServiceUrl()}/internal/ready`, {
+        headers: { "X-Workbench-Capability": capability, "X-Workbench-Readiness-Nonce": nonce },
+      });
+      const body = await response.json() as { proof?: unknown };
+      const expected = createHmac("sha256", capability).update(nonce).digest("hex");
+      if (typeof body.proof === "string" && body.proof.length === expected.length && timingSafeEqual(Buffer.from(body.proof), Buffer.from(expected))) {
+        localServiceVerified = true;
+        return;
+      }
+    } catch { /* The service may still be binding its private launch port. */ }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  throw new Error("The managed local service did not prove its launch capability.");
+}
+
+export async function startLocalService(signingSecret?: string): Promise<void> {
+  localSigningSecret = signingSecret ?? localSigningSecret;
+  if (!managesLocalService() || localService || localServiceRestartTimer) return;
+
+  localServicePort = allocateLocalServicePort();
+  localServiceCapability = randomBytes(32).toString("base64url");
+  localServiceVerified = false;
   const launch = localServiceLaunch();
   stoppingLocalService = false;
   localServiceFailed = false;
@@ -233,6 +271,8 @@ export function startLocalService(signingSecret?: string): void {
         WORKBENCH_APP_AUTH_SIGNING_SECRET:
           localSigningSecret ?? process.env.WORKBENCH_APP_AUTH_SIGNING_SECRET,
         WORKBENCH_APP_CORS_ALLOWED_ORIGINS: JSON.stringify([rendererOrigin()]),
+        WORKBENCH_APP_PORT: String(localServicePort),
+        WORKBENCH_APP_LOCAL_SERVICE_CAPABILITY: localServiceCapability,
         WORKBENCH_APP_DATABASE_PATH: join(app.getPath("userData"), "workbench.db"),
       },
     },
@@ -243,14 +283,21 @@ export function startLocalService(signingSecret?: string): void {
       localService = undefined;
       localServiceFailed = true;
     }
+    localServiceVerified = false;
     scheduleLocalServiceRestart();
   });
   child.once("exit", () => {
-    if (localService === child) {
-      localService = undefined;
-    }
+    if (localService === child) localService = undefined;
+    localServiceVerified = false;
     scheduleLocalServiceRestart();
   });
+  try {
+    await verifyLocalService(child);
+  } catch (error) {
+    localServiceVerified = false;
+    if (!child.killed) child.kill();
+    throw error;
+  }
 }
 
 export function stopLocalService(): void {
@@ -263,6 +310,47 @@ export function stopLocalService(): void {
     localService.kill();
   }
   localService = undefined;
+  localServiceVerified = false;
+  localServiceCapability = undefined;
+  localServicePort = undefined;
+}
+
+async function requestLocalService(request: LocalServiceRequest): Promise<LocalServiceResponse> {
+  if (!localServiceVerified || !localServiceCapability) {
+    throw new Error("The managed local service has not completed verification.");
+  }
+  let path: string;
+  let init: RequestInit;
+  switch (request.operation) {
+    case "health":
+      path = "/health";
+      init = { method: "GET" };
+      break;
+    case "restoreSession":
+      path = "/auth/session";
+      init = { method: "GET" };
+      break;
+    case "logout":
+      path = "/auth/logout";
+      init = { method: "POST" };
+      break;
+    case "login":
+      path = "/auth/login";
+      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
+      break;
+    default:
+      throw new Error("The local service request is not allowed.");
+  }
+  const response = await session.defaultSession.fetch(`${managedServiceUrl()}${path}`, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      Origin: rendererOrigin(),
+      "X-Workbench-Capability": localServiceCapability,
+      ...init.headers,
+    },
+  });
+  return { status: response.status, body: await response.text() };
 }
 
 function getDesktopStatus(): DesktopStatus {
@@ -270,7 +358,7 @@ function getDesktopStatus(): DesktopStatus {
   const baseStatus = {
     serviceMode: managed ? ("managed" as const) : ("attached" as const),
     serviceRunning: managed ? Boolean(localService) && !localServiceFailed : ("unknown" as const),
-    apiBaseUrl: LOCAL_API_ORIGIN,
+    apiBaseUrl: localServiceVerified ? managedServiceUrl() : "http://127.0.0.1:0",
   };
 
   return useDevelopmentAuthBypass
@@ -350,8 +438,8 @@ async function startApplication(): Promise<void> {
 
   await startBuiltRendererServer();
   const signingSecret = await provisionSigningSecret();
-  registerDesktopIpc({ getDesktopStatus, isTrustedSender: isTrustedIpcSender });
-  startLocalService(signingSecret);
+  registerDesktopIpc({ getDesktopStatus, isTrustedSender: isTrustedIpcSender, requestLocalService });
+  await startLocalService(signingSecret);
   await createMainWindow();
 
   app.on("activate", () => {

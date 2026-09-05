@@ -1,5 +1,7 @@
 """Runtime composition tests for SQLite-backed employee authentication."""
 
+import hmac
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -66,3 +68,29 @@ async def test_runtime_composition_provisions_and_persists_auth_lifecycle(tmp_pa
 
     assert sessions[0]["revoked_at"] is not None
     assert [row["outcome"] for row in audits] == ["loginSucceeded", "logoutRevoked"]
+
+
+def test_managed_capability_gates_requests_and_proves_readiness(tmp_path: Path) -> None:
+    capability = "A" * 43
+    settings = ApplicationSettings(
+        auth_signing_secret=SECRET,
+        database_path=tmp_path / "workbench.db",
+        local_service_capability=capability,
+    )
+    nonce = "test-nonce"
+    with TestClient(create_app(settings=settings)) as client:
+        blocked = client.get("/health")
+        ready = client.get(
+            "/internal/ready",
+            headers={
+                "X-Workbench-Capability": capability,
+                "X-Workbench-Readiness-Nonce": nonce,
+            },
+        )
+        allowed = client.get("/health", headers={"X-Workbench-Capability": capability})
+
+    assert blocked.status_code == 403
+    assert ready.status_code == 200
+    expected_proof = hmac.new(capability.encode(), nonce.encode(), sha256).hexdigest()
+    assert ready.json()["proof"] == expected_proof
+    assert allowed.status_code in {200, 503}

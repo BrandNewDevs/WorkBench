@@ -64,8 +64,9 @@ class ApplicationSettings(BaseSettings):
     )
 
     host: str = "127.0.0.1"
-    port: int = Field(default=8000, ge=1, le=65535)
+    port: int = Field(default=8000, ge=0, le=65535)
     cors_allowed_origins: tuple[str, ...] = ("http://127.0.0.1:5173",)
+    local_service_capability: str | None = None
     health_check_timeout_seconds: float = Field(default=5, gt=0, le=30)
     auth_signing_secret: str | None = None
     auth_jwt_issuer: str = Field(default="workbench-local", min_length=1, max_length=200)
@@ -91,6 +92,18 @@ class ApplicationSettings(BaseSettings):
         }
         if len(normalized.encode("utf-8")) < 32 or normalized.lower() in disallowed:
             raise ValueError("auth signing secret must be a non-default value of at least 32 bytes")
+        return normalized
+
+    @field_validator("local_service_capability")
+    @classmethod
+    def require_local_service_capability(cls, capability: str | None) -> str | None:
+        """Accept only the high-entropy capability supplied by Electron main."""
+
+        if capability is None:
+            return None
+        normalized = capability.strip()
+        if len(normalized) < 43:
+            raise ValueError("local service capability must contain at least 256 bits of entropy")
         return normalized
 
     @property
