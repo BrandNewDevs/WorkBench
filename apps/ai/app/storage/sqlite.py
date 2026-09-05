@@ -1,5 +1,6 @@
-"""Local SQLite foundation and workflow-session metadata persistence."""
+"""Local SQLite foundation and Backend 2 metadata persistence."""
 
+import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,11 +9,27 @@ from pathlib import Path
 from uuid import UUID
 
 import aiosqlite
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
 from app.auth.contracts import UserRole
 from app.ports.backend2 import AuditRecord, AuthSessionRecord, StoredIdentity
-from app.workflow.contracts import WorkflowStatus
+from app.tools.contracts import ToolExecutionResult
+from app.workflow.contracts import (
+    Approval,
+    ApprovalDecision,
+    ApprovalExecutionClaim,
+    ApprovalResolution,
+    ApprovalStatus,
+    ExecutionStatus,
+    UtcTimestamp,
+    WorkflowStage,
+    WorkflowStatus,
+    WorkflowType,
+)
+
+_TOOL_EXECUTION_RESULT_ADAPTER: TypeAdapter[ToolExecutionResult] = TypeAdapter(
+    ToolExecutionResult
+)
 
 _CREATE_IDENTITIES_TABLE = """
 CREATE TABLE IF NOT EXISTS identities (
@@ -57,6 +74,85 @@ CREATE TABLE IF NOT EXISTS sessions (
     )
 )
 """
+
+_CREATE_APPROVALS_TABLE = """
+CREATE TABLE IF NOT EXISTS approvals (
+    approval_id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL,
+    workflow_run_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    workflow_type TEXT NOT NULL CHECK (
+        workflow_type IN ('inspectionAnalysis', 'codeRepair')
+    ),
+    stage TEXT NOT NULL CHECK (
+        stage IN (
+            'collectingInputs', 'extracting', 'retrieving', 'drafting',
+            'validating', 'planning', 'awaitingApproval', 'exporting',
+            'sandboxExecuting', 'repairing', 'approvalRejected',
+            'completed', 'failed'
+        )
+    ),
+    stage_version INTEGER NOT NULL CHECK (stage_version >= 0),
+    tool_name TEXT NOT NULL CHECK (
+        length(tool_name) BETWEEN 1 AND 100
+        AND substr(tool_name, 1, 1) GLOB '[a-z]'
+        AND tool_name NOT GLOB '*[^a-z0-9_]*'
+    ),
+    normalized_arguments TEXT NOT NULL,
+    arguments_hash TEXT NOT NULL CHECK (
+        length(arguments_hash) = 64
+        AND arguments_hash NOT GLOB '*[^0-9a-f]*'
+    ),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+    requested_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolved_by_user_id TEXT,
+    decision TEXT CHECK (decision IS NULL OR decision IN ('approved', 'rejected')),
+    comment TEXT CHECK (
+        comment IS NULL OR length(trim(comment)) BETWEEN 1 AND 1000
+    ),
+    execution_status TEXT NOT NULL CHECK (
+        execution_status IN (
+            'notApplicable', 'notStarted', 'queued', 'completed', 'failed'
+        )
+    ),
+    execution_result TEXT,
+    CHECK (
+        (
+            status = 'pending'
+            AND resolved_at IS NULL
+            AND resolved_by_user_id IS NULL
+            AND decision IS NULL
+            AND execution_status = 'notStarted'
+            AND execution_result IS NULL
+        )
+        OR (
+            status = 'approved'
+            AND resolved_at IS NOT NULL
+            AND resolved_by_user_id IS NOT NULL
+            AND decision = 'approved'
+            AND execution_status IN ('notStarted', 'queued', 'completed', 'failed')
+            AND (
+                (execution_status IN ('notStarted', 'queued') AND execution_result IS NULL)
+                OR (execution_status IN ('completed', 'failed') AND execution_result IS NOT NULL)
+            )
+        )
+        OR (
+            status = 'rejected'
+            AND resolved_at IS NOT NULL
+            AND resolved_by_user_id IS NOT NULL
+            AND decision = 'rejected'
+            AND execution_status = 'notApplicable'
+            AND execution_result IS NULL
+        )
+    )
+)
+"""
+
+_APPROVAL_COLUMNS = """approval_id, session_id, workflow_run_id, owner_user_id,
+workflow_type, stage, stage_version, tool_name, normalized_arguments,
+arguments_hash, status, requested_at, resolved_at, resolved_by_user_id,
+decision, comment, execution_status, execution_result"""
 
 
 class SessionAlreadyExistsError(RuntimeError):
@@ -113,6 +209,7 @@ class LocalSQLiteDatabase:
             await connection.execute(_CREATE_AUTH_SESSIONS_TABLE)
             await connection.execute(_CREATE_AUDIT_RECORDS_TABLE)
             await connection.execute(_CREATE_SESSIONS_TABLE)
+            await connection.execute(_CREATE_APPROVALS_TABLE)
 
     def _prepare_secure_paths(self) -> None:
         """Create and restrict the database directory and file before opening SQLite."""
@@ -273,6 +370,289 @@ class SQLiteAuditStore:
                     record.occurred_at.isoformat(),
                 ),
             )
+
+
+class SQLiteApprovalStore:
+    """Persist approval intent, resolution, and sanitized execution results."""
+
+    def __init__(self, database: LocalSQLiteDatabase) -> None:
+        self._database = database
+
+    async def create_pending(self, approval: Approval) -> Approval:
+        """Persist one validated pending approval without changing its intent."""
+
+        if (
+            approval.status is not ApprovalStatus.PENDING
+            or approval.execution_status is not ExecutionStatus.NOT_STARTED
+        ):
+            raise ValueError("create_pending requires a pending, unclaimed approval")
+
+        normalized_arguments = json.dumps(
+            approval.normalized_arguments,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        async with self._database.open() as connection:
+            await connection.execute(
+                """INSERT INTO approvals (
+                    approval_id, session_id, workflow_run_id, owner_user_id,
+                    workflow_type, stage, stage_version, tool_name,
+                    normalized_arguments, arguments_hash, status, requested_at,
+                    resolved_at, resolved_by_user_id, decision, comment,
+                    execution_status, execution_result
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(approval.approval_id),
+                    str(approval.session_id),
+                    str(approval.workflow_run_id),
+                    str(approval.owner_user_id),
+                    approval.workflow_type.value,
+                    approval.stage.value,
+                    approval.stage_version,
+                    approval.tool_name,
+                    normalized_arguments,
+                    approval.arguments_hash,
+                    approval.status.value,
+                    approval.requested_at.isoformat(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    approval.execution_status.value,
+                    None,
+                ),
+            )
+        return approval
+
+    async def resolve_pending_approval(
+        self,
+        *,
+        approval_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+        expected_stage: WorkflowStage,
+        expected_stage_version: int,
+        decision: ApprovalDecision,
+        resolved_at: UtcTimestamp,
+        comment: str | None,
+    ) -> ApprovalResolution | None:
+        """Atomically resolve a matching pending approval once."""
+
+        resolved_timestamp = self._utc_isoformat(resolved_at, "resolved_at")
+        normalized_comment = self._normalize_comment(comment)
+        status = (
+            ApprovalStatus.APPROVED
+            if decision is ApprovalDecision.APPROVED
+            else ApprovalStatus.REJECTED
+        )
+        execution_status = (
+            ExecutionStatus.NOT_STARTED
+            if decision is ApprovalDecision.APPROVED
+            else ExecutionStatus.NOT_APPLICABLE
+        )
+        identity = (
+            str(approval_id),
+            str(session_id),
+            str(workflow_run_id),
+            str(owner_user_id),
+            expected_stage.value,
+            expected_stage_version,
+        )
+
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                """UPDATE approvals
+                SET status = ?, resolved_at = ?, resolved_by_user_id = ?,
+                    decision = ?, comment = ?, execution_status = ?
+                WHERE approval_id = ? AND session_id = ? AND workflow_run_id = ?
+                    AND owner_user_id = ? AND stage = ? AND stage_version = ?
+                    AND status = 'pending'""",
+                (
+                    status.value,
+                    resolved_timestamp,
+                    str(owner_user_id),
+                    decision.value,
+                    normalized_comment,
+                    execution_status.value,
+                    *identity,
+                ),
+            )
+            resolved_now = cursor.rowcount == 1
+            row = await self._select_matching_approval(connection, identity)
+            approval = self._approval_from_row(row) if row is not None else None
+
+        if approval is None:
+            return None
+        return ApprovalResolution(approval=approval, resolved_now=resolved_now)
+
+    async def claim_execution(
+        self,
+        *,
+        approval_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+        workflow_type: WorkflowType,
+        expected_stage: WorkflowStage,
+        expected_stage_version: int,
+        tool_name: str,
+        arguments_hash: str,
+    ) -> ApprovalExecutionClaim | None:
+        """Atomically reserve one matching approved intent for execution."""
+
+        identity = (
+            str(approval_id),
+            str(session_id),
+            str(workflow_run_id),
+            str(owner_user_id),
+            workflow_type.value,
+            expected_stage.value,
+            expected_stage_version,
+            tool_name,
+            arguments_hash,
+        )
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                """UPDATE approvals SET execution_status = 'queued'
+                WHERE approval_id = ? AND session_id = ? AND workflow_run_id = ?
+                    AND owner_user_id = ? AND workflow_type = ? AND stage = ?
+                    AND stage_version = ? AND tool_name = ? AND arguments_hash = ?
+                    AND status = 'approved' AND decision = 'approved'
+                    AND execution_status = 'notStarted'
+                    AND execution_result IS NULL""",
+                identity,
+            )
+            claimed_now = cursor.rowcount == 1
+            select_cursor = await connection.execute(
+                f"""SELECT {_APPROVAL_COLUMNS} FROM approvals
+                WHERE approval_id = ? AND session_id = ? AND workflow_run_id = ?
+                    AND owner_user_id = ? AND workflow_type = ? AND stage = ?
+                    AND stage_version = ? AND tool_name = ? AND arguments_hash = ?
+                    AND status = 'approved' AND decision = 'approved'""",
+                identity,
+            )
+            row = await select_cursor.fetchone()
+            approval = self._approval_from_row(row) if row is not None else None
+
+        if approval is None:
+            return None
+        return ApprovalExecutionClaim(approval=approval, claimed_now=claimed_now)
+
+    async def record_execution_result(
+        self, *, approval_id: UUID, result: ToolExecutionResult
+    ) -> Approval | None:
+        """Attach one typed result only to a matching queued approval."""
+
+        serialized_result = json.dumps(
+            result.model_dump(mode="json", by_alias=True),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                """UPDATE approvals
+                SET execution_status = ?, execution_result = ?
+                WHERE approval_id = ? AND tool_name = ?
+                    AND status = 'approved' AND decision = 'approved'
+                    AND execution_status = 'queued' AND execution_result IS NULL""",
+                (
+                    result.status.value,
+                    serialized_result,
+                    str(approval_id),
+                    result.tool_name.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            select_cursor = await connection.execute(
+                f"SELECT {_APPROVAL_COLUMNS} FROM approvals WHERE approval_id = ?",
+                (str(approval_id),),
+            )
+            row = await select_cursor.fetchone()
+            approval = self._approval_from_row(row) if row is not None else None
+
+        return approval
+
+    async def get_execution_result(
+        self,
+        *,
+        approval_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+    ) -> ToolExecutionResult | None:
+        """Return a durable typed result only for the matching approval owner."""
+
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                """SELECT execution_result FROM approvals
+                WHERE approval_id = ? AND session_id = ? AND workflow_run_id = ?
+                    AND owner_user_id = ? AND execution_result IS NOT NULL""",
+                (
+                    str(approval_id),
+                    str(session_id),
+                    str(workflow_run_id),
+                    str(owner_user_id),
+                ),
+            )
+            row = await cursor.fetchone()
+
+        if row is None:
+            return None
+        return _TOOL_EXECUTION_RESULT_ADAPTER.validate_json(row["execution_result"])
+
+    @staticmethod
+    async def _select_matching_approval(
+        connection: aiosqlite.Connection,
+        identity: tuple[str, str, str, str, str, int],
+    ) -> aiosqlite.Row | None:
+        cursor = await connection.execute(
+            f"""SELECT {_APPROVAL_COLUMNS} FROM approvals
+            WHERE approval_id = ? AND session_id = ? AND workflow_run_id = ?
+                AND owner_user_id = ? AND stage = ? AND stage_version = ?""",
+            identity,
+        )
+        return await cursor.fetchone()
+
+    @staticmethod
+    def _approval_from_row(row: aiosqlite.Row) -> Approval:
+        return Approval(
+            approval_id=row["approval_id"],
+            session_id=row["session_id"],
+            workflow_run_id=row["workflow_run_id"],
+            owner_user_id=row["owner_user_id"],
+            workflow_type=row["workflow_type"],
+            stage=row["stage"],
+            stage_version=row["stage_version"],
+            tool_name=row["tool_name"],
+            normalized_arguments=json.loads(row["normalized_arguments"]),
+            arguments_hash=row["arguments_hash"],
+            status=row["status"],
+            requested_at=row["requested_at"],
+            resolved_at=row["resolved_at"],
+            resolved_by_user_id=row["resolved_by_user_id"],
+            decision=row["decision"],
+            comment=row["comment"],
+            execution_status=row["execution_status"],
+        )
+
+    @staticmethod
+    def _normalize_comment(comment: str | None) -> str | None:
+        if comment is None:
+            return None
+        normalized = comment.strip()
+        if not normalized or len(normalized) > 1000:
+            raise ValueError("comment must contain between 1 and 1000 characters")
+        return normalized
+
+    @staticmethod
+    def _utc_isoformat(value: datetime, field_name: str) -> str:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError(f"{field_name} must be timezone-aware UTC")
+        return value.astimezone(UTC).isoformat()
 
 
 class SQLiteSessionMetadataStore:

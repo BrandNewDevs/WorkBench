@@ -52,6 +52,7 @@ async def test_initialize_is_idempotent_and_creates_required_local_tables(
 
     assert database.database_path.is_file()
     assert [row["name"] for row in rows] == [
+        "approvals",
         "audit_records",
         "auth_sessions",
         "identities",
