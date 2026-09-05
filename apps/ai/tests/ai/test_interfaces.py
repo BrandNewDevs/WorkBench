@@ -12,7 +12,7 @@ from app.ai.fakes import (
     FakeModelAdapter,
     fake_engine_dependencies,
 )
-from app.ai.knowledge import KnowledgeAdapter
+from app.ai.knowledge import KnowledgeAdapter, KnowledgeIngestor
 from app.ai.models import ModelAdapter
 from app.ai.routing import CapabilityRouter
 
@@ -35,6 +35,12 @@ def accepts_knowledge_adapter(adapter: KnowledgeAdapter) -> KnowledgeAdapter:
     return adapter
 
 
+def accepts_knowledge_ingestor(adapter: KnowledgeIngestor) -> KnowledgeIngestor:
+    """Let mypy verify the fake also satisfies the ingestion-only seam."""
+
+    return adapter
+
+
 def accepts_router(router: CapabilityRouter) -> CapabilityRouter:
     """Let mypy verify the fake router against its protocol."""
 
@@ -47,6 +53,7 @@ def test_fakes_satisfy_the_public_interfaces() -> None:
     assert accepts_ai_engine(FakeAIEngine()) is not None
     assert accepts_model_adapter(FakeModelAdapter()) is not None
     assert accepts_knowledge_adapter(FakeKnowledgeAdapter()) is not None
+    assert accepts_knowledge_ingestor(FakeKnowledgeAdapter()) is not None
     assert accepts_router(FakeCapabilityRouter()) is not None
 
 
