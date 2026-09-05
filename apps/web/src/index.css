@@ -45,6 +45,7 @@ h1, h2, h3 {
 
 ::selection { color: #0b0817; background: #e9e5e1; }
 
+/* ---- Layout ---- */
 .site-shell {
   width: min(100%, 1350px);
   min-height: 100dvh;
@@ -65,6 +66,7 @@ body::before {
   z-index: 20;
 }
 
+/* ---- Navigation ---- */
 .main-navigation {
   position: fixed;
   top: 1rem;
@@ -88,6 +90,7 @@ body::before {
   text-transform: none;
 }
 
+/* ---- Hero panels ---- */
 .hero-panel {
   position: relative;
   z-index: 1;
@@ -108,24 +111,57 @@ body::before {
 .home-content h1 { margin: 0; font-size: clamp(2.4rem, 5vw, 4.7rem); line-height: .94; letter-spacing: -.075em; }
 .home-content span { display: block; margin-top: 1.25rem; color: #c5becf; font-size: .82rem; line-height: 1.65; }
 
+/* ---- Features page ---- */
 .features-page {
   display: grid;
   place-items: center;
   padding: clamp(1.5rem, 4vw, 3rem);
+  padding-top: 4rem;
   background: radial-gradient(circle at 50% 50%, rgba(76, 51, 110, .28), transparent 62%);
 }
 
 .features-content { position: relative; z-index: 3; width: min(100%, 760px); }
-.features-page { padding-top: 4rem; }
 .feature-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; margin-top: clamp(1.5rem, 4vw, 2.5rem); }
-.feature-card { min-height: 174px; padding: 1.1rem; border: 1px solid rgba(255, 255, 255, .15); border-radius: 1rem; background: rgba(20, 13, 42, .4); backdrop-filter: blur(10px); cursor: pointer; transition: transform 300ms ease, border-color 300ms ease, box-shadow 300ms ease, background 300ms ease; position: relative; overflow: hidden; }
-.feature-card:hover { transform: translateY(-4px) scale(1.02); border-color: rgba(141, 124, 255, .5); box-shadow: 0 12px 40px rgba(141, 124, 255, .15); background: rgba(28, 18, 56, .55); }
+
+.feature-card {
+  min-height: 174px; padding: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, .15); border-radius: 1rem;
+  background: rgba(20, 13, 42, .4); backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: transform 300ms ease, border-color 300ms ease, box-shadow 300ms ease, background 300ms ease;
+  position: relative; overflow: hidden;
+}
+.feature-card:hover {
+  transform: translateY(-4px) scale(1.02);
+  border-color: rgba(141, 124, 255, .5);
+  box-shadow: 0 12px 40px rgba(141, 124, 255, .15);
+  background: rgba(28, 18, 56, .55);
+}
 .feature-card span { color: #cbbfff; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; }
 .feature-card h2 { margin: .5rem 0 0; font-size: 1rem; letter-spacing: -.035em; color: #e9e5e1; }
 
-.feature-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(0, 0, 0, .7); backdrop-filter: blur(8px); animation: overlay-in 250ms ease-out; }
-.feature-modal { position: relative; width: min(90%, 520px); padding: 2.5rem; border: 1px solid rgba(255, 255, 255, .15); border-radius: 1.25rem; background: rgba(20, 13, 42, .85); backdrop-filter: blur(20px); box-shadow: 0 24px 80px rgba(0, 0, 0, .6), 0 0 0 1px rgba(141, 124, 255, .1); animation: modal-in 300ms ease-out; text-align: center; overflow-y: auto; max-height: 85vh; }
-.feature-modal-close { position: absolute; top: 1rem; right: 1rem; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid rgba(255, 255, 255, .12); border-radius: 50%; background: rgba(255, 255, 255, .05); color: #cbbfff; cursor: pointer; transition: background 200ms ease, border-color 200ms ease; }
+/* ---- Feature modal ---- */
+.feature-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center;
+  background: rgba(0, 0, 0, .7); backdrop-filter: blur(8px);
+  animation: overlay-in 250ms ease-out;
+}
+.feature-modal {
+  position: relative; width: min(90%, 520px); padding: 2.5rem;
+  border: 1px solid rgba(255, 255, 255, .15); border-radius: 1.25rem;
+  background: rgba(20, 13, 42, .85); backdrop-filter: blur(20px);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .6), 0 0 0 1px rgba(141, 124, 255, .1);
+  animation: modal-in 300ms ease-out; text-align: center;
+  overflow-y: auto; max-height: 85vh;
+}
+.feature-modal-close {
+  position: absolute; top: 1rem; right: 1rem;
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: 1px solid rgba(255, 255, 255, .12); border-radius: 50%;
+  background: rgba(255, 255, 255, .05); color: #cbbfff;
+  cursor: pointer; transition: background 200ms ease, border-color 200ms ease;
+}
 .feature-modal-close:hover { background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .25); }
 .feature-modal-tag { color: #8d7cff; font-size: .68rem; letter-spacing: .16em; text-transform: uppercase; }
 .feature-modal-title { margin: .5rem 0 1rem; font-size: clamp(1.4rem, 3vw, 2rem); letter-spacing: -.05em; color: #e9e5e1; }
@@ -134,40 +170,28 @@ body::before {
 @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modal-in { from { opacity: 0; transform: scale(.92) translateY(16px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 
+/* ---- Animated field (home only) ---- */
 .motion-field {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
+  position: fixed; inset: 0; z-index: 0; overflow: hidden;
   background: radial-gradient(circle at 50% 42%, rgba(61, 42, 95, .5), transparent 62%);
 }
-
 .flow-lines {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: .9;
-  filter: drop-shadow(0 0 7px rgba(141, 124, 255, .32));
+  position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%;
+  opacity: .9; filter: drop-shadow(0 0 7px rgba(141, 124, 255, .32));
   animation: flow-breathe 8s ease-in-out infinite;
 }
-
 .motion-grid {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
+  position: absolute; z-index: 2; inset: 0;
   background-image: radial-gradient(rgba(137, 128, 255, .5) 1px, transparent 1px), radial-gradient(rgba(238, 121, 190, .38) 1px, transparent 1px);
   background-size: 18px 18px, 30px 30px;
   background-position: center, 8px 12px;
-  mask-image: none;
-  opacity: .62;
+  mask-image: none; opacity: .62;
   animation: drift-grid 18s linear infinite;
 }
-
 @keyframes drift-grid { to { background-position: 24px 24px; } }
 @keyframes flow-breathe { 50% { opacity: .48; transform: scale(1.025); } }
 
+/* ---- Mobile ---- */
 @media (max-width: 640px) {
   .features-page { place-items: start center; overflow-y: auto; }
   .feature-list { grid-template-columns: 1fr; }
@@ -175,6 +199,7 @@ body::before {
   .feature-card h2 { margin-top: 1.2rem; }
 }
 
+/* ---- Reduced motion ---- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }
