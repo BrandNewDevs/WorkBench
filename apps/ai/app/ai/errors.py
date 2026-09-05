@@ -29,6 +29,10 @@ class OllamaPolicyViolation(AIError):
     """Configuration or an endpoint would cross the approved local-only seam."""
 
 
+class NoEligibleCapability(AIError):
+    """Task facts do not map to a supported, policy-eligible local capability."""
+
+
 class InvalidStructuredOutput(AIError):
     """A local model response failed schema validation after allowed retries."""
 

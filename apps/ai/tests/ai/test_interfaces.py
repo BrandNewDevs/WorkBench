@@ -14,7 +14,7 @@ from app.ai.fakes import (
 )
 from app.ai.knowledge import KnowledgeAdapter, KnowledgeIngestor
 from app.ai.models import ModelAdapter
-from app.ai.routing import CapabilityRouter
+from app.ai.routing import CapabilityRouter, DeterministicCapabilityRouter
 
 
 def accepts_ai_engine(engine: AIEngine) -> AIEngine:
@@ -55,6 +55,7 @@ def test_fakes_satisfy_the_public_interfaces() -> None:
     assert accepts_knowledge_adapter(FakeKnowledgeAdapter()) is not None
     assert accepts_knowledge_ingestor(FakeKnowledgeAdapter()) is not None
     assert accepts_router(FakeCapabilityRouter()) is not None
+    assert accepts_router(DeterministicCapabilityRouter(sample_model_profile())) is not None
 
 
 def test_dependencies_are_injected() -> None:
