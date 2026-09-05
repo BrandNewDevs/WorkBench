@@ -5,7 +5,13 @@ from collections import defaultdict
 from hashlib import sha256
 
 from app.ai.knowledge.config import KnowledgeProcessingSettings
-from app.ai.knowledge.contracts import KnowledgeChunk, ParsedDocument
+from app.ai.knowledge.contracts import (
+    KnowledgeChunk,
+    KnowledgeChunkIdentity,
+    ParsedDocument,
+    knowledge_chunk_id,
+    knowledge_chunk_identity,
+)
 
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?;])\s+")
 
@@ -45,28 +51,25 @@ class KnowledgeChunker:
         flush()
 
         chunks: list[KnowledgeChunk] = []
-        identity_occurrences: defaultdict[str, int] = defaultdict(int)
+        identity_occurrences: defaultdict[KnowledgeChunkIdentity, int] = defaultdict(int)
         for current_page, current_section, current_paragraphs in grouped:
             for content in self._pack_section(current_section, current_paragraphs):
                 content_hash = sha256(content.encode("utf-8")).hexdigest()
-                identity = "\0".join(
-                    (
-                        document.source_id,
-                        document.document_id,
-                        document.document_name,
-                        document.mime_type,
-                        str(current_page),
-                        current_section,
-                        content_hash,
-                    )
+                identity = knowledge_chunk_identity(
+                    source_id=document.source_id,
+                    document_id=document.document_id,
+                    document_name=document.document_name,
+                    mime_type=document.mime_type,
+                    page_number=current_page,
+                    section=current_section,
+                    content_hash=content_hash,
                 )
                 occurrence = identity_occurrences[identity]
                 identity_occurrences[identity] += 1
-                chunk_digest = sha256(f"{identity}\0{occurrence}".encode()).hexdigest()
                 chunks.append(
                     KnowledgeChunk(
                         source_id=document.source_id,
-                        chunk_id=f"kc_{chunk_digest}",
+                        chunk_id=knowledge_chunk_id(identity, occurrence),
                         document_id=document.document_id,
                         document_name=document.document_name,
                         page_number=current_page,

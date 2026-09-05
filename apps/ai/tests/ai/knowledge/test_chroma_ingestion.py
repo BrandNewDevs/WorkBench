@@ -190,6 +190,40 @@ async def test_immutable_metadata_mismatch_is_not_silently_accepted(tmp_path: Pa
         await ingestor.ingest(document)
 
 
+async def test_tampered_obsolete_metadata_is_rejected_before_deletion(
+    tmp_path: Path,
+) -> None:
+    """Validate obsolete stored provenance before making any index changes."""
+
+    ingestor, client, _ = local_ingestor(tmp_path)
+    original = source_document(
+        "isolation-sop",
+        "Isolation SOP.md",
+        "# PROCEDURE\n\nClose the inlet valve.\n\n# RECORDS\n\nRecord the inspector name.",
+    )
+    changed = source_document(
+        "isolation-sop",
+        "Isolation SOP.md",
+        "# RECORDS\n\nRecord the inspector name.",
+    )
+    await ingestor.ingest(original)
+    collection = client.get_collection(ingestor.collection_name, embedding_function=None)
+    stored = collection.get(include=["metadatas"])
+    metadatas = stored["metadatas"]
+    assert metadatas is not None
+    obsolete_id = next(
+        chunk_id
+        for chunk_id, metadata in zip(stored["ids"], metadatas, strict=True)
+        if metadata is not None and metadata["section"] == "PROCEDURE"
+    )
+    collection.update(ids=[obsolete_id], metadatas=[{"section": "tampered"}])
+
+    with pytest.raises(KnowledgeIndexUnavailable, match="immutable chunk ID"):
+        await ingestor.ingest(changed)
+
+    assert set(collection.get()["ids"]) == set(stored["ids"])
+
+
 async def test_changed_document_replaces_only_affected_section(tmp_path: Path) -> None:
     """Keep the unchanged section ID and embedding while replacing one rule."""
 

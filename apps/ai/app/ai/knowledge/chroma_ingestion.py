@@ -10,6 +10,7 @@ import chromadb
 from chromadb import Collection
 from chromadb.api import ClientAPI
 from chromadb.config import Settings
+from pydantic import ValidationError
 
 from app.ai.errors import (
     CorruptKnowledgeInput,
@@ -17,7 +18,12 @@ from app.ai.errors import (
 )
 from app.ai.knowledge.chunking import KnowledgeChunker
 from app.ai.knowledge.config import KnowledgeProcessingSettings
-from app.ai.knowledge.contracts import KnowledgeChunk
+from app.ai.knowledge.contracts import (
+    IndexedChunkMetadata,
+    KnowledgeChunk,
+    KnowledgeChunkIdentity,
+    knowledge_chunk_id,
+)
 from app.ai.knowledge.document_parser import LocalDocumentParser
 from app.ai.models.ports import ModelAdapter
 from app.ai.schemas import (
@@ -123,7 +129,9 @@ class ChromaKnowledgeIngestor:
 
             collection = await asyncio.to_thread(self._get_or_create_collection)
             existing = await self._existing_document_metadata(
-                collection, document.document_id
+                collection,
+                document_id=document.document_id,
+                source_id=parsed.source_id,
             )
             existing_ids = set(existing)
             chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
@@ -182,6 +190,7 @@ class ChromaKnowledgeIngestor:
         self,
         collection: Collection,
         document_id: str,
+        source_id: str,
     ) -> dict[str, Mapping[str, object]]:
         try:
             result = await asyncio.to_thread(
@@ -196,10 +205,38 @@ class ChromaKnowledgeIngestor:
             raise KnowledgeIndexUnavailable("local Chroma chunk metadata is incomplete")
 
         records: dict[str, Mapping[str, object]] = {}
-        for chunk_id, metadata in zip(result["ids"], metadatas, strict=True):
+        identities: dict[KnowledgeChunkIdentity, set[str]] = {}
+        for stored_id, metadata in zip(result["ids"], metadatas, strict=True):
             if metadata is None:
                 raise KnowledgeIndexUnavailable("local Chroma chunk metadata is incomplete")
-            records[chunk_id] = metadata
+            try:
+                indexed = IndexedChunkMetadata.model_validate(metadata, strict=True)
+            except ValidationError as error:
+                raise KnowledgeIndexUnavailable(
+                    "stored chunk metadata does not match its immutable chunk ID"
+                ) from error
+            if (
+                indexed.chunk_id != stored_id
+                or indexed.document_id != document_id
+                or indexed.source_id != source_id
+                or indexed.embedding_model_id != self._embedding_model_id
+                or indexed.schema_version != KNOWLEDGE_SCHEMA_VERSION
+            ):
+                raise KnowledgeIndexUnavailable(
+                    "stored chunk metadata does not match its immutable chunk ID"
+                )
+            records[stored_id] = metadata
+            identities.setdefault(indexed.identity, set()).add(stored_id)
+
+        for identity, stored_ids in identities.items():
+            expected_ids = {
+                knowledge_chunk_id(identity, occurrence)
+                for occurrence in range(len(stored_ids))
+            }
+            if stored_ids != expected_ids:
+                raise KnowledgeIndexUnavailable(
+                    "stored chunk metadata does not match its immutable chunk ID"
+                )
         return records
 
     async def _embed_chunks(
