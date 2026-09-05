@@ -25,7 +25,7 @@ export default function Features({ activeFeature, setActiveFeature }: { activeFe
   const activeData = activeFeature ? (featureDetails.find((f) => f.id === activeFeature) ?? null) : null;
 
   return (
-    <section id="features" className="features-page" aria-labelledby="features-heading">
+    <section id="features" className="features-page">
       <div className="features-content">
         <header className="page-heading">
           <span className="section-label" style={{ justifyContent: "center" }}>Capabilities</span>
@@ -47,7 +47,7 @@ export default function Features({ activeFeature, setActiveFeature }: { activeFe
       </div>
 
       {/* Workflow */}
-      <section className="section" aria-labelledby="workflow-heading">
+      <section className="section">
         <div className="container">
           <FlowChart />
         </div>
