@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import RequestResponseEndpoint
 
 from app.api.auth import build_auth_router, clear_session_cookie
+from app.api.chat import build_chat_router
 from app.api.contracts import ErrorResponse
 from app.api.health_contracts import HealthResponse, HealthStatus
 from app.auth.service import AuthError, AuthService
@@ -23,6 +24,7 @@ from app.storage import (
     SQLiteAuditStore,
     SQLiteAuthSessionStore,
     SQLiteIdentityStore,
+    SQLiteWorkflowStore,
 )
 
 
@@ -89,6 +91,7 @@ def compose_runtime_dependencies(settings: ApplicationSettings) -> ApplicationDe
         identity_store=SQLiteIdentityStore(database),
         auth_session_store=SQLiteAuthSessionStore(database),
         audit_store=SQLiteAuditStore(database),
+        chat_store=SQLiteWorkflowStore(database),
         startup=database.initialize,
     )
 
@@ -168,17 +171,20 @@ def create_app(
         allow_headers=["Accept", "Content-Type"],
     )
     application.state.allowed_origins = resolved_settings.cors_origins
+    application.state.audit_store = resolved_dependencies.audit_store
     application.state.auth_service = AuthService(
         settings=resolved_settings,
         identity_store=resolved_dependencies.identity_store,
         auth_session_store=resolved_dependencies.auth_session_store,
         audit_store=resolved_dependencies.audit_store,
     )
+    application.state.chat_store = resolved_dependencies.chat_store
     application.add_exception_handler(RequestValidationError, _validation_error_handler)
     application.add_exception_handler(AuthError, _auth_error_handler)
     application.add_exception_handler(Exception, _unhandled_error_handler)
     application.include_router(_health_router(resolved_settings, resolved_dependencies))
     application.include_router(build_auth_router(resolved_settings))
+    application.include_router(build_chat_router())
     return application
 
 

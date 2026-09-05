@@ -1,4 +1,14 @@
 import type {
+  ChatMessage,
+  ChatMessageAppendRequest,
+  ChatMessageListResponse,
+  ChatMessageRole,
+  ChatSession,
+  ChatSessionCreateRequest,
+  ChatSessionListResponse,
+  ChatSessionStatus,
+  ChatStage,
+  ChatWorkflowType,
   EmployeeLoginRequest,
   EmployeeLoginResponse,
   EmployeeLogoutResponse,
@@ -125,9 +135,121 @@ function parseHealthResponse(value: unknown): HealthResponse {
   };
 }
 
+const CHAT_STAGES: ReadonlySet<string> = new Set<string>([
+  "collectingInputs",
+  "extracting",
+  "retrieving",
+  "drafting",
+  "validating",
+  "planning",
+  "awaitingApproval",
+  "exporting",
+  "sandboxExecuting",
+  "repairing",
+  "approvalRejected",
+  "completed",
+  "failed",
+]);
+
+const CHAT_SESSION_STATUSES: ReadonlySet<string> = new Set<string>([
+  "active",
+  "completed",
+  "failed",
+  "approvalRejected",
+]);
+
+function parseChatStage(value: unknown): ChatStage {
+  if (typeof value === "string" && CHAT_STAGES.has(value)) {
+    return value as ChatStage;
+  }
+  throw new LocalApiError("FastAPI returned an invalid chat session stage.", "invalidResponse");
+}
+
+function parseChatSessionStatus(value: unknown): ChatSessionStatus {
+  if (typeof value === "string" && CHAT_SESSION_STATUSES.has(value)) {
+    return value as ChatSessionStatus;
+  }
+  throw new LocalApiError("FastAPI returned an invalid chat session status.", "invalidResponse");
+}
+
+function parseChatWorkflowType(value: unknown): ChatWorkflowType {
+  if (value === "inspectionAnalysis" || value === "codeRepair") {
+    return value;
+  }
+  throw new LocalApiError("FastAPI returned an invalid chat workflow type.", "invalidResponse");
+}
+
+function parseChatTimestamp(value: unknown, responseName: string): string {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
+    throw new LocalApiError(`FastAPI returned an invalid ${responseName} timestamp.`, "invalidResponse");
+  }
+  return value;
+}
+
+function parseChatSession(value: unknown, responseName: string): ChatSession {
+  if (!isRecord(value)) {
+    throw new LocalApiError(`FastAPI returned an invalid ${responseName}.`, "invalidResponse");
+  }
+  const workflowType = parseChatWorkflowType(value.workflowType);
+  const stage = parseChatStage(value.stage);
+  const status = parseChatSessionStatus(value.status);
+  if (
+    typeof value.sessionId !== "string" ||
+    value.sessionId.length === 0 ||
+    typeof value.ownerUserId !== "string" ||
+    value.ownerUserId.length === 0 ||
+    typeof value.title !== "string" ||
+    value.title.length === 0
+  ) {
+    throw new LocalApiError(`FastAPI returned an invalid ${responseName}.`, "invalidResponse");
+  }
+  return {
+    sessionId: value.sessionId,
+    ownerUserId: value.ownerUserId,
+    workflowType,
+    title: value.title,
+    stage,
+    status,
+    createdAt: parseChatTimestamp(value.createdAt, responseName),
+    updatedAt: parseChatTimestamp(value.updatedAt, responseName),
+  };
+}
+
+function parseChatMessageRole(value: unknown, responseName: string): ChatMessageRole {
+  if (value === "user" || value === "assistant") {
+    return value;
+  }
+  throw new LocalApiError(`FastAPI returned an invalid ${responseName} role.`, "invalidResponse");
+}
+
+function parseChatMessage(value: unknown, responseName: string): ChatMessage {
+  if (!isRecord(value)) {
+    throw new LocalApiError(`FastAPI returned an invalid ${responseName}.`, "invalidResponse");
+  }
+  const role = parseChatMessageRole(value.role, responseName);
+  if (
+    typeof value.messageId !== "string" ||
+    value.messageId.length === 0 ||
+    typeof value.sessionId !== "string" ||
+    value.sessionId.length === 0 ||
+    typeof value.content !== "string" ||
+    value.content.length === 0 ||
+    !(value.authorUserId === null || (typeof value.authorUserId === "string" && value.authorUserId.length > 0))
+  ) {
+    throw new LocalApiError(`FastAPI returned an invalid ${responseName}.`, "invalidResponse");
+  }
+  return {
+    messageId: value.messageId,
+    sessionId: value.sessionId,
+    authorUserId: value.authorUserId,
+    role,
+    content: value.content,
+    createdAt: parseChatTimestamp(value.createdAt, responseName),
+  };
+}
+
 export class LocalApiClient {
-  private async requestJson(request: LocalServiceRequest, operation: string): Promise<unknown> {
-    let timeout: number | undefined;
+  private async requestJson(request: LocalServiceRequest, operation: string): Promise<unknown> {    let timeout: number | undefined;
     try {
       const pending = window.workbench.requestLocalService(request);
       const response = await Promise.race([
@@ -168,6 +290,52 @@ export class LocalApiClient {
   async getHealth(apiBaseUrl?: string): Promise<HealthResponse> {
     void apiBaseUrl;
     return parseHealthResponse(await this.requestJson({ operation: "health" }, "health check"));
+  }
+
+  async listChatSessions(apiBaseUrl?: string): Promise<ChatSessionListResponse> {
+    void apiBaseUrl;
+    const value = await this.requestJson({ operation: "chatListSessions" }, "chat session listing");
+    if (!isRecord(value) || !Array.isArray(value.sessions)) {
+      throw new LocalApiError("FastAPI returned an invalid chat session listing.", "invalidResponse");
+    }
+    return { sessions: value.sessions.map((session) => parseChatSession(session, "chat session")) };
+  }
+
+  async createChatSession(request: ChatSessionCreateRequest, apiBaseUrl?: string): Promise<ChatSession> {
+    void apiBaseUrl;
+    return parseChatSession(
+      await this.requestJson({ operation: "chatCreateSession", request }, "chat session creation"),
+      "chat session",
+    );
+  }
+
+  async getChatSession(sessionId: string, apiBaseUrl?: string): Promise<ChatSession> {
+    void apiBaseUrl;
+    return parseChatSession(
+      await this.requestJson({ operation: "chatGetSession", sessionId }, "chat session detail"),
+      "chat session",
+    );
+  }
+
+  async listChatMessages(sessionId: string, apiBaseUrl?: string): Promise<ChatMessageListResponse> {
+    void apiBaseUrl;
+    const value = await this.requestJson({ operation: "chatListMessages", sessionId }, "chat message listing");
+    if (!isRecord(value) || !Array.isArray(value.messages)) {
+      throw new LocalApiError("FastAPI returned an invalid chat message listing.", "invalidResponse");
+    }
+    return { messages: value.messages.map((message) => parseChatMessage(message, "chat message")) };
+  }
+
+  async appendChatMessage(
+    sessionId: string,
+    request: ChatMessageAppendRequest,
+    apiBaseUrl?: string,
+  ): Promise<ChatMessage> {
+    void apiBaseUrl;
+    return parseChatMessage(
+      await this.requestJson({ operation: "chatAppendMessage", sessionId, request }, "chat message"),
+      "chat message",
+    );
   }
 }
 

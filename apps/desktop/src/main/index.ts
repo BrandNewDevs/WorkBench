@@ -583,6 +583,8 @@ export function stopLocalService(): void {
   clearManagedLocalService();
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function requestLocalService(request: LocalServiceRequest): Promise<LocalServiceResponse> {
   if (!localServiceVerified || !localServiceCapability || !managedLocalServiceIsRunning()) {
     clearManagedLocalService();
@@ -607,6 +609,32 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
       path = "/auth/login";
       init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
       break;
+    case "chatListSessions":
+      path = "/chat/sessions";
+      init = { method: "GET" };
+      break;
+    case "chatCreateSession":
+      path = "/chat/sessions";
+      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
+      break;
+    case "chatGetSession":
+    case "chatListMessages":
+    case "chatAppendMessage": {
+      if (!UUID_PATTERN.test(request.sessionId)) {
+        throw new Error("The local service request is not allowed.");
+      }
+      if (request.operation === "chatGetSession") {
+        path = `/chat/sessions/${request.sessionId}`;
+        init = { method: "GET" };
+      } else if (request.operation === "chatListMessages") {
+        path = `/chat/sessions/${request.sessionId}/messages`;
+        init = { method: "GET" };
+      } else {
+        path = `/chat/sessions/${request.sessionId}/messages`;
+        init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
+      }
+      break;
+    }
     default:
       throw new Error("The local service request is not allowed.");
   }

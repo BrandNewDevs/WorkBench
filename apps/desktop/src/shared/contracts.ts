@@ -79,7 +79,12 @@ export type LocalServiceRequest =
   | { operation: "health" }
   | { operation: "login"; request: EmployeeLoginRequest }
   | { operation: "restoreSession" }
-  | { operation: "logout" };
+  | { operation: "logout" }
+  | { operation: "chatListSessions" }
+  | { operation: "chatCreateSession"; request: ChatSessionCreateRequest }
+  | { operation: "chatGetSession"; sessionId: string }
+  | { operation: "chatListMessages"; sessionId: string }
+  | { operation: "chatAppendMessage"; sessionId: string; request: ChatMessageAppendRequest };
 
 export interface LocalServiceResponse {
   status: number;
@@ -191,4 +196,66 @@ export interface WorkflowUploadProgress {
   bytesUploaded: number;
   totalBytes: number;
   status: Exclude<WorkflowStatus, "queued">;
+}
+
+/** Wire contracts mirroring the local FastAPI chat surface. FastAPI serializes camelCase. */
+
+export type ChatWorkflowType = "inspectionAnalysis" | "codeRepair";
+
+export type ChatStage =
+  | "collectingInputs"
+  | "extracting"
+  | "retrieving"
+  | "drafting"
+  | "validating"
+  | "planning"
+  | "awaitingApproval"
+  | "exporting"
+  | "sandboxExecuting"
+  | "repairing"
+  | "approvalRejected"
+  | "completed"
+  | "failed";
+
+export type ChatSessionStatus = "active" | "completed" | "failed" | "approvalRejected";
+
+export type ChatMessageRole = "user" | "assistant";
+
+/** One owned chat thread backed by a local workflow session. */
+export interface ChatSession {
+  sessionId: string;
+  ownerUserId: string;
+  workflowType: ChatWorkflowType;
+  title: string;
+  stage: ChatStage;
+  status: ChatSessionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One persisted chat message without model reasoning fields. */
+export interface ChatMessage {
+  messageId: string;
+  sessionId: string;
+  authorUserId: string | null;
+  role: ChatMessageRole;
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatSessionListResponse {
+  sessions: ChatSession[];
+}
+
+export interface ChatMessageListResponse {
+  messages: ChatMessage[];
+}
+
+export interface ChatSessionCreateRequest {
+  workflowType: ChatWorkflowType;
+  title: string;
+}
+
+export interface ChatMessageAppendRequest {
+  content: string;
 }

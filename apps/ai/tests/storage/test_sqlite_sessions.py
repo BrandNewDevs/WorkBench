@@ -56,6 +56,8 @@ async def test_initialize_is_idempotent_and_creates_required_local_tables(
         "auth_sessions",
         "identities",
         "sessions",
+        "workflow_messages",
+        "workflow_sessions",
     ]
 
 
