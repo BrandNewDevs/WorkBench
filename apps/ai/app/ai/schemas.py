@@ -458,6 +458,16 @@ class KnowledgeQuery(ContractModel):
     top_k: int = Field(default=5, ge=1, le=20)
     minimum_score: float = Field(default=0.3, ge=0, le=1)
 
+    @field_validator("text")
+    @classmethod
+    def reject_blank_text(cls, text: str) -> str:
+        """Normalize surrounding whitespace and reject an empty semantic query."""
+
+        normalized = text.strip()
+        if not normalized:
+            raise ValueError("knowledge query text must not be blank")
+        return normalized
+
 
 class DraftRequest(ContractModel):
     """Grounded material from which a structured draft may be generated."""
