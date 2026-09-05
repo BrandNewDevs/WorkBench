@@ -53,5 +53,17 @@ class KnowledgeIndexUnavailable(AIError):
     """The local knowledge index is unavailable or incompatible."""
 
 
+class UnsupportedKnowledgeInput(AIError):
+    """A supplied knowledge document uses an unsupported format."""
+
+
+class CorruptKnowledgeInput(UnsupportedKnowledgeInput):
+    """A supplied knowledge document cannot be decoded safely."""
+
+
+class KnowledgeInputTooLarge(UnsupportedKnowledgeInput):
+    """A supplied knowledge document exceeds configured processing limits."""
+
+
 class NoRelevantEvidence(AIError):
     """No local evidence passed the requested relevance threshold."""

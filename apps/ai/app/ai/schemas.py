@@ -220,6 +220,12 @@ class ApprovedPath(ContractModel):
     session_id: str = Field(min_length=1)
 
 
+class ApprovedKnowledgeRoot(ContractModel):
+    """A local persistence root explicitly supplied by Backend 2."""
+
+    path: Path
+
+
 class ApprovedVisualInput(ContractModel):
     """A visual file whose exact path was already approved by Backend 2."""
 
@@ -398,12 +404,41 @@ class VisualAnalysisRequest(ContractModel):
 
 
 class SourceDocument(ContractModel):
-    """Backend-approved document reference for local knowledge ingestion."""
+    """Backend-supplied path or bytes for local knowledge ingestion."""
 
     document_id: str = Field(min_length=1)
     document_name: str = Field(min_length=1)
     mime_type: str = Field(min_length=1)
-    approved_path: ApprovedPath
+    source_id: str | None = Field(default=None, min_length=1)
+    approved_path: ApprovedPath | None = None
+    content: bytes | None = Field(default=None, min_length=1, repr=False)
+
+    @model_validator(mode="after")
+    def has_one_backend_supplied_input(self) -> "SourceDocument":
+        """Accept exact approved paths or identified bytes, never arbitrary paths."""
+
+        input_count = int(self.approved_path is not None) + int(self.content is not None)
+        if input_count != 1:
+            raise ValueError("source document requires exactly one approved path or byte payload")
+        if self.content is not None and self.source_id is None:
+            raise ValueError("source document bytes require a source ID")
+        if (
+            self.approved_path is not None
+            and self.source_id is not None
+            and self.source_id != self.approved_path.source_id
+        ):
+            raise ValueError("source document ID must match its approved path")
+        return self
+
+    @property
+    def effective_source_id(self) -> str:
+        """Return the application-owned source ID for either input form."""
+
+        if self.source_id is not None:
+            return self.source_id
+        if self.approved_path is None:  # pragma: no cover - protected by validation
+            raise ValueError("source document has no source ID")
+        return self.approved_path.source_id
 
 
 class IngestionResult(ContractModel):

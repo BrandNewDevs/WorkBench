@@ -21,6 +21,7 @@ from app.ai.schemas import (
     EmbeddingResult,
     ModelHealth,
     ModelStatus,
+    SourceDocument,
     VisionGenerationRequest,
     VisualAnalysisRequest,
     VisualBytesInput,
@@ -154,4 +155,41 @@ def test_visual_request_rejects_an_unapproved_raw_path() -> None:
                 ],
                 "task": sample_task().model_dump(by_alias=True, mode="json"),
             }
+        )
+
+
+def test_source_document_bytes_require_application_owned_identity() -> None:
+    """Keep confidential bytes hidden while requiring a traceable source ID."""
+
+    document = SourceDocument(
+        document_id="sop-1",
+        document_name="sop.txt",
+        mime_type="text/plain",
+        source_id="sop-source-1",
+        content=b"Inspection procedure",
+    )
+
+    assert document.effective_source_id == "sop-source-1"
+    assert "Inspection procedure" not in repr(document)
+
+    with pytest.raises(ValidationError):
+        SourceDocument(
+            document_id="sop-1",
+            document_name="sop.txt",
+            mime_type="text/plain",
+            content=b"Missing source ID",
+        )
+
+    with pytest.raises(ValidationError):
+        SourceDocument(
+            document_id="sop-1",
+            document_name="sop.txt",
+            mime_type="text/plain",
+            source_id="sop-source-1",
+            approved_path=ApprovedPath(
+                path=Path("/approved/sop.txt"),
+                source_id="sop-source-1",
+                session_id="session-1",
+            ),
+            content=b"Ambiguous second input",
         )
