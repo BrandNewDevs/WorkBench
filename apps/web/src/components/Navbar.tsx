@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 export default function Navbar({ isFeaturesPage, isAboutPage }: { isFeaturesPage: boolean; isAboutPage: boolean }) {
   const isPage = isFeaturesPage || isAboutPage;
   return (
