@@ -24,6 +24,7 @@ from app.ai.schemas import (
     Finding,
     FindingSeverity,
     GenerationLimits,
+    GroundedClaim,
     GroundedDraft,
     InferenceMetrics,
     IngestionResult,
@@ -225,6 +226,16 @@ def sample_grounded_draft() -> GroundedDraft:
         summary="Surface corrosion was observed during the inspection.",
         findings=(sample_finding(),),
         recommendation="Approve a thickness measurement before deciding on repair work.",
+        critical_claims=(
+            GroundedClaim(
+                text="Surface corrosion was observed near the lower flange.",
+                evidence_source_ids=("inspection-report-page-2",),
+            ),
+            GroundedClaim(
+                text="Thickness measurement is required before repair approval.",
+                evidence_source_ids=("sop-corrosion-page-7",),
+            ),
+        ),
         evidence_source_ids=(
             "inspection-report-page-2",
             "sop-corrosion-page-7",

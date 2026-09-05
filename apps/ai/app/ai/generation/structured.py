@@ -5,14 +5,20 @@ from typing import TypeVar
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
-from app.ai.errors import InvalidStructuredOutput
+from app.ai.errors import GroundingViolation, InvalidStructuredOutput
 from app.ai.models.ports import ModelAdapter
+from app.ai.prompts.grounded_drafting import (
+    GROUNDED_DRAFTING_SYSTEM_PROMPT,
+    build_grounded_drafting_prompt,
+)
 from app.ai.prompts.planning import (
     TASK_PLANNING_SYSTEM_PROMPT,
     build_task_planning_prompt,
 )
 from app.ai.schemas import (
     AgentContext,
+    DraftRequest,
+    GroundedDraft,
     ModelProfile,
     TaskPlan,
     TextGenerationRequest,
@@ -44,6 +50,47 @@ class StructuredTextGenerator:
             ),
             temperature=0,
             operation_name="task planning",
+        )
+        return result
+
+    async def create_grounded_draft(self, request: DraftRequest) -> GroundedDraft:
+        """Draft approval-note content and enforce application-owned evidence IDs."""
+
+        allowed_source_ids = {
+            evidence.source_id for evidence in request.evidence
+        } | {
+            source.source_id
+            for finding in request.findings
+            for source in finding.evidence
+        }
+
+        def validate_grounding(
+            draft: GroundedDraft,
+            generation: TextGenerationResult,
+        ) -> None:
+            del generation
+            if draft.subject != request.subject:
+                raise GroundingViolation("draft changed the authenticated subject")
+            if draft.findings != request.findings:
+                raise GroundingViolation("draft changed application-supplied findings")
+            unknown_source_ids = set(draft.evidence_source_ids) - allowed_source_ids
+            if unknown_source_ids:
+                names = ", ".join(sorted(unknown_source_ids))
+                raise GroundingViolation(
+                    f"draft cited source IDs not supplied by the application: {names}"
+                )
+
+        result, _ = await self._generate_structured(
+            result_type=GroundedDraft,
+            system_prompt=GROUNDED_DRAFTING_SYSTEM_PROMPT,
+            prompt_builder=lambda schema, retry: build_grounded_drafting_prompt(
+                request,
+                schema,
+                retry=retry,
+            ),
+            temperature=0.2,
+            operation_name="grounded drafting",
+            result_validator=validate_grounding,
         )
         return result
 
@@ -79,6 +126,7 @@ class StructuredTextGenerator:
                 continue
             return result, generation
 
-        raise InvalidStructuredOutput(
-            f"{operation_name} returned invalid structured output after one retry"
-        ) from last_error
+        message = f"{operation_name} returned invalid structured output after one retry"
+        if isinstance(last_error, InvalidStructuredOutput):
+            raise type(last_error)(message) from last_error
+        raise InvalidStructuredOutput(message) from last_error

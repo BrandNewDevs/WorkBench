@@ -359,6 +359,21 @@ class VisionAnalysis(ContractModel):
         return self
 
 
+class GroundedClaim(ContractModel):
+    """One important draft claim with application-verifiable source IDs."""
+
+    text: str = Field(min_length=1)
+    evidence_source_ids: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def evidence_ids_are_unique(self) -> "GroundedClaim":
+        """Avoid duplicate citation markers within one critical claim."""
+
+        if len(self.evidence_source_ids) != len(set(self.evidence_source_ids)):
+            raise ValueError("grounded claim evidence source IDs must be unique")
+        return self
+
+
 class GroundedDraft(ContractModel):
     """Structured draft content for Backend 2 to render as an artifact."""
 
@@ -366,8 +381,9 @@ class GroundedDraft(ContractModel):
     summary: str = Field(min_length=1)
     findings: tuple[Finding, ...]
     recommendation: str = Field(min_length=1)
+    critical_claims: tuple[GroundedClaim, ...] = Field(min_length=1)
     evidence_source_ids: tuple[str, ...] = Field(min_length=1)
-    uncertainties: tuple[str, ...] = ()
+    uncertainties: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def evidence_ids_are_unique(self) -> "GroundedDraft":
@@ -375,6 +391,15 @@ class GroundedDraft(ContractModel):
 
         if len(self.evidence_source_ids) != len(set(self.evidence_source_ids)):
             raise ValueError("draft evidence source IDs must be unique")
+        claim_source_ids = {
+            source_id
+            for claim in self.critical_claims
+            for source_id in claim.evidence_source_ids
+        }
+        if claim_source_ids != set(self.evidence_source_ids):
+            raise ValueError(
+                "draft evidence source IDs must exactly match its critical claim citations"
+            )
         return self
 
 

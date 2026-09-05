@@ -37,6 +37,10 @@ class InvalidStructuredOutput(AIError):
     """A local model response failed schema validation after allowed retries."""
 
 
+class GroundingViolation(InvalidStructuredOutput):
+    """A generated critical claim cites evidence not supplied by the application."""
+
+
 class UnsupportedVisualInput(AIError):
     """A supplied image or document cannot be safely processed."""
 
