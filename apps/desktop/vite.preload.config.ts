@@ -5,6 +5,10 @@ import { defineConfig } from "vite";
 const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
+  // Sandboxed preloads cannot require node_modules; bundle application deps like zod.
+  ssr: {
+    noExternal: true,
+  },
   build: {
     ssr: true,
     outDir: resolve(projectRoot, "dist/electron/preload"),

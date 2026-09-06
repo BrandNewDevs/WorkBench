@@ -46,7 +46,7 @@ async function start() {
   };
   // Electron-based editors may pass this flag to their terminal children.
   delete env.ELECTRON_RUN_AS_NODE;
-  electron = spawn(require("electron"), [projectRoot], {
+  electron = spawn(require("electron"), [projectRoot, ...(process.env.WORKBENCH_EXTRA_ELECTRON_ARGS ? process.env.WORKBENCH_EXTRA_ELECTRON_ARGS.split(" ") : [])], {
     cwd: projectRoot,
     shell: false,
     stdio: "inherit",

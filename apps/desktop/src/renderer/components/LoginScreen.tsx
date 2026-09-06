@@ -1,3 +1,4 @@
+import { Eye, EyeOff } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 import type { EmployeeLoginRequest, EmployeeSession } from "../../shared/contracts";
 import { LocalApiError, localApi } from "../api/localApi";
@@ -20,6 +21,7 @@ export function LoginScreen({ apiBaseUrl, initialMessage, onAuthenticated }: Log
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -115,22 +117,37 @@ export function LoginScreen({ apiBaseUrl, initialMessage, onAuthenticated }: Log
 
           <div className="space-y-2">
             <Label htmlFor="employee-password">Password</Label>
-            <Input
-              ref={passwordRef}
-              aria-describedby={fieldErrors.password ? "employee-password-error" : undefined}
-              aria-invalid={Boolean(fieldErrors.password)}
-              autoComplete="current-password"
-              disabled={isSubmitting}
-              id="employee-password"
-              name="password"
-              onChange={(event) => {
-                setPassword(event.target.value);
-                clearFieldError("password");
-              }}
-              required
-              type="password"
-              value={password}
-            />
+            <div className="relative">
+              <Input
+                ref={passwordRef}
+                aria-describedby={fieldErrors.password ? "employee-password-error" : undefined}
+                aria-invalid={Boolean(fieldErrors.password)}
+                autoComplete="current-password"
+                className="pr-10"
+                disabled={isSubmitting}
+                id="employee-password"
+                name="password"
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  clearFieldError("password");
+                }}
+                required
+                type={showPassword ? "text" : "password"}
+                value={password}
+              />
+              <button
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+                className="absolute inset-y-0 right-0 flex h-full w-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                disabled={isSubmitting}
+                onClick={() => setShowPassword((current) => !current)}
+                tabIndex={-1}
+                type="button"
+              >
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+
             {fieldErrors.password && (
               <p className="text-sm leading-5 text-muted-foreground" id="employee-password-error" role="alert">
                 {fieldErrors.password}

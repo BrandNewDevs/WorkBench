@@ -24,6 +24,12 @@ def _arguments() -> argparse.Namespace:
         action="store_true",
         help="Show provisioned accounts without secrets and exit; read-only.",
     )
+    parser.add_argument(
+        "--show-secrets",
+        dest="show_secrets",
+        action="store_true",
+        help="Include password hashes and live session token IDs with --list; development only.",
+    )
     return parser.parse_args()
 
 
@@ -31,18 +37,22 @@ def _database_path(arguments: argparse.Namespace) -> Path:
     return arguments.database_path or ApplicationSettings().database_path
 
 
-def _render_accounts(rows: list[aiosqlite.Row]) -> str:
-    headers = ("user id", "username", "display name", "role", "status")
-    records = [
-        (
+def _render_accounts(rows: list[aiosqlite.Row], show_secrets: bool) -> str:
+    headers: tuple[str, ...] = ("user id", "username", "display name", "role", "status")
+    if show_secrets:
+        headers = (*headers, "password hash")
+    records: list[tuple[str, ...]] = []
+    for row in rows:
+        record: tuple[str, ...] = (
             row["user_id"],
             row["username"],
             row["display_name"],
             row["role"],
             "disabled" if row["disabled"] else "active",
         )
-        for row in rows
-    ]
+        if show_secrets:
+            record = (*record, row["password_hash"])
+        records.append(record)
     widths = [
         max(len(headers[index]), *(len(record[index]) for record in records))
         for index in range(len(headers))
@@ -54,7 +64,7 @@ def _render_accounts(rows: list[aiosqlite.Row]) -> str:
     return "\n".join(lines)
 
 
-async def _list_accounts(database_path: Path) -> int:
+async def _list_accounts(database_path: Path, show_secrets: bool = False) -> int:
     try:
         database = LocalSQLiteDatabase(database_path)
     except ValueError as error:
@@ -68,10 +78,17 @@ async def _list_accounts(database_path: Path) -> int:
     await database.initialize()
     async with database.open() as connection:
         cursor = await connection.execute(
-            """SELECT user_id, username, display_name, role, disabled
+            """SELECT user_id, username, display_name, role, disabled, password_hash
             FROM identities ORDER BY username"""
         )
         rows = list(await cursor.fetchall())
+        session_cursor = await connection.execute(
+            """SELECT username, token_id, expires_at, revoked_at
+            FROM auth_sessions
+            JOIN identities ON identities.user_id = auth_sessions.user_id
+            ORDER BY username, expires_at"""
+        )
+        session_rows = list(await session_cursor.fetchall())
 
     if not rows:
         print(f"No accounts are provisioned in {database.database_path}.", file=sys.stderr)
@@ -79,13 +96,26 @@ async def _list_accounts(database_path: Path) -> int:
 
     print(f"Provisioned accounts in {database.database_path}:")
     print()
-    print(_render_accounts(rows))
+    print(_render_accounts(rows, show_secrets))
+    if show_secrets:
+        print()
+        print("Auth sessions:")
+        if session_rows:
+            for session_row in session_rows:
+                print(
+                    f"  {session_row['username']}  {session_row['token_id']}  "
+                    f"expires={session_row['expires_at']}  revoked={session_row['revoked_at']}"
+                )
+        else:
+            print("  none")
     return 0
 
 
 async def _run(arguments: argparse.Namespace) -> int:
     if arguments.list_accounts:
-        return await _list_accounts(_database_path(arguments))
+        return await _list_accounts(
+            _database_path(arguments), getattr(arguments, "show_secrets", False)
+        )
 
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print(
