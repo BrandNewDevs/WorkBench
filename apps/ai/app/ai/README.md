@@ -78,3 +78,29 @@ specific `AgentContext`. To test rejection, configure `InvalidToolProposal` in `
 
 Until those backend contracts are agreed, do not wire this factory into `app.main`, add workflow
 routes, or add backend imports under `app.ai`.
+
+## Integration call order
+
+Backend workflow code should call the existing interface in this order for the golden inspection
+path. Each return value is typed; the backend remains responsible for state and persistence.
+
+```text
+health
+→ choose_capability
+→ analyze_visual
+→ search_knowledge
+→ create_grounded_draft
+→ propose_action
+```
+
+Curated-corpus administration calls `ingest_knowledge` separately. The code workflow calls
+`repair_code` only after Backend 2 returns sandbox test/error output. The AI engine never runs the
+proposed action or repaired code.
+
+Expected `AIError` subclasses are safe workflow facts, not HTTP decisions. Backend 1 should map
+them to its own workflow failure state and user message without returning raw exception context.
+In particular, `ModelNotInstalled`, `ModelCapacityError`, `InvalidStructuredOutput`,
+`NoRelevantEvidence`, and unsupported/corrupt input errors need explicit handling.
+
+Hardware benchmark and Jetson promotion instructions are in
+[`JETSON_VALIDATION.md`](../../JETSON_VALIDATION.md).

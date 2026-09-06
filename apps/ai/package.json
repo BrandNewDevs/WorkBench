@@ -8,6 +8,8 @@
     "typecheck": "node scripts/python.mjs -m mypy app tests",
     "test": "node --test scripts/*.test.mjs && node scripts/python.mjs -m pytest -m \"not live_ollama\"",
     "test:live": "node scripts/python.mjs --live -m pytest -m live_ollama",
-    "evaluate:golden": "node scripts/python.mjs --live -m app.ai.evaluation.cli"
+    "evaluate:golden": "node scripts/python.mjs --live -m app.ai.evaluation.cli",
+    "evaluate:benchmark": "node scripts/python.mjs --live -m app.ai.evaluation.benchmark_cli",
+    "evaluate:promotion": "node scripts/python.mjs -m app.ai.evaluation.promotion_cli"
   }
 }
