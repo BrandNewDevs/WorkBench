@@ -76,7 +76,7 @@ pnpm account:provision
 pnpm account:list
 ```
 
-Every workflow command under "Development workflow" targets the Electron development database (overridable with `WORKBENCH_DB`), so an account provisioned here is available at the desktop login screen after `pnpm app`. The underlying `pnpm --filter @workbench/ai provision-account` defaults to FastAPI's standalone-server database, which `pnpm app` does not read; call it directly only with an explicit `--database-path`.
+Every workflow command under "Development workflow" targets the Electron development database, so an account provisioned here is available at the desktop login screen after `pnpm app`. Setting `WORKBENCH_DB` redirects only these account commands to a different database; `pnpm app` still reads the Electron development database, so leave `WORKBENCH_DB` unset when provisioning for login. The underlying `pnpm --filter @workbench/ai provision-account` defaults to FastAPI's standalone-server database, which `pnpm app` does not read; call it directly only with an explicit `--database-path`.
 
 Provisioning accepts only an empty `identities` table, so to start over run `pnpm db:reset` first, then `pnpm account:provision`. The `--show-secrets` flag prints argon2id hashes and session token ids for accounts owned by the local machine; it is opt-in development tooling, the default listing stays redacted, and existing tests enforce that (`tests/auth/test_provision_account.py`).
 
@@ -105,7 +105,7 @@ pnpm account:provision  # interactive; prompts for username, display name, passw
 pnpm db:reset           # clear every application table, keep the schema
 ```
 
-Every account command reads `WORKBENCH_DB` when you need a different database; the default is the Electron dev database under the Electron user-data directory for the app named `@workbench/desktop`: `%APPDATA%\@workbench\desktop\workbench.db` on Windows, `~/Library/Application Support/@workbench/desktop/workbench.db` on macOS, and `~/.config/@workbench/desktop/workbench.db` on Linux. Python is resolved exactly like the other workspace commands: `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then PATH.
+Every account command reads `WORKBENCH_DB` when you need a different database; the default is the Electron dev database under the Electron user-data directory for the app named `@workbench/desktop`: `%APPDATA%\@workbench\desktop\workbench.db` on Windows, `~/Library/Application Support/@workbench/desktop/workbench.db` on macOS, and `~/.config/@workbench/desktop/workbench.db` on Linux. Note that `WORKBENCH_DB` affects only these commands — the desktop app always reads its own default path. Python is resolved exactly like the other workspace commands: `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then PATH.
 
 ### What runs where
 
