@@ -43,8 +43,7 @@ export default function FlowChart() {
       const trackHeight = rect.height;
       const viewportHeight = window.innerHeight;
       const scrolled = viewportHeight - trackTop;
-      const totalScrollable = trackHeight + viewportHeight;
-      const progress = Math.min(Math.max(scrolled / totalScrollable, 0), 1);
+      const progress = Math.min(Math.max(scrolled / trackHeight, 0), 1);
       lineFill.style.height = `${progress * 100}%`;
     };
 
