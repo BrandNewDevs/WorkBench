@@ -46,31 +46,108 @@ function runPython(arguments_) {
   runForeground(process.execPath, [pythonRunner, ...arguments_]);
 }
 
+function synchronousSleep(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function fail(message) {
+  process.stderr.write(`${message}\n`);
+  process.exit(1);
+}
+
+function stopWindows() {
+  // EncodedCommand avoids shell-quoting pitfalls across PowerShell versions.
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$devMatch = { $_.ProcessId -ne $PID -and $_.CommandLine -and ((",
+    "  $_.CommandLine -imatch 'electron' -and",
+    "  $_.CommandLine -imatch ([Regex]::Escape($env:WORKBENCH_DEV_REPO_ROOT) + '[\\\\/]apps[\\\\/]desktop')",
+    ") -or $_.CommandLine -imatch 'scripts[\\\\/]dev\\.mjs') }",
+    "$targets = @(Get-CimInstance Win32_Process | Where-Object $devMatch)",
+    "$killFailed = $false",
+    "foreach ($target in $targets) {",
+    "  taskkill /F /T /PID $target.ProcessId 2>$null",
+    "  if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 128) { $killFailed = $true }",
+    "}",
+    "$remaining = @()",
+    "for ($attempt = 0; $attempt -lt 10; $attempt++) {",
+    "  Start-Sleep -Milliseconds 200",
+    "  $remaining = @(Get-CimInstance Win32_Process | Where-Object $devMatch)",
+    "  if ($remaining.Count -eq 0) { break }",
+    "}",
+    "if ($killFailed) {",
+    "  [Console]::Error.WriteLine('app:stop could not terminate one or more development processes.')",
+    "  exit 1",
+    "}",
+    "if ($remaining.Count -gt 0) {",
+    "  [Console]::Error.WriteLine(('app:stop timed out; development processes are still running: ' + (($remaining | ForEach-Object { $_.ProcessId }) -join ', ')))",
+    "  exit 2",
+    "}",
+    "if ($targets.Count -gt 0) { Write-Output ('Stopped ' + $targets.Count + ' development process tree(s).') }",
+    "exit 0",
+  ].join("\n");
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+    { cwd: repoRoot, shell: false, stdio: "inherit" },
+  );
+  if (result.error) {
+    fail(`app:stop could not start PowerShell: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    fail(`app:stop failed on Windows (PowerShell exited with status ${result.status ?? "unknown"}).`);
+  }
+}
+
+function stopPosix() {
+  const escapedRoot = repoRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    `[Ee]lectron .*${escapedRoot}/apps/desktop`,
+    "scripts/dev\\.mjs",
+  ];
+  for (const pattern of patterns) {
+    const result = spawnSync("pkill", ["-f", pattern], { cwd: repoRoot, shell: false, stdio: "ignore" });
+    if (result.error) {
+      fail(`app:stop could not run pkill: ${result.error.message}`);
+    }
+    // Exit 1 means no process matched; anything else is a pkill failure.
+    if (result.status !== 0 && result.status !== 1) {
+      fail(`app:stop failed: pkill exited with status ${result.status ?? "unknown"}.`);
+    }
+  }
+  const survivors = () => patterns.filter(
+    (pattern) => spawnSync("pgrep", ["-f", pattern], { cwd: repoRoot, shell: false, stdio: "ignore" }).status === 0,
+  );
+  const waitForExit = (timeoutMilliseconds) => {
+    const deadline = Date.now() + timeoutMilliseconds;
+    while (Date.now() < deadline) {
+      if (survivors().length === 0) return true;
+      synchronousSleep(100);
+    }
+    return survivors().length === 0;
+  };
+  if (waitForExit(5_000)) return;
+  for (const pattern of survivors()) {
+    spawnSync("pkill", ["-9", "-f", pattern], { cwd: repoRoot, shell: false, stdio: "ignore" });
+  }
+  if (waitForExit(2_000)) return;
+  const listing = patterns
+    .map((pattern) => spawnSync("pgrep", ["-fl", pattern], { cwd: repoRoot, shell: false, encoding: "utf8" }).stdout ?? "")
+    .join("")
+    .trim();
+  fail(
+    "app:stop timed out; development processes are still running:" +
+    (listing ? `\n${listing}` : " (pgrep could not list them)"),
+  );
+}
+
 function stopProcesses() {
-  const escapedRoot = repoRoot.replaceAll("\\", "\\\\").replace(/[.*+?^${}()|[\]]/g, "\\$&");
   if (platform() === "win32") {
     process.env.WORKBENCH_DEV_REPO_ROOT = repoRoot;
-    const script = [
-      "$root = [Regex]::Escape($env:WORKBENCH_DEV_REPO_ROOT)",
-      "$targets = Get-CimInstance Win32_Process | Where-Object {",
-      "  $_.ProcessId -ne $PID -and $_.CommandLine -and ((",
-      "    $_.CommandLine -imatch 'electron' -and",
-      "    $_.CommandLine -imatch ($root + '[\\\\/]apps[\\\\/]desktop')",
-      "  ) -or $_.CommandLine -imatch 'scripts[\\\\/]dev\\.mjs')",
-      "}",
-      "foreach ($target in $targets) { taskkill /F /T /PID $target.ProcessId 2>$null }",
-    ].join("\n");
-    spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-      cwd: repoRoot,
-      shell: false,
-      stdio: "inherit",
-    });
+    stopWindows();
     return;
   }
-  const electronPattern = `[Ee]lectron .*${escapedRoot}/apps/desktop`;
-  const runnerPattern = "scripts/dev\\.mjs";
-  spawnSync("pkill", ["-f", electronPattern], { cwd: repoRoot, shell: false, stdio: "ignore" });
-  spawnSync("pkill", ["-f", runnerPattern], { cwd: repoRoot, shell: false, stdio: "ignore" });
+  stopPosix();
 }
 
 const commands = {
