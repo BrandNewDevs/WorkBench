@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import FeatureCard from "../components/feature-card";
 import FeatureModal, { type Feature } from "../components/feature-modal";
@@ -24,6 +25,30 @@ const featureIcons: Record<string, JSX.Element> = {
 
 export default function Features({ activeFeature, setActiveFeature }: { activeFeature: string | null; setActiveFeature: (id: string | null) => void }) {
   const activeData = activeFeature ? (featureDetails.find((f) => f.id === activeFeature) ?? null) : null;
+  const listRef = useRef<HTMLUListElement>(null);
+  const [visibleCards, setVisibleCards] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const idx = Number(entry.target.getAttribute("data-card-index"));
+          if (entry.isIntersecting) {
+            setVisibleCards((prev) => new Set([...prev, idx]));
+          }
+        });
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -40px 0px" }
+    );
+
+    const cardEls = el.querySelectorAll("[data-card-index]");
+    cardEls.forEach((cardEl) => observer.observe(cardEl));
+
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <section id="features" className="features-page" aria-labelledby="features-heading">
@@ -35,9 +60,13 @@ export default function Features({ activeFeature, setActiveFeature }: { activeFe
         <header className="page-heading">
           <h1 id="features-heading" className="section-label" style={{ justifyContent: "center" }}>Capabilities</h1>
         </header>
-        <ul className="feature-list" aria-label="WorkBench features">
-          {featureDetails.map(({ id, title, category, desc }) => (
-            <li key={id}>
+        <ul className="feature-list" aria-label="WorkBench features" ref={listRef}>
+          {featureDetails.map(({ id, title, category, desc }, i) => (
+            <li
+              key={id}
+              data-card-index={i}
+              className={`feature-list-item ${i % 2 === 0 ? "from-left" : "from-right"} ${visibleCards.has(i) ? "visible" : ""}`}
+            >
               <FeatureCard
                 id={id}
                 title={title}
