@@ -1,7 +1,9 @@
 """Import and structural-typing tests for Backend 1's AI seam."""
 
+import ast
 import subprocess
 import sys
+from pathlib import Path
 
 from app.ai.engine import AIEngine, AIEngineDependencies
 from app.ai.evaluation.samples import sample_model_profile
@@ -13,6 +15,7 @@ from app.ai.fakes import (
     fake_engine_dependencies,
 )
 from app.ai.knowledge import KnowledgeAdapter, KnowledgeIngestor
+from app.ai.local_engine import LocalAIEngine
 from app.ai.models import ModelAdapter
 from app.ai.routing import CapabilityRouter, DeterministicCapabilityRouter
 
@@ -58,6 +61,14 @@ def test_fakes_satisfy_the_public_interfaces() -> None:
     assert accepts_router(DeterministicCapabilityRouter(sample_model_profile())) is not None
 
 
+def test_local_engine_satisfies_the_backend_interface() -> None:
+    """Keep real and fake engine adapters interchangeable for Backend 1."""
+
+    dependencies = fake_engine_dependencies(sample_model_profile())
+
+    assert accepts_ai_engine(LocalAIEngine(dependencies)) is not None
+
+
 def test_dependencies_are_injected() -> None:
     """Construct the dependency bundle entirely from caller-supplied objects."""
 
@@ -71,7 +82,9 @@ def test_backend_import_does_not_import_ollama_or_chroma() -> None:
 
     command = (
         "import sys; from app.ai import AIEngine, AIEngineDependencies; "
-        "assert 'chromadb' not in sys.modules; assert 'ollama' not in sys.modules"
+        "assert not any(name == 'chromadb' or name.startswith('chromadb.') "
+        "for name in sys.modules); "
+        "assert 'app.ai.models.ollama' not in sys.modules"
     )
 
     completed = subprocess.run(
@@ -82,3 +95,32 @@ def test_backend_import_does_not_import_ollama_or_chroma() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_ai_package_does_not_import_backend_owned_packages() -> None:
+    """Keep workflow, routes, persistence, and execution outside the AI module."""
+
+    ai_root = Path(__file__).resolve().parents[2] / "app" / "ai"
+    disallowed_prefixes = (
+        "app.api",
+        "app.ports",
+        "app.storage",
+        "app.tools",
+        "app.workflow",
+    )
+    violations: list[str] = []
+
+    for source_path in sorted(ai_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            modules: tuple[str, ...] = ()
+            if isinstance(node, ast.ImportFrom) and node.module is not None:
+                modules = (node.module,)
+            elif isinstance(node, ast.Import):
+                modules = tuple(alias.name for alias in node.names)
+            for module in modules:
+                if module.startswith(disallowed_prefixes):
+                    relative_path = source_path.relative_to(ai_root)
+                    violations.append(f"{relative_path}: {module}")
+
+    assert violations == []

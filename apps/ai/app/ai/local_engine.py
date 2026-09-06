@@ -11,7 +11,9 @@ from app.ai.knowledge.chroma_ingestion import (
 )
 from app.ai.knowledge.config import KnowledgeProcessingSettings
 from app.ai.knowledge.ports import RetrievalMetricsSink
-from app.ai.models import OllamaSettings, create_ollama_adapter, load_model_profile
+from app.ai.models.ollama import create_ollama_adapter
+from app.ai.models.ollama_http import OllamaSettings
+from app.ai.models.profiles import load_model_profile
 from app.ai.routing import DeterministicCapabilityRouter
 from app.ai.schemas import (
     AgentContext,
