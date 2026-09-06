@@ -1,8 +1,10 @@
 """Deterministic in-memory fakes for AI and backend unit tests."""
 
 from dataclasses import dataclass, field
+from typing import Literal, TypeAlias
 
 from app.ai.engine import AIEngineDependencies
+from app.ai.errors import AIError, InvalidStructuredOutput, InvalidToolProposal
 from app.ai.evaluation.samples import (
     sample_evidence_chunk,
     sample_grounded_draft,
@@ -12,6 +14,7 @@ from app.ai.evaluation.samples import (
     sample_task_plan,
     sample_vision_analysis,
 )
+from app.ai.models.structured_output import validate_output_schema, validate_structured_output
 from app.ai.schemas import (
     AgentContext,
     AgentProposal,
@@ -30,7 +33,6 @@ from app.ai.schemas import (
     KnowledgeQuery,
     ModelProfile,
     ModelRuntimeHealth,
-    ProposedToolCall,
     SourceDocument,
     TaskDescriptor,
     TaskPlan,
@@ -40,6 +42,18 @@ from app.ai.schemas import (
     VisionGenerationRequest,
     VisualAnalysisRequest,
 )
+
+FakeEngineOperation: TypeAlias = Literal[
+    "health",
+    "choose_capability",
+    "plan_task",
+    "analyze_visual",
+    "ingest_knowledge",
+    "search_knowledge",
+    "create_grounded_draft",
+    "propose_action",
+    "repair_code",
+]
 
 
 @dataclass(slots=True)
@@ -166,48 +180,63 @@ class FakeCapabilityRouter:
 
 @dataclass(slots=True)
 class FakeAIEngine:
-    """Backend-facing fake that implements the complete Phase 0 AI contract."""
+    """Configurable backend-facing fake for success, fallback, and failure paths."""
 
     health_report: AIHealthReport = field(default_factory=sample_health_report)
+    capability_decision: CapabilityDecision = field(
+        default_factory=lambda: CapabilityDecision(
+            capability=Capability.VISION,
+            selected_model="qwen3-vl:4b",
+            reason="The fake task contains a scanned document.",
+        )
+    )
+    plan: TaskPlan = field(default_factory=sample_task_plan)
     vision_result: VisionAnalysis = field(default_factory=sample_vision_analysis)
     evidence: tuple[EvidenceChunk, ...] = field(
         default_factory=lambda: (sample_evidence_chunk(),)
     )
     draft: GroundedDraft = field(default_factory=sample_grounded_draft)
+    ingestion_result: IngestionResult | None = None
+    action_proposal: AgentProposal | None = None
+    code_repair_result: CodeRepairResult | None = None
+    failures: dict[FakeEngineOperation, AIError] = field(default_factory=dict)
     calls: list[str] = field(default_factory=list, init=False)
 
     async def health(self) -> AIHealthReport:
         """Return configured combined health."""
 
         self.calls.append("health")
+        self._raise_configured_failure("health")
         return self.health_report
 
     async def choose_capability(self, task: TaskDescriptor) -> CapabilityDecision:
         """Return a deterministic fake capability selection."""
 
         self.calls.append(f"choose_capability:{task.task_id}")
-        return CapabilityDecision(
-            capability=Capability.VISION,
-            selected_model="qwen3-vl:4b",
-            reason="The fake task contains a scanned document.",
-        )
+        self._raise_configured_failure("choose_capability")
+        return self.capability_decision
 
     async def plan_task(self, request: AgentContext) -> TaskPlan:
         """Return a bounded fake plan without taking any workflow action."""
 
         self.calls.append(f"plan_task:{request.task.task_id}")
-        return sample_task_plan()
+        self._raise_configured_failure("plan_task")
+        return self.plan
 
     async def analyze_visual(self, request: VisualAnalysisRequest) -> VisionAnalysis:
         """Return a visual result containing the sample finding."""
 
         self.calls.append(f"analyze_visual:{request.task.task_id}")
+        self._raise_configured_failure("analyze_visual")
         return self.vision_result
 
     async def ingest_knowledge(self, document: SourceDocument) -> IngestionResult:
         """Return a fake ingestion result without reading the approved path."""
 
         self.calls.append(f"ingest_knowledge:{document.document_id}")
+        self._raise_configured_failure("ingest_knowledge")
+        if self.ingestion_result is not None:
+            return self.ingestion_result
         return IngestionResult(
             document_id=document.document_id,
             collection_name="fake-local-knowledge-v1",
@@ -220,39 +249,69 @@ class FakeAIEngine:
         """Return the configured sample evidence."""
 
         self.calls.append(f"search_knowledge:{query.text}")
+        self._raise_configured_failure("search_knowledge")
         return list(self.evidence[: query.top_k])
 
     async def create_grounded_draft(self, request: DraftRequest) -> GroundedDraft:
         """Return the sample grounded draft."""
 
         self.calls.append(f"create_grounded_draft:{request.subject}")
+        self._raise_configured_failure("create_grounded_draft")
         return self.draft
 
     async def propose_action(self, request: AgentContext) -> AgentProposal:
         """Propose one supplied tool but never execute it."""
 
         self.calls.append(f"propose_action:{request.task.task_id}")
+        self._raise_configured_failure("propose_action")
+        if self.action_proposal is not None:
+            self._validate_action_proposal(request, self.action_proposal)
+            return self.action_proposal
         if not request.allowed_tools:
             return AgentProposal(response_text="No backend-approved tools are available.")
-        tool = request.allowed_tools[0]
         return AgentProposal(
-            tool_call=ProposedToolCall(
-                tool_name=tool.name,
-                arguments={},
-                explanation="Deterministic fake proposal for a backend unit test.",
-            )
+            response_text="No fake tool proposal was configured for this test."
         )
 
     async def repair_code(self, request: CodeRepairRequest) -> CodeRepairResult:
         """Return input code unchanged; no sandbox execution occurs."""
 
         self.calls.append(f"repair_code:{request.language}")
+        self._raise_configured_failure("repair_code")
+        if self.code_repair_result is not None:
+            return self.code_repair_result
         return CodeRepairResult(
             language=request.language,
             corrected_code=request.code,
             change_summary="Deterministic fake result; code was not executed.",
             model="qwen3:4b",
         )
+
+    def _raise_configured_failure(self, operation: FakeEngineOperation) -> None:
+        failure = self.failures.get(operation)
+        if failure is not None:
+            raise failure
+
+    @staticmethod
+    def _validate_action_proposal(request: AgentContext, proposal: AgentProposal) -> None:
+        if proposal.response_text is not None:
+            return
+        tool_call = proposal.tool_call
+        if tool_call is None:  # pragma: no cover - AgentProposal validates this invariant.
+            raise InvalidToolProposal("configured fake proposal has no outcome")
+        allowed_tools = {tool.name: tool for tool in request.allowed_tools}
+        tool = allowed_tools.get(tool_call.tool_name)
+        if tool is None:
+            raise InvalidToolProposal(
+                f"configured fake proposal named an unapproved tool: {tool_call.tool_name}"
+            )
+        validate_output_schema(tool.input_schema)
+        try:
+            validate_structured_output(tool.input_schema, tool_call.arguments)
+        except InvalidStructuredOutput as error:
+            raise InvalidToolProposal(
+                f"configured fake proposal arguments did not match {tool_call.tool_name}"
+            ) from error
 
 
 def fake_engine_dependencies(profile: ModelProfile) -> AIEngineDependencies:
