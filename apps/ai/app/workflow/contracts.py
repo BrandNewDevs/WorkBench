@@ -325,3 +325,12 @@ class ApprovalExecutionClaim(ApiContractModel):
 
     approval: Approval
     claimed_now: bool
+    execution_claim_token: UUID | None = None
+
+    @model_validator(mode="after")
+    def require_token_for_new_claim(self) -> "ApprovalExecutionClaim":
+        """Expose a token only to the dispatcher that won the claim."""
+
+        if self.claimed_now != (self.execution_claim_token is not None):
+            raise ValueError("only a new execution claim may include a claim token")
+        return self

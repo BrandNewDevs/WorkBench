@@ -175,6 +175,39 @@ class WorkflowStore(Protocol):
         ...
 
 
+class ChatStore(Protocol):
+    """Owned session and message persistence for the employee chat routes.
+
+    Missing or foreign sessions are reported by raising
+    ``WorkflowSessionNotFoundError`` so routes can answer 404 without
+    revealing other employees' data.
+    """
+
+    async def create_session(self, session: WorkflowSession) -> WorkflowSession:
+        """Atomically persist a newly created workflow session."""
+        ...
+
+    async def append_message(self, message: WorkflowMessage) -> WorkflowMessage:
+        """Append a sanitized user or assistant message."""
+        ...
+
+    async def list_sessions(self, owner_user_id: UUID) -> list[WorkflowSession]:
+        """Return the owner's sessions, most recently updated first."""
+        ...
+
+    async def get_session(
+        self, session_id: UUID, owner_user_id: UUID
+    ) -> WorkflowSession:
+        """Return one owned session or raise when it is missing or foreign."""
+        ...
+
+    async def list_messages(
+        self, session_id: UUID, owner_user_id: UUID
+    ) -> list[WorkflowMessage]:
+        """Return the latest owned messages in chronological order."""
+        ...
+
+
 class SessionFileStore(Protocol):
     """Stream user-selected files into a contained local session workspace."""
 
@@ -253,9 +286,9 @@ class ApprovalStore(Protocol):
         ...
 
     async def record_execution_result(
-        self, *, approval_id: UUID, result: ToolExecutionResult
+        self, *, approval_id: UUID, execution_claim_token: UUID, result: ToolExecutionResult
     ) -> Approval | None:
-        """Durably attach an executor result to the approval claimed by this process."""
+        """Attach a result only when the caller supplies the winning claim token."""
         ...
 
     async def get_execution_result(

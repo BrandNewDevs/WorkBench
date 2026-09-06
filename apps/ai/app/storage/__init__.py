@@ -16,6 +16,8 @@ from app.storage.sqlite import (
     SQLiteAuthSessionStore,
     SQLiteIdentityStore,
     SQLiteSessionMetadataStore,
+    SQLiteWorkflowStore,
+    WorkflowSessionNotFoundError,
 )
 
 __all__ = [
@@ -27,9 +29,11 @@ __all__ = [
     "SQLiteAuthSessionStore",
     "SQLiteIdentityStore",
     "SQLiteSessionMetadataStore",
+    "SQLiteWorkflowStore",
     "SessionAlreadyExistsError",
     "SessionMetadata",
     "SessionWorkspace",
+    "WorkflowSessionNotFoundError",
     "WorkspaceArea",
     "WorkspacePathError",
 ]

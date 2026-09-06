@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from pydantic import JsonValue
+
 from app.ai.schemas import TaskDescriptor
 
 if TYPE_CHECKING:
     from app.ai.vision.ports import NormalizedVisualPage
 
-VISION_EXTRACTION_PROMPT_VERSION = "vision-extraction-v1"
+VISION_EXTRACTION_PROMPT_VERSION = "vision-extraction-v2"
 
 VISION_EXTRACTION_SYSTEM_PROMPT = """You extract evidence from one local document page or image.
 Return only JSON matching the supplied VisionAnalysis schema.
@@ -31,6 +33,7 @@ Safety and evidence rules:
 def build_vision_user_prompt(
     page: NormalizedVisualPage,
     task: TaskDescriptor,
+    schema: dict[str, JsonValue],
     *,
     retry: bool,
 ) -> str:
@@ -51,6 +54,8 @@ def build_vision_user_prompt(
 
     return (
         f"Prompt version: {VISION_EXTRACTION_PROMPT_VERSION}\n"
+        "Required JSON schema:\n"
+        f"{json.dumps(schema, sort_keys=True)}\n"
         f"Authenticated user task: {json.dumps(task.summary)}\n"
         "Analyze exactly the attached page or image.\n"
         f"Required source metadata: {json.dumps(source_metadata, sort_keys=True)}\n"

@@ -11,6 +11,7 @@ from app.api.health_contracts import HealthResponse, HealthStatus
 from app.ports.backend2 import (
     AuditStore,
     AuthSessionStore,
+    ChatStore,
     IdentityStore,
     SubsystemReadiness,
     SystemHealthProvider,
@@ -30,6 +31,7 @@ class ApplicationDependencies:
     identity_store: IdentityStore | None = None
     auth_session_store: AuthSessionStore | None = None
     audit_store: AuditStore | None = None
+    chat_store: ChatStore | None = None
     shutdown: ShutdownCallback | None = None
     startup: StartupCallback | None = None
 

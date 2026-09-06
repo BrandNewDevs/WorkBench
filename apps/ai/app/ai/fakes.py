@@ -9,6 +9,7 @@ from app.ai.evaluation.samples import (
     sample_health_report,
     sample_inference_metrics,
     sample_runtime_health,
+    sample_task_plan,
     sample_vision_analysis,
 )
 from app.ai.schemas import (
@@ -32,6 +33,7 @@ from app.ai.schemas import (
     ProposedToolCall,
     SourceDocument,
     TaskDescriptor,
+    TaskPlan,
     TextGenerationRequest,
     TextGenerationResult,
     VisionAnalysis,
@@ -189,6 +191,12 @@ class FakeAIEngine:
             selected_model="qwen3-vl:4b",
             reason="The fake task contains a scanned document.",
         )
+
+    async def plan_task(self, request: AgentContext) -> TaskPlan:
+        """Return a bounded fake plan without taking any workflow action."""
+
+        self.calls.append(f"plan_task:{request.task.task_id}")
+        return sample_task_plan()
 
     async def analyze_visual(self, request: VisualAnalysisRequest) -> VisionAnalysis:
         """Return a visual result containing the sample finding."""

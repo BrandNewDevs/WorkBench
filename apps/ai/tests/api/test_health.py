@@ -98,13 +98,21 @@ def _client(dependencies: ApplicationDependencies) -> TestClient:
     return TestClient(create_app(dependencies=dependencies))
 
 
-def test_app_registers_health_and_only_phase_two_auth_routes() -> None:
-    """The composition root exposes the completed auth lifecycle but no workflow routes."""
+def test_app_registers_health_auth_and_chat_routes() -> None:
+    """The composition root exposes the completed auth lifecycle and chat surface."""
 
     app = create_app()
     documented_paths = set(app.openapi()["paths"])
 
-    assert documented_paths == {"/health", "/auth/login", "/auth/session", "/auth/logout"}
+    assert documented_paths == {
+        "/health",
+        "/auth/login",
+        "/auth/session",
+        "/auth/logout",
+        "/chat/sessions",
+        "/chat/sessions/{session_id}",
+        "/chat/sessions/{session_id}/messages",
+    }
 
 
 def test_health_returns_ready_camel_case_contract() -> None:

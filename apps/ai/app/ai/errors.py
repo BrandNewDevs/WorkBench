@@ -37,6 +37,14 @@ class InvalidStructuredOutput(AIError):
     """A local model response failed schema validation after allowed retries."""
 
 
+class GroundingViolation(InvalidStructuredOutput):
+    """A generated critical claim cites evidence not supplied by the application."""
+
+
+class InvalidToolProposal(InvalidStructuredOutput):
+    """A generated proposal violates Backend 1's allowed tool registry."""
+
+
 class UnsupportedVisualInput(AIError):
     """A supplied image or document cannot be safely processed."""
 
@@ -71,3 +79,7 @@ class KnowledgeInputTooLarge(UnsupportedKnowledgeInput):
 
 class NoRelevantEvidence(AIError):
     """No local evidence passed the requested relevance threshold."""
+
+
+class GoldenCorpusError(AIError):
+    """The sanitized golden corpus is missing, corrupt, or internally inconsistent."""

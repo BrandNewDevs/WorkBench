@@ -68,6 +68,7 @@ class VisionAnalyzer:
         request: VisualAnalysisRequest,
     ) -> tuple[VisionPageResult, str]:
         last_error: InvalidStructuredOutput | ValidationError | None = None
+        output_schema = VisionAnalysis.model_json_schema(by_alias=True)
         for attempt in range(2):
             generation_request = VisionGenerationRequest(
                 model=self._model_profile.vision_candidates[0],
@@ -75,10 +76,11 @@ class VisionAnalyzer:
                 user_prompt=build_vision_user_prompt(
                     page,
                     request.task,
+                    output_schema,
                     retry=attempt == 1,
                 ),
                 images_base64=(b64encode(page.image_bytes).decode("ascii"),),
-                output_schema=VisionAnalysis.model_json_schema(by_alias=True),
+                output_schema=output_schema,
                 limits=self._model_profile.vision_limits,
                 temperature=0,
             )

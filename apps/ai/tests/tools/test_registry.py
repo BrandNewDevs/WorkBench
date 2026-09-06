@@ -73,6 +73,7 @@ class RecordingApprovalStore:
     approvals: dict[UUID, Approval] = field(default_factory=dict)
     results: dict[UUID, ToolExecutionResult] = field(default_factory=dict)
     claims: list[UUID] = field(default_factory=list)
+    claim_tokens: dict[UUID, UUID] = field(default_factory=dict)
 
     async def create_pending(self, approval: Approval) -> Approval:
         self.approvals[approval.approval_id] = approval
@@ -158,13 +159,27 @@ class RecordingApprovalStore:
         )
         self.approvals[approval_id] = claimed
         self.claims.append(approval_id)
-        return ApprovalExecutionClaim(approval=claimed, claimed_now=True)
+        claim_token = uuid4()
+        self.claim_tokens[approval_id] = claim_token
+        return ApprovalExecutionClaim(
+            approval=claimed,
+            claimed_now=True,
+            execution_claim_token=claim_token,
+        )
 
     async def record_execution_result(
-        self, *, approval_id: UUID, result: ToolExecutionResult
+        self,
+        *,
+        approval_id: UUID,
+        execution_claim_token: UUID,
+        result: ToolExecutionResult,
     ) -> Approval | None:
         approval = self.approvals.get(approval_id)
-        if approval is None or approval.execution_status is not ExecutionStatus.QUEUED:
+        if (
+            approval is None
+            or approval.execution_status is not ExecutionStatus.QUEUED
+            or self.claim_tokens.get(approval_id) != execution_claim_token
+        ):
             return None
         persisted = Approval.model_validate(
             {**approval.model_dump(), "execution_status": result.status}

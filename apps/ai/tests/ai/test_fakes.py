@@ -5,14 +5,33 @@ from app.ai.evaluation.samples import (
     sample_evidence_chunk,
     sample_finding,
     sample_model_profile,
+    sample_task,
 )
 from app.ai.fakes import FakeAIEngine, FakeKnowledgeAdapter, FakeModelAdapter
 from app.ai.schemas import (
+    AgentContext,
+    ConversationMessage,
     DraftRequest,
     KnowledgeQuery,
     SourceDocument,
     VisionGenerationRequest,
 )
+
+
+async def test_fake_ai_engine_returns_a_typed_plan() -> None:
+    """Give Backend 1 deterministic planning output without model inference."""
+
+    engine = FakeAIEngine()
+    context = AgentContext(
+        task=sample_task(),
+        conversation=(ConversationMessage(role="user", content="Prepare the note."),),
+        allowed_tools=(),
+    )
+
+    plan = await engine.plan_task(context)
+
+    assert plan.next_step_id == plan.steps[0].step_id
+    assert engine.calls == ["plan_task:task-inspection-001"]
 
 
 async def test_fake_model_returns_structured_vision_output() -> None:

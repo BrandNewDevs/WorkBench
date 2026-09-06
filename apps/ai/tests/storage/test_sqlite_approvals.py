@@ -155,6 +155,7 @@ async def test_initialize_is_idempotent_and_creates_approval_table(tmp_path: Pat
         "decision",
         "comment",
         "execution_status",
+        "execution_claim_token",
         "execution_result",
     }
 
@@ -353,6 +354,7 @@ async def test_concurrent_execution_claim_succeeds_exactly_once(tmp_path: Path) 
 
     assert all(item is not None for item in claims)
     assert sorted(item.claimed_now for item in claims if item is not None) == [False, True]
+    assert sum(item.execution_claim_token is not None for item in claims if item is not None) == 1
 
 
 @pytest.mark.asyncio
@@ -370,13 +372,24 @@ async def test_completed_result_persists_and_is_owner_scoped(tmp_path: Path) -> 
     assert (
         await store.record_execution_result(
             approval_id=approval.approval_id,
+            execution_claim_token=uuid4(),
             result=result,
         )
         is None
     )
-    await _claim(store, approval)
+    claim = await _claim(store, approval)
+    assert claim is not None and claim.execution_claim_token is not None
+    assert (
+        await store.record_execution_result(
+            approval_id=approval.approval_id,
+            execution_claim_token=uuid4(),
+            result=result,
+        )
+        is None
+    )
     persisted = await store.record_execution_result(
         approval_id=approval.approval_id,
+        execution_claim_token=claim.execution_claim_token,
         result=result,
     )
     restarted = SQLiteApprovalStore(LocalSQLiteDatabase(database_path))
@@ -436,7 +449,8 @@ async def test_failed_typed_result_round_trips_and_cannot_be_overwritten(
     approval = _approval(tool_name=ToolName.REQUEST_DOCUMENT_EXPORT)
     await store.create_pending(approval)
     await _resolve(store, approval)
-    await _claim(store, approval)
+    claim = await _claim(store, approval)
+    assert claim is not None and claim.execution_claim_token is not None
     mismatched_result = SandboxExecutionResult(
         status=ExecutionStatus.COMPLETED,
         exit_code=0,
@@ -450,16 +464,19 @@ async def test_failed_typed_result_round_trips_and_cannot_be_overwritten(
     assert (
         await store.record_execution_result(
             approval_id=approval.approval_id,
+            execution_claim_token=uuid4(),
             result=mismatched_result,
         )
         is None
     )
     persisted = await store.record_execution_result(
         approval_id=approval.approval_id,
+        execution_claim_token=claim.execution_claim_token,
         result=result,
     )
     repeated = await store.record_execution_result(
         approval_id=approval.approval_id,
+        execution_claim_token=claim.execution_claim_token,
         result=result,
     )
     retrieved = await store.get_execution_result(

@@ -7,7 +7,16 @@ import { app, BrowserWindow, dialog, session, type IpcMainInvokeEvent, type Sess
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerDesktopIpc } from "./ipc";
-import type { DesktopStatus, LocalServiceRequest, LocalServiceResponse } from "../shared/contracts";
+import type {
+  DesktopStatus,
+  LocalServiceRequest,
+  LocalServiceResponse,
+} from "../shared/contracts";
+import {
+  chatMessageAppendRequestSchema,
+  chatSessionCreateRequestSchema,
+  chatSessionIdSchema,
+} from "../shared/contracts";
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const rendererDirectory = resolve(join(mainDirectory, "../../renderer"));
@@ -607,6 +616,38 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
       path = "/auth/login";
       init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
       break;
+    case "chatListSessions":
+      path = "/chat/sessions";
+      init = { method: "GET" };
+      break;
+    case "chatCreateSession":
+      if (!chatSessionCreateRequestSchema.safeParse(request.request).success) {
+        throw new Error("The local service request is not allowed.");
+      }
+      path = "/chat/sessions";
+      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
+      break;
+    case "chatGetSession":
+    case "chatListMessages":
+    case "chatAppendMessage": {
+      if (!chatSessionIdSchema.safeParse(request.sessionId).success) {
+        throw new Error("The local service request is not allowed.");
+      }
+      if (request.operation === "chatGetSession") {
+        path = `/chat/sessions/${request.sessionId}`;
+        init = { method: "GET" };
+      } else if (request.operation === "chatListMessages") {
+        path = `/chat/sessions/${request.sessionId}/messages`;
+        init = { method: "GET" };
+      } else {
+        if (!chatMessageAppendRequestSchema.safeParse(request.request).success) {
+          throw new Error("The local service request is not allowed.");
+        }
+        path = `/chat/sessions/${request.sessionId}/messages`;
+        init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
+      }
+      break;
+    }
     default:
       throw new Error("The local service request is not allowed.");
   }
