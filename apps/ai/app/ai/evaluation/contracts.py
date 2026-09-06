@@ -75,6 +75,51 @@ class GoldenExpectedResults(ContractModel):
         return self
 
 
+class GoldenGateResult(ContractModel):
+    """One independently readable quality-gate outcome."""
+
+    name: str = Field(min_length=1)
+    passed: bool
+    diagnostic: str = Field(min_length=1)
+
+
+class GoldenRunMetrics(ContractModel):
+    """Comparable quality and timing measurements for one complete run."""
+
+    run_number: int = Field(ge=1)
+    extraction_successes: int = Field(ge=0)
+    expected_findings: int = Field(ge=1)
+    vision_recall: float = Field(ge=0, le=1)
+    retrieval_ranks: dict[str, int | None]
+    schema_failures: int = Field(ge=0)
+    fallback_uses: int = Field(ge=0)
+    final_schema_valid: bool
+    operation_durations_ms: dict[str, float]
+    total_duration_ms: float = Field(ge=0)
+
+
+class GoldenRunResult(ContractModel):
+    """Actionable pass/fail report for one golden workflow execution."""
+
+    corpus_id: str = Field(min_length=1)
+    run_number: int = Field(ge=1)
+    passed: bool
+    matched_finding_keys: tuple[str, ...]
+    gates: tuple[GoldenGateResult, ...] = Field(min_length=1)
+    diagnostics: tuple[str, ...]
+    metrics: GoldenRunMetrics
+
+
+class GoldenSuiteResult(ContractModel):
+    """Three consecutive results plus their reproducibility decision."""
+
+    corpus_id: str = Field(min_length=1)
+    passed: bool
+    reproducible: bool
+    runs: tuple[GoldenRunResult, ...] = Field(min_length=3, max_length=3)
+    diagnostics: tuple[str, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class GoldenCorpus:
     """Resolved paths and validated expectations for one immutable corpus."""
