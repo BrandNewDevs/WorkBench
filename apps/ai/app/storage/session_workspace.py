@@ -19,6 +19,24 @@ _WINDOWS_RESERVED_NAMES = {
 }
 
 
+def validate_file_name(file_name: str) -> str:
+    """Return one safe local filename using the workspace-wide policy."""
+
+    windows_stem = file_name.split(".", maxsplit=1)[0].upper()
+    if (
+        not file_name
+        or len(file_name) > 255
+        or file_name in {".", ".."}
+        or any(character in '<>:"/\\|?*' for character in file_name)
+        or any(ord(character) < 32 for character in file_name)
+        or file_name.endswith((" ", "."))
+        or windows_stem in _WINDOWS_RESERVED_NAMES
+        or Path(file_name).is_absolute()
+    ):
+        raise WorkspacePathError("File name must be a single safe path component")
+    return file_name
+
+
 class WorkspacePathError(ValueError):
     """Raised when a workspace identifier or path would escape its boundary."""
 
@@ -110,11 +128,9 @@ class LocalSessionWorkspaceStore:
 
         workspace = self.get_session_workspace(session_id)
         workspace_area = self._validate_area(area)
-        safe_file_name = self._validate_file_name(file_name)
+        safe_file_name = validate_file_name(file_name)
         area_path = workspace.path_for(workspace_area)
-        unresolved_destination = area_path / safe_file_name
-        self._reject_symlink(unresolved_destination)
-        destination = self._contained_path(unresolved_destination)
+        destination = self.file_path(session_id, workspace_area, safe_file_name)
 
         descriptor, temporary_name = tempfile.mkstemp(
             dir=area_path,
@@ -133,6 +149,21 @@ class LocalSessionWorkspaceStore:
             raise
 
         return destination
+
+    def file_path(
+        self,
+        session_id: str,
+        area: WorkspaceArea | str,
+        file_name: str,
+    ) -> Path:
+        """Resolve one validated non-symlink path inside an existing workspace area."""
+
+        workspace = self.get_session_workspace(session_id)
+        workspace_area = self._validate_area(area)
+        safe_file_name = validate_file_name(file_name)
+        unresolved = workspace.path_for(workspace_area) / safe_file_name
+        self._reject_symlink(unresolved)
+        return self._contained_path(unresolved)
 
     def cleanup_session_workspace(self, session_id: str) -> bool:
         """Remove one validated session workspace and return whether it existed."""
@@ -184,21 +215,6 @@ class LocalSessionWorkspaceStore:
         except ValueError as error:
             allowed = ", ".join(item.value for item in WorkspaceArea)
             raise WorkspacePathError(f"Workspace area must be one of: {allowed}") from error
-
-    @staticmethod
-    def _validate_file_name(file_name: str) -> str:
-        windows_stem = file_name.split(".", maxsplit=1)[0].upper()
-        if (
-            not file_name
-            or file_name in {".", ".."}
-            or any(character in '<>:"/\\|?*' for character in file_name)
-            or any(ord(character) < 32 for character in file_name)
-            or file_name.endswith((" ", "."))
-            or windows_stem in _WINDOWS_RESERVED_NAMES
-            or Path(file_name).is_absolute()
-        ):
-            raise WorkspacePathError("File name must be a single safe path component")
-        return file_name
 
     @staticmethod
     def _reject_symlink(path: Path) -> None:

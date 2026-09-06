@@ -1,7 +1,12 @@
 """Local persistence implementations owned by Backend 2."""
 
 from app.storage.session_files import (
+    LocalSessionFileStore,
+    SessionFileContextMismatchError,
+    SessionUploadCleanupError,
     SQLiteSessionFileStore,
+    UploadAlreadyExistsError,
+    UploadIntegrityError,
     UploadSessionStateConflictError,
 )
 from app.storage.session_workspace import (
@@ -37,6 +42,7 @@ __all__ = [
     "ArtifactContextMismatchError",
     "InvalidSessionStatusError",
     "LocalSQLiteDatabase",
+    "LocalSessionFileStore",
     "LocalSessionWorkspaceStore",
     "SQLiteActivityEventStore",
     "SQLiteApprovalStore",
@@ -48,8 +54,12 @@ __all__ = [
     "SQLiteSessionMetadataStore",
     "SQLiteWorkflowStore",
     "SessionAlreadyExistsError",
+    "SessionFileContextMismatchError",
     "SessionMetadata",
+    "SessionUploadCleanupError",
     "SessionWorkspace",
+    "UploadAlreadyExistsError",
+    "UploadIntegrityError",
     "UploadSessionStateConflictError",
     "WorkflowRunAlreadyExistsError",
     "WorkflowRunContextMismatchError",

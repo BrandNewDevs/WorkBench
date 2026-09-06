@@ -122,6 +122,18 @@ def test_save_file_cannot_follow_a_symlink_into_another_session(tmp_path: Path) 
     assert protected_file.read_bytes() == b"second session data"
 
 
+def test_file_path_reuses_workspace_filename_and_containment_checks(tmp_path: Path) -> None:
+    store = LocalSessionWorkspaceStore(tmp_path / "sessions")
+    workspace = store.create_session_workspace("abc123")
+
+    assert (
+        store.file_path("abc123", WorkspaceArea.UPLOADS, "safe.upload")
+        == workspace.uploads / "safe.upload"
+    )
+    with pytest.raises(WorkspacePathError):
+        store.file_path("abc123", WorkspaceArea.UPLOADS, "../unsafe.upload")
+
+
 def test_cleanup_removes_only_the_requested_session(tmp_path: Path) -> None:
     store = LocalSessionWorkspaceStore(tmp_path / "sessions")
     first = store.create_session_workspace("first")

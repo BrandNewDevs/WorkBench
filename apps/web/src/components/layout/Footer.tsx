@@ -24,7 +24,7 @@ export default function Footer() {
             </div>
           </div>
         </div>
-        <div className="footer-bottom" style={{ justifyContent: "center" }}>
+        <div className="footer-bottom">
           <span>&copy; 2026 WorkBench</span>
         </div>
       </div>

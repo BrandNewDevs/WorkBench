@@ -7,6 +7,7 @@ from app.ports.backend2 import (
     ApprovalStore,
     ArtifactStore,
     IdentityStore,
+    SessionFileStore,
     WorkflowStore,
 )
 from app.tools.contracts import SandboxExecutionRequest
@@ -119,3 +120,41 @@ def test_activity_event_store_is_owner_scoped_and_cursor_driven() -> None:
     assert inspect.iscoroutinefunction(ActivityEventStore.append)
     assert inspect.iscoroutinefunction(ActivityEventStore.replay)
     assert not inspect.iscoroutinefunction(ActivityEventStore.subscribe)
+
+
+def test_session_file_store_exposes_owner_scoped_metadata_and_path_recovery() -> None:
+    save = inspect.signature(SessionFileStore.save_upload)
+    get_upload = inspect.signature(SessionFileStore.get_upload)
+    resolve = inspect.signature(SessionFileStore.resolve_approved_path)
+    cleanup = inspect.signature(SessionFileStore.cleanup_session_uploads)
+
+    assert tuple(save.parameters) == (
+        "self",
+        "session",
+        "upload_id",
+        "source_id",
+        "file_name",
+        "mime_type",
+        "content",
+    )
+    assert tuple(get_upload.parameters) == (
+        "self",
+        "upload_id",
+        "session_id",
+        "owner_user_id",
+    )
+    assert tuple(resolve.parameters) == tuple(get_upload.parameters)
+    assert tuple(cleanup.parameters) == (
+        "self",
+        "session_id",
+        "owner_user_id",
+    )
+    assert all(
+        inspect.iscoroutinefunction(method)
+        for method in (
+            SessionFileStore.save_upload,
+            SessionFileStore.get_upload,
+            SessionFileStore.resolve_approved_path,
+            SessionFileStore.cleanup_session_uploads,
+        )
+    )

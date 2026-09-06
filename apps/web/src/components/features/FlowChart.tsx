@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { CircleCheck, Download, FileText, PenLine, Search, SquareCheck, Upload } from "lucide-react";
 
 const steps = [
-  { id: "upload", num: "01", title: "Upload", desc: "Add documents to your workspace", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> },
-  { id: "extract", num: "02", title: "Extract", desc: "Extract text and structure from documents", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> },
-  { id: "search", num: "03", title: "Search", desc: "Retrieve relevant information using local RAG", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> },
-  { id: "draft", num: "04", title: "Draft", desc: "Generate useful work with local AI", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> },
-  { id: "check", num: "05", title: "Check", desc: "Validate and review generated results", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> },
-  { id: "approve", num: "06", title: "Approve", desc: "Keep humans in control of important actions", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg> },
-  { id: "export", num: "07", title: "Export", desc: "Export the final reviewable document", icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> },
+  { id: "upload", num: "01", title: "Upload", desc: "Add documents to your workspace", icon: <Upload size={20} strokeWidth={1.5} aria-hidden="true" /> },
+  { id: "extract", num: "02", title: "Extract", desc: "Extract text and structure from documents", icon: <FileText size={20} strokeWidth={1.5} aria-hidden="true" /> },
+  { id: "search", num: "03", title: "Search", desc: "Retrieve relevant information using local RAG", icon: <Search size={20} strokeWidth={1.5} aria-hidden="true" /> },
+  { id: "draft", num: "04", title: "Draft", desc: "Generate useful work with local AI", icon: <PenLine size={20} strokeWidth={1.5} aria-hidden="true" /> },
+  { id: "check", num: "05", title: "Check", desc: "Validate and review generated results", icon: <SquareCheck size={20} strokeWidth={1.5} aria-hidden="true" /> },
+  { id: "approve", num: "06", title: "Approve", desc: "Keep humans in control of important actions", icon: <CircleCheck size={20} strokeWidth={1.5} aria-hidden="true" /> },
+  { id: "export", num: "07", title: "Export", desc: "Export the final reviewable document", icon: <Download size={20} strokeWidth={1.5} aria-hidden="true" /> },
 ];
 
 export default function FlowChart() {

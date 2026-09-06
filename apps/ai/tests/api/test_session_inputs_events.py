@@ -203,7 +203,11 @@ def test_uploads_are_contained_and_events_are_durable_and_ordered(tmp_path: Path
     assert payload["sizeBytes"] == len(_PNG)
     assert "path" not in payload
     approved = asyncio.run(
-        file_store.resolve_approved_path(UUID(payload["uploadId"]), UUID(session_id))
+        file_store.resolve_approved_path(
+            upload_id=UUID(payload["uploadId"]),
+            session_id=UUID(session_id),
+            owner_user_id=owner_user_id,
+        )
     )
     assert approved is not None
     assert approved.path.read_bytes() == _PNG

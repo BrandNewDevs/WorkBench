@@ -313,10 +313,33 @@ class SessionFileStore(Protocol):
         """Atomically store validated upload content and metadata."""
         ...
 
+    async def get_upload(
+        self,
+        *,
+        upload_id: UUID,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> StoredUpload | None:
+        """Restore upload metadata only when its ownership context matches."""
+        ...
+
     async def resolve_approved_path(
-        self, upload_id: UUID, session_id: UUID
+        self,
+        *,
+        upload_id: UUID,
+        session_id: UUID,
+        owner_user_id: UUID,
     ) -> ApprovedPath | None:
         """Return the exact stored input path after ownership checks."""
+        ...
+
+    async def cleanup_session_uploads(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> int:
+        """Remove only safely handled upload files and their metadata."""
         ...
 
 
