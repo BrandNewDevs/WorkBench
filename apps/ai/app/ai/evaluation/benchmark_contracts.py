@@ -4,10 +4,21 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from app.ai.evaluation.contracts import GoldenSuiteResult
 from app.ai.schemas import Capability, ContractModel, InstalledModel
+
+_REQUIRED_PROMPT_VERSION_KEYS = frozenset(
+    {
+        "planning",
+        "vision",
+        "groundedDrafting",
+        "toolProposal",
+        "codeRepair",
+        "uncertainty",
+    }
+)
 
 
 class HardwareKind(StrEnum):
@@ -132,6 +143,18 @@ class BenchmarkReport(ContractModel):
     golden_suite: GoldenSuiteResult
     average_workflow_duration_ms: float = Field(ge=0)
     average_generation_tokens_per_second: float | None = Field(default=None, ge=0)
+
+    @field_validator("prompt_versions")
+    @classmethod
+    def require_complete_prompt_version_evidence(
+        cls,
+        versions: dict[str, str],
+    ) -> dict[str, str]:
+        if set(versions) != _REQUIRED_PROMPT_VERSION_KEYS:
+            raise ValueError("benchmark report requires every approved prompt version")
+        if any(not version.strip() for version in versions.values()):
+            raise ValueError("benchmark prompt versions must not be blank")
+        return versions
 
     @model_validator(mode="after")
     def has_each_capability_once(self) -> "BenchmarkReport":

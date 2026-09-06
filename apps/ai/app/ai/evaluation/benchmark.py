@@ -165,6 +165,8 @@ def compare_for_promotion(
 
     if baseline.golden_suite.corpus_id != candidate.golden_suite.corpus_id:
         raise ValueError("baseline and candidate reports must use the same golden corpus")
+    if baseline.prompt_versions != candidate.prompt_versions:
+        raise ValueError("baseline and candidate reports must use the same prompt versions")
     selected_thresholds = thresholds or PromotionThresholds()
     decisions = tuple(
         _capability_decision(

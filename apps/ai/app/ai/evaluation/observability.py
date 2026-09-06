@@ -118,13 +118,15 @@ class ObservedModelAdapter:
         schema: dict[str, JsonValue],
         result: TextGenerationResult,
     ) -> None:
+        # The local invocation completed, so retain its content-free evidence even
+        # when the returned structured payload is rejected below.
+        self._record_fallback(result.used_fallback)
+        self._record_inference(capability, result.model, result.metrics)
         try:
             validate_structured_output(schema, result.structured_output)
         except InvalidStructuredOutput:
             self._record_schema_failure(capability)
             raise
-        self._record_fallback(result.used_fallback)
-        self._record_inference(capability, result.model, result.metrics)
 
     def _record_fallback(self, used_fallback: bool) -> None:
         if used_fallback:

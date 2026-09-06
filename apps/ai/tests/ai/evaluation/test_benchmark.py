@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from app.ai.evaluation.benchmark import build_benchmark_report, compare_for_promotion
 from app.ai.evaluation.benchmark_contracts import (
@@ -237,6 +238,28 @@ def test_different_golden_corpora_cannot_be_compared() -> None:
 
     with pytest.raises(ValueError, match="same golden corpus"):
         compare_for_promotion(baseline, changed)
+
+
+def test_different_prompt_versions_cannot_be_compared() -> None:
+    baseline = _report("safe-8gb", hardware_kind=HardwareKind.WORKSTATION)
+    candidate = _report("jetson-candidate", hardware_kind=HardwareKind.JETSON)
+    changed_versions = dict(candidate.prompt_versions)
+    changed_versions["vision"] = "vision-extraction-review-fixture"
+    changed = candidate.model_copy(update={"prompt_versions": changed_versions})
+
+    with pytest.raises(ValueError, match="same prompt versions"):
+        compare_for_promotion(baseline, changed)
+
+
+def test_benchmark_contract_rejects_incomplete_prompt_version_evidence() -> None:
+    report = _report("safe-8gb", hardware_kind=HardwareKind.WORKSTATION)
+    payload = report.model_dump(mode="json", by_alias=True)
+    prompt_versions = payload["promptVersions"]
+    assert isinstance(prompt_versions, dict)
+    prompt_versions.pop("vision")
+
+    with pytest.raises(ValidationError, match="every approved prompt version"):
+        BenchmarkReport.model_validate(payload)
 
 
 def _report(
