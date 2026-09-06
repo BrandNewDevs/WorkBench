@@ -10,7 +10,7 @@ from pydantic import JsonValue, ValidationError
 
 from app.ai.schemas import ProposedToolCall, ToolDefinition
 from app.api.contracts import ApiContractModel
-from app.ports.backend2 import ApprovalStore, ArtifactExecutor, SandboxExecutor
+from app.ports.local_backend import ApprovalStore, ArtifactExecutor, SandboxExecutor
 from app.tools.contracts import (
     DocumentExportArguments,
     DocumentExportExecutionRequest,

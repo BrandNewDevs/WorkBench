@@ -16,7 +16,7 @@ from app.auth.contracts import UserRole
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies
 from app.main import create_app
-from app.ports.backend2 import AuditRecord, AuthSessionRecord, StoredIdentity
+from app.ports.local_backend import AuditRecord, AuthSessionRecord, StoredIdentity
 from app.storage import (
     LocalSessionWorkspaceStore,
     LocalSQLiteDatabase,

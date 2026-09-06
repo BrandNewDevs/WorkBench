@@ -2,11 +2,14 @@
 
 import inspect
 
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     ActivityEventStore,
     ApprovalStore,
     ArtifactStore,
+    DraftResolver,
+    DraftStore,
     IdentityStore,
+    KnowledgeSourceStore,
     SessionFileStore,
     WorkflowStore,
 )
@@ -157,4 +160,27 @@ def test_session_file_store_exposes_owner_scoped_metadata_and_path_recovery() ->
             SessionFileStore.resolve_approved_path,
             SessionFileStore.cleanup_session_uploads,
         )
+    )
+
+
+def test_knowledge_and_draft_ports_remain_narrow() -> None:
+    assert tuple(inspect.signature(KnowledgeSourceStore.save_source).parameters) == (
+        "self",
+        "knowledge_source_id",
+        "document_id",
+        "source_id",
+        "approved_by_user_id",
+        "file_name",
+        "mime_type",
+        "content",
+    )
+    assert tuple(inspect.signature(DraftStore.save).parameters) == (
+        "self",
+        "workflow_run",
+        "draft",
+        "created_at",
+    )
+    assert tuple(inspect.signature(DraftResolver.resolve_for_export).parameters) == (
+        "self",
+        "request",
     )

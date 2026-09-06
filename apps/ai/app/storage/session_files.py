@@ -11,7 +11,7 @@ from uuid import UUID
 import aiosqlite
 
 from app.ai.schemas import ApprovedPath
-from app.ports.backend2 import StoredUpload
+from app.ports.local_backend import StoredUpload
 from app.storage.session_workspace import (
     LocalSessionWorkspaceStore,
     WorkspaceArea,

@@ -7,7 +7,12 @@ from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
 
-from app.ai.schemas import ApprovedPath
+from app.ai.schemas import (
+    ApprovedKnowledgePath,
+    ApprovedKnowledgeRoot,
+    ApprovedPath,
+    GroundedDraft,
+)
 from app.api.contracts import ApiContractModel
 from app.auth.contracts import UserRole
 from app.tools.contracts import (
@@ -77,6 +82,31 @@ class StoredUpload(ApiContractModel):
     mime_type: str = Field(min_length=1, max_length=255)
     size_bytes: int = Field(ge=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: UtcTimestamp
+
+
+class StoredKnowledgeSource(ApiContractModel):
+    """Immutable metadata for an operator-approved curated source."""
+
+    knowledge_source_id: UUID
+    document_id: str = Field(min_length=1, max_length=200)
+    source_id: str = Field(min_length=1, max_length=200)
+    approved_by_user_id: UUID
+    file_name: str = Field(min_length=1, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: UtcTimestamp
+
+
+class StoredDraft(ApiContractModel):
+    """Application-owned identity and workflow context for validated draft content."""
+
+    draft_id: UUID
+    session_id: UUID
+    workflow_run_id: UUID
+    owner_user_id: UUID
+    draft: GroundedDraft
     created_at: UtcTimestamp
 
 
@@ -343,6 +373,57 @@ class SessionFileStore(Protocol):
         ...
 
 
+class KnowledgeSourceStore(Protocol):
+    """Persist immutable curated sources and expose only exact approved paths."""
+
+    async def save_source(
+        self,
+        *,
+        knowledge_source_id: UUID,
+        document_id: str,
+        source_id: str,
+        approved_by_user_id: UUID,
+        file_name: str,
+        mime_type: str,
+        content: AsyncIterable[bytes],
+    ) -> StoredKnowledgeSource: ...
+
+    async def get_source(
+        self, *, knowledge_source_id: UUID, approved_by_user_id: UUID
+    ) -> StoredKnowledgeSource | None: ...
+
+    async def resolve_approved_path(
+        self, *, knowledge_source_id: UUID, approved_by_user_id: UUID
+    ) -> ApprovedKnowledgePath | None: ...
+
+    def approved_knowledge_root(self) -> ApprovedKnowledgeRoot: ...
+
+
+class DraftStore(Protocol):
+    """Persist one immutable validated final draft per workflow run."""
+
+    async def save(
+        self, *, workflow_run: WorkflowRun, draft: GroundedDraft, created_at: UtcTimestamp
+    ) -> StoredDraft: ...
+
+    async def get(
+        self,
+        *,
+        draft_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+    ) -> StoredDraft | None: ...
+
+
+class DraftResolver(Protocol):
+    """Resolve only the draft authorized by a claimed export request."""
+
+    async def resolve_for_export(
+        self, request: DocumentExportExecutionRequest
+    ) -> StoredDraft | None: ...
+
+
 class ActivityEventStore(Protocol):
     """Persist ordered session events and make them available for replay/live delivery."""
 
@@ -408,6 +489,7 @@ class ArtifactStore(Protocol):
     ) -> list[StoredArtifact]:
         """Return one owner's artifacts for a workflow run in stable order."""
         ...
+
 
 class ApprovalStore(Protocol):
     """Persist immutable approval intent and resolve it with compare-and-set semantics."""

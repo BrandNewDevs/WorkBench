@@ -23,7 +23,7 @@ from app.api.session_contracts import (
     WorkflowUploadResponse,
 )
 from app.auth.service import AuthError, AuthService
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     ActivityEventStore,
     AuditAction,
     AuditRecord,

@@ -17,7 +17,7 @@ from app.auth.service import _DUMMY_PASSWORD_HASH, AuthService
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies
 from app.main import create_app
-from app.ports.backend2 import AuditRecord, AuthSessionRecord, StoredIdentity
+from app.ports.local_backend import AuditRecord, AuthSessionRecord, StoredIdentity
 
 ORIGIN = "http://127.0.0.1:5173"
 PASSWORD = "correct horse battery staple"

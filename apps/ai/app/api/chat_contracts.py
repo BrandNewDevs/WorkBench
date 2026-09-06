@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.api.contracts import ApiContractModel
-from app.ports.backend2 import WorkflowMessage
+from app.ports.local_backend import WorkflowMessage
 from app.workflow.contracts import WorkflowSession, WorkflowType
 
 

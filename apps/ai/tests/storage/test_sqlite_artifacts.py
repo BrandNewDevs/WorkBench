@@ -10,7 +10,7 @@ import aiosqlite
 import pytest
 from pydantic import ValidationError
 
-from app.ports.backend2 import StoredArtifact
+from app.ports.local_backend import StoredArtifact
 from app.storage import (
     ArtifactAlreadyExistsError,
     ArtifactContextMismatchError,

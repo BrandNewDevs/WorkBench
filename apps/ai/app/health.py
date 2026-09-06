@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from app.ai.engine import AIEngine
 from app.ai.schemas import AIHealthReport, Capability, ModelStatus
 from app.api.health_contracts import HealthResponse, HealthStatus
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     ActivityEventStore,
     AuditStore,
     AuthSessionStore,

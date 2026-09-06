@@ -1,5 +1,17 @@
 """Local persistence implementations owned by Backend 2."""
 
+from app.storage.drafts import (
+    DraftConflictError,
+    DraftContextMismatchError,
+    DraftIntegrityError,
+    SQLiteDraftStore,
+)
+from app.storage.knowledge_corpus import (
+    KnowledgeSourceApprovalError,
+    KnowledgeSourceConflictError,
+    KnowledgeSourceIntegrityError,
+    LocalKnowledgeSourceStore,
+)
 from app.storage.session_files import (
     LocalSessionFileStore,
     SessionFileContextMismatchError,
@@ -40,7 +52,14 @@ __all__ = [
     "ActivityEventContextMismatchError",
     "ArtifactAlreadyExistsError",
     "ArtifactContextMismatchError",
+    "DraftConflictError",
+    "DraftContextMismatchError",
+    "DraftIntegrityError",
     "InvalidSessionStatusError",
+    "KnowledgeSourceApprovalError",
+    "KnowledgeSourceConflictError",
+    "KnowledgeSourceIntegrityError",
+    "LocalKnowledgeSourceStore",
     "LocalSQLiteDatabase",
     "LocalSessionFileStore",
     "LocalSessionWorkspaceStore",
@@ -49,6 +68,7 @@ __all__ = [
     "SQLiteArtifactStore",
     "SQLiteAuditStore",
     "SQLiteAuthSessionStore",
+    "SQLiteDraftStore",
     "SQLiteIdentityStore",
     "SQLiteSessionFileStore",
     "SQLiteSessionMetadataStore",

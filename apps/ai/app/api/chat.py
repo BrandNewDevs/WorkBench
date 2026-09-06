@@ -17,7 +17,7 @@ from app.api.chat_contracts import (
 )
 from app.api.contracts import ErrorResponse
 from app.auth.contracts import AuthenticatedUser
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     AuditAction,
     AuditRecord,
     AuditStore,

@@ -12,7 +12,7 @@ from pydantic import Field, ValidationError
 from app.api.contracts import ApiContractModel
 from app.auth.contracts import AuthenticatedUser, UserRole
 from app.config import ApplicationSettings
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     AuditAction,
     AuditRecord,
     AuditStore,
@@ -27,7 +27,8 @@ COOKIE_NAME = "workbench_session"
 # Fixed valid Argon2id hash of a non-secret dummy value. It deliberately receives every
 # unknown or disabled login password so those failures perform the same costly operation.
 _DUMMY_PASSWORD_HASH = (
-    "$argon2id$v=19$m=65536,t=3,p=4$bjaX8MuFp7/cKq7ruihvKQ$Tcl6L3Vw4LoOo7ZQcv2RSnnoQXg8rPFc14KzcBx4OIQ"
+    "$argon2id$v=19$m=65536,t=3,p=4$bjaX8MuFp7/cKq7ruihvKQ$"
+    "Tcl6L3Vw4LoOo7ZQcv2RSnnoQXg8rPFc14KzcBx4OIQ"
 )
 
 

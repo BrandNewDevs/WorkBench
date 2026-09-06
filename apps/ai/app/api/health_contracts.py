@@ -7,7 +7,7 @@ from pydantic import Field
 
 from app.ai.schemas import AIHealthReport
 from app.api.contracts import ApiContractModel
-from app.ports.backend2 import SubsystemReadiness
+from app.ports.local_backend import SubsystemReadiness
 from app.workflow.contracts import UtcTimestamp
 
 

@@ -226,6 +226,13 @@ class ApprovedKnowledgeRoot(ContractModel):
     path: Path
 
 
+class ApprovedKnowledgePath(ContractModel):
+    """An exact curated source path resolved by local storage."""
+
+    path: Path
+    source_id: str = Field(min_length=1)
+
+
 class ApprovedVisualInput(ContractModel):
     """A visual file whose exact path was already approved by Backend 2."""
 
@@ -449,7 +456,7 @@ class SourceDocument(ContractModel):
     document_name: str = Field(min_length=1)
     mime_type: str = Field(min_length=1)
     source_id: str | None = Field(default=None, min_length=1)
-    approved_path: ApprovedPath | None = None
+    approved_path: ApprovedPath | ApprovedKnowledgePath | None = None
     content: bytes | None = Field(default=None, min_length=1, repr=False)
 
     @model_validator(mode="after")

@@ -13,7 +13,7 @@ import pytest
 
 from app.ai.knowledge.document_parser import LocalDocumentParser
 from app.ai.schemas import SourceDocument
-from app.ports.backend2 import StoredUpload
+from app.ports.local_backend import StoredUpload
 from app.storage import (
     LocalSessionFileStore,
     LocalSessionWorkspaceStore,

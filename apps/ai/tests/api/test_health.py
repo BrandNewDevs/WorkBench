@@ -14,7 +14,7 @@ from app.ai.schemas import AIHealthReport
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies
 from app.main import create_app
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     AuditRecord,
     AuthSessionRecord,
     StoredIdentity,

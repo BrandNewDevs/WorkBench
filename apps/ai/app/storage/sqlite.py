@@ -14,7 +14,7 @@ import aiosqlite
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from app.auth.contracts import UserRole
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     AuditRecord,
     AuthSessionRecord,
     StoredArtifact,
@@ -373,6 +373,40 @@ CREATE INDEX IF NOT EXISTS workflow_uploads_session_created
 ON workflow_uploads (session_id, created_at, upload_id)
 """
 
+_CREATE_KNOWLEDGE_SOURCES_TABLE = """
+CREATE TABLE IF NOT EXISTS knowledge_sources (
+    knowledge_source_id TEXT PRIMARY KEY NOT NULL,
+    document_id TEXT NOT NULL UNIQUE CHECK (length(document_id) BETWEEN 1 AND 200),
+    source_id TEXT NOT NULL UNIQUE CHECK (length(source_id) BETWEEN 1 AND 200),
+    approved_by_user_id TEXT NOT NULL REFERENCES identities(user_id),
+    file_name TEXT NOT NULL CHECK (length(file_name) BETWEEN 1 AND 255),
+    mime_type TEXT NOT NULL CHECK (length(mime_type) BETWEEN 1 AND 255),
+    size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+    sha256 TEXT NOT NULL CHECK (
+        length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+    created_at TEXT NOT NULL
+)
+"""
+
+_CREATE_GROUNDED_DRAFTS_TABLE = """
+CREATE TABLE IF NOT EXISTS grounded_drafts (
+    draft_id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES workflow_sessions(session_id) ON DELETE CASCADE,
+    workflow_run_id TEXT NOT NULL UNIQUE REFERENCES workflow_runs(workflow_run_id),
+    owner_user_id TEXT NOT NULL,
+    draft_json TEXT NOT NULL CHECK (
+        typeof(draft_json) = 'text' AND length(CAST(draft_json AS BLOB)) <= 1048576
+    ),
+    created_at TEXT NOT NULL
+)
+"""
+
+_CREATE_GROUNDED_DRAFTS_OWNER_INDEX = """
+CREATE INDEX IF NOT EXISTS grounded_drafts_owner
+ON grounded_drafts (session_id, workflow_run_id, owner_user_id, draft_id)
+"""
+
 
 class SessionAlreadyExistsError(RuntimeError):
     """Raised when session metadata already exists for a session identifier."""
@@ -470,6 +504,9 @@ class LocalSQLiteDatabase:
             await connection.execute(_CREATE_WORKFLOW_UPLOADS_TABLE)
             await self._migrate_legacy_workflow_uploads(connection)
             await connection.execute(_CREATE_WORKFLOW_UPLOADS_SESSION_INDEX)
+            await connection.execute(_CREATE_KNOWLEDGE_SOURCES_TABLE)
+            await connection.execute(_CREATE_GROUNDED_DRAFTS_TABLE)
+            await connection.execute(_CREATE_GROUNDED_DRAFTS_OWNER_INDEX)
             await connection.execute(_CREATE_APPROVALS_TABLE)
             await connection.execute(_CREATE_ARTIFACTS_TABLE)
             await connection.execute(_CREATE_ARTIFACTS_RUN_INDEX)

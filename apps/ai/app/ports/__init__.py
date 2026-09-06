@@ -1,13 +1,16 @@
 """Backend 2 integration protocols; no persistence or executor implementations live here."""
 
-from app.ports.backend2 import (
+from app.ports.local_backend import (
     ActivityEventStore,
     ApprovalStore,
     ArtifactExecutor,
     ArtifactStore,
     AuditStore,
     AuthSessionStore,
+    DraftResolver,
+    DraftStore,
     IdentityStore,
+    KnowledgeSourceStore,
     SandboxExecutor,
     SessionFileStore,
     SystemHealthProvider,
@@ -21,7 +24,10 @@ __all__ = [
     "ArtifactStore",
     "AuditStore",
     "AuthSessionStore",
+    "DraftResolver",
+    "DraftStore",
     "IdentityStore",
+    "KnowledgeSourceStore",
     "SandboxExecutor",
     "SessionFileStore",
     "SystemHealthProvider",
