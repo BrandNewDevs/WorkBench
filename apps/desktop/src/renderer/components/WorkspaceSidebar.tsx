@@ -28,10 +28,12 @@ type WorkspaceSidebarProps = {
   activeView: WorkspaceView;
   activeSettingsSection: SettingsSection;
   chats: readonly ChatThread[];
+  chatsState?: "idle" | "loading" | "ready" | "error";
   collapsed: boolean;
   onCreateChat: () => void;
   onNavigate: (view: WorkspaceView) => void;
   onSelectChat: (threadId: ChatThreadId) => void;
+  onRetryChats?: () => void;
   onSettingsSectionChange: (section: SettingsSection) => void;
   onSignOut?: () => void;
 };
@@ -60,10 +62,12 @@ export function WorkspaceSidebar({
   activeView,
   activeSettingsSection,
   chats,
+  chatsState,
   collapsed,
   onCreateChat,
   onNavigate,
   onSelectChat,
+  onRetryChats,
   onSettingsSectionChange,
   onSignOut,
 }: WorkspaceSidebarProps) {
@@ -163,9 +167,20 @@ export function WorkspaceSidebar({
                   ))}
                 </ul>
               ) : (
-                <p className="mt-4 text-xs leading-5 text-muted-foreground">
-                  {normalizedSearchQuery ? "No matching chats." : "No recent chats yet."}
-                </p>
+                <div className="mt-4 text-xs leading-5 text-muted-foreground" role={chatsState === "error" ? "status" : undefined}>
+                  {chatsState === "loading"
+                    ? "Loading chats…"
+                    : chatsState === "error"
+                      ? "Recent chats could not be loaded from FastAPI."
+                      : normalizedSearchQuery
+                        ? "No matching chats."
+                        : "No recent chats yet."}
+                  {chatsState === "error" && onRetryChats && (
+                    <Button className="mt-2 h-7 px-2 text-xs" onClick={onRetryChats} type="button" variant="outline">
+                      Retry
+                    </Button>
+                  )}
+                </div>
               )}
             </section>
           </>

@@ -56,8 +56,8 @@ export function ExampleWorkflow() {
 
       <div className="mt-6 space-y-6">
         <div className="space-y-3" aria-label="Example messages">
-          <Message message={{ messageId: "example-employee", author: "employee", text: "Please review the uploaded inspection report.", createdAt: "2026-02-23T09:15:00Z" }} />
-          <Message message={{ messageId: "example-assistant", author: "assistant", text: "Example response. Structured findings and source metadata appear below when supplied by the application.", status: "completed" }} />
+          <Message message={{ messageId: "example-employee", sessionId: "example-session", authorUserId: null, role: "user", content: "Please review the uploaded inspection report.", createdAt: "2026-02-23T09:15:00Z", clientMessageId: null }} />
+          <Message message={{ messageId: "example-assistant", sessionId: "example-session", authorUserId: null, role: "assistant", content: "Example response. Structured findings and source metadata appear below when supplied by the application.", createdAt: "2026-02-23T09:15:02Z", clientMessageId: null }} />
         </div>
 
         <WorkflowStageIndicator stages={[

@@ -82,6 +82,7 @@ class DocumentExportExecutionRequest(ApiContractModel):
     approval_id: UUID
     session_id: UUID
     workflow_run_id: UUID
+    execution_claim_token: UUID
     arguments: DocumentExportArguments
 
 

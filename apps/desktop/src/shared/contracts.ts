@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const IPC_CHANNELS = {
   getDesktopStatus: "desktop:get-status",
   selectUploadFiles: "desktop:select-upload-files",
@@ -79,7 +81,12 @@ export type LocalServiceRequest =
   | { operation: "health" }
   | { operation: "login"; request: EmployeeLoginRequest }
   | { operation: "restoreSession" }
-  | { operation: "logout" };
+  | { operation: "logout" }
+  | { operation: "chatListSessions" }
+  | { operation: "chatCreateSession"; request: ChatSessionCreateRequest }
+  | { operation: "chatGetSession"; sessionId: string }
+  | { operation: "chatListMessages"; sessionId: string }
+  | { operation: "chatAppendMessage"; sessionId: string; request: ChatMessageAppendRequest };
 
 export interface LocalServiceResponse {
   status: number;
@@ -177,14 +184,6 @@ export interface WorkflowFinding {
   citationIds: readonly string[];
 }
 
-export interface WorkflowMessage {
-  messageId: string;
-  author: "employee" | "assistant";
-  text: string;
-  createdAt?: string;
-  status?: WorkflowStatus;
-}
-
 export interface WorkflowUploadProgress {
   uploadId: string;
   fileName: string;
@@ -192,3 +191,112 @@ export interface WorkflowUploadProgress {
   totalBytes: number;
   status: Exclude<WorkflowStatus, "queued">;
 }
+
+/** Wire contracts mirroring the local FastAPI chat surface. FastAPI serializes camelCase. */
+
+export const chatWorkflowTypeSchema = z.enum(["inspectionAnalysis", "codeRepair"]);
+
+export const chatStageSchema = z.enum([
+  "collectingInputs",
+  "extracting",
+  "retrieving",
+  "drafting",
+  "validating",
+  "planning",
+  "awaitingApproval",
+  "exporting",
+  "sandboxExecuting",
+  "repairing",
+  "approvalRejected",
+  "completed",
+  "failed",
+]);
+
+export const chatSessionStatusSchema = z.enum(["active", "completed", "failed", "approvalRejected"]);
+
+export const chatMessageRoleSchema = z.enum(["user", "assistant"]);
+
+/** Backend timestamps are timezone-aware UTC ISO 8601. */
+export const chatTimestampSchema = z.iso.datetime({ offset: true });
+
+const uuidSchema = z.uuid();
+
+/** One owned chat thread backed by a local workflow session. */
+export const chatSessionSchema = z.strictObject({
+  sessionId: uuidSchema,
+  ownerUserId: uuidSchema,
+  workflowType: chatWorkflowTypeSchema,
+  title: z.string().min(1).max(200),
+  stage: chatStageSchema,
+  status: chatSessionStatusSchema,
+  createdAt: chatTimestampSchema,
+  updatedAt: chatTimestampSchema,
+  /** Null for sessions stored before the renderer idempotency key existed. */
+  clientSessionId: uuidSchema.nullable(),
+});
+
+/** One persisted chat message without model reasoning fields. */
+export const chatMessageSchema = z.strictObject({
+  messageId: uuidSchema,
+  sessionId: uuidSchema,
+  authorUserId: uuidSchema.nullable(),
+  role: chatMessageRoleSchema,
+  content: z.string().min(1).max(20_000),
+  createdAt: chatTimestampSchema,
+  /** The renderer idempotency key; null for messages stored before the key existed. */
+  clientMessageId: uuidSchema.nullable(),
+});
+
+export const chatSessionListResponseSchema = z.strictObject({
+  sessions: z.array(chatSessionSchema),
+});
+
+export const chatMessageListResponseSchema = z.strictObject({
+  messages: z.array(chatMessageSchema),
+});
+
+export const chatSessionCreateRequestSchema = z.strictObject({
+  workflowType: chatWorkflowTypeSchema,
+  title: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((title) => title.trim().length > 0, { message: "title must not be blank" }),
+  /** Renderer idempotency key: a retried create returns the stored session. */
+  clientSessionId: uuidSchema.optional(),
+});
+
+export const chatMessageAppendRequestSchema = z.strictObject({
+  content: z
+    .string()
+    .min(1)
+    .max(20_000)
+    .refine((content) => content.trim().length > 0, { message: "content must not be blank" }),
+  /** Stable per-attempt idempotency key; retries reuse it instead of duplicating. */
+  clientMessageId: uuidSchema,
+});
+
+/** The renderer may build paths only from server-issued session IDs. */
+export const chatSessionIdSchema = uuidSchema;
+
+export const chatErrorCodeSchema = z.enum(["session_not_found"]);
+
+export type ChatWorkflowType = z.infer<typeof chatWorkflowTypeSchema>;
+
+export type ChatStage = z.infer<typeof chatStageSchema>;
+
+export type ChatSessionStatus = z.infer<typeof chatSessionStatusSchema>;
+
+export type ChatMessageRole = z.infer<typeof chatMessageRoleSchema>;
+
+export type ChatSession = z.infer<typeof chatSessionSchema>;
+
+export type ChatMessage = z.infer<typeof chatMessageSchema>;
+
+export type ChatSessionListResponse = z.infer<typeof chatSessionListResponseSchema>;
+
+export type ChatMessageListResponse = z.infer<typeof chatMessageListResponseSchema>;
+
+export type ChatSessionCreateRequest = z.infer<typeof chatSessionCreateRequestSchema>;
+
+export type ChatMessageAppendRequest = z.infer<typeof chatMessageAppendRequestSchema>;

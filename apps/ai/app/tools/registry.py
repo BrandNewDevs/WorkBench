@@ -223,6 +223,7 @@ class ToolRegistry:
                     owner_user_id=workflow_run.owner_user_id,
                 ),
             )
+        assert claim.execution_claim_token is not None
         if call.tool_name is ToolName.REQUEST_DOCUMENT_EXPORT:
             assert isinstance(call.arguments, DocumentExportArguments)
             result: ToolExecutionResult = await self._artifact_executor.create_artifacts(
@@ -230,6 +231,7 @@ class ToolRegistry:
                     approval_id=approval.approval_id,
                     session_id=workflow_run.session_id,
                     workflow_run_id=workflow_run.workflow_run_id,
+                    execution_claim_token=claim.execution_claim_token,
                     arguments=call.arguments,
                 )
             )
@@ -245,6 +247,7 @@ class ToolRegistry:
             )
         persisted_approval = await self._approval_store.record_execution_result(
             approval_id=approval.approval_id,
+            execution_claim_token=claim.execution_claim_token,
             result=result,
         )
         if persisted_approval is None:

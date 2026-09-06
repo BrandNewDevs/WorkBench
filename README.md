@@ -30,7 +30,7 @@ FastAPI stores its default SQLite database in the current user's application-dat
 pnpm --filter @workbench/ai provision-account
 ```
 
-The command prompts for the account details and password, accepts only an empty identity store, and has no HTTP route. It does not include a default username or password.
+The command prompts for the account details and password, accepts only an empty identity store, and has no HTTP route. It does not include a default username or password. Run it with `--list` (also non-interactive) to show provisioned accounts without secrets; it exits 0 only when at least one account exists.
 
 ## Verification loop
 
