@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import FeatureCard from "../components/feature-card";
 import FeatureModal, { type Feature } from "../components/feature-modal";
 import FlowChart from "../components/flow-chart";
@@ -25,10 +26,10 @@ export default function Features({ activeFeature, setActiveFeature }: { activeFe
   const activeData = activeFeature ? (featureDetails.find((f) => f.id === activeFeature) ?? null) : null;
 
   return (
-    <section id="features" className="features-page">
+    <section id="features" className="features-page" aria-labelledby="features-heading">
       <div className="features-content">
         <header className="page-heading">
-          <span className="section-label" style={{ justifyContent: "center" }}>Capabilities</span>
+          <h1 id="features-heading" className="section-label" style={{ justifyContent: "center" }}>Capabilities</h1>
         </header>
         <ul className="feature-list" aria-label="WorkBench features">
           {featureDetails.map(({ id, title, category, desc }) => (
@@ -47,8 +48,9 @@ export default function Features({ activeFeature, setActiveFeature }: { activeFe
       </div>
 
       {/* Workflow */}
-      <section className="section">
+      <section className="section" aria-labelledby="workflow-heading">
         <div className="container">
+          <h2 id="workflow-heading" className="sr-only">Workflow</h2>
           <FlowChart />
         </div>
       </section>

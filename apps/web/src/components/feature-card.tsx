@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 export default function FeatureCard({ id, title, category, desc, icon, onClick }: {
   id: string;
   title: string;
