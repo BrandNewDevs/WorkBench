@@ -4,6 +4,7 @@ import { FaGithub } from "react-icons/fa6";
 
 export default function Navbar({ isFeaturesPage, isAboutPage }: { isFeaturesPage: boolean; isAboutPage: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isScrolled, setIsScrolled] = useState(() => window.scrollY > 8);
   const [starOpen, setStarOpen] = useState(false);
   const [starPopped, setStarPopped] = useState(false);
   const popTimerRef = useRef<number | null>(null);
@@ -11,6 +12,12 @@ export default function Navbar({ isFeaturesPage, isAboutPage }: { isFeaturesPage
   const hideStarTimerRef = useRef<number | null>(null);
 
   const closeMobile = () => setMobileOpen(false);
+
+  useEffect(() => {
+    const handleScroll = () => setIsScrolled(window.scrollY > 8);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   const openStar = () => {
     if (collapseTimerRef.current !== null) {
@@ -58,7 +65,10 @@ export default function Navbar({ isFeaturesPage, isAboutPage }: { isFeaturesPage
   }, []);
 
   return (
-    <nav aria-label="Main navigation" className="main-navigation">
+    <nav
+      aria-label="Main navigation"
+      className={`main-navigation${isScrolled || mobileOpen ? " main-navigation--scrolled" : ""}`}
+    >
       <div className="container navbar-inner">
         <a href="#top" className="brand-link" aria-label="WorkBench home" onClick={closeMobile}>
           <span className="brand-name">WorkBench</span>
