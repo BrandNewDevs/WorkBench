@@ -56,7 +56,7 @@
       }
     }
   ],
-  "allowedSeverityValues": ["low", "medium", "high"],
+  "allowedSeverityValues": ["unknown", "low", "medium", "high"],
   "requiredDraftSections": [
     "subject",
     "summary",
