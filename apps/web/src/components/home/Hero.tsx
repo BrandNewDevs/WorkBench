@@ -6,12 +6,12 @@ export default function Hero() {
     <section className="section hero" aria-labelledby="home-heading">
       <div className="container hero-content">
         <h1 id="home-heading">
-          Your private AI workbench
+          Local AI
           <br className="hero-linebreak" />
-          for sensitive work.
+          for confidential work.
         </h1>
         <p className="hero-desc">
-          Turn confidential documents into cited, approval-ready drafts — entirely on your machine. No cloud. Nothing leaves your control.
+          An agentic AI workbench for confidential industrial and government work. Everything runs on your workstation, answers cite their sources, and the app asks before it runs, saves, or exports anything.
         </p>
         <div className="hero-actions">
           <a href="https://github.com/BrandNewDevs/WorkBench" target="_blank" rel="noreferrer" className="btn-primary">

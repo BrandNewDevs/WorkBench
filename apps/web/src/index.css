@@ -186,29 +186,23 @@ table {
    ============================================================ */
 .main-navigation {
   position: fixed;
-  top: 1rem;
-  left: 50%;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 100;
-  transform: translateX(-50%);
+  background: transparent;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.navbar-inner {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0;
-  padding: 0.55rem 0.6rem;
-  max-width: 600px;
-  width: 100%;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(20, 18, 25, 0.8);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  transition: border-color 220ms ease, box-shadow 220ms ease;
-}
-
-.main-navigation:hover,
-.main-navigation:focus-within {
-  border-color: rgba(91, 79, 207, 0.2);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(91, 79, 207, 0.1);
+  padding-top: 0.8rem;
+  padding-bottom: 0.8rem;
 }
 
 .brand-link {
@@ -222,38 +216,89 @@ table {
 
 .brand-name {
   font-family: var(--font-sans);
-  font-weight: 700;
-  font-size: 0.8rem;
-  letter-spacing: 0.04em;
-  color: var(--bg);
-  background: #fff;
-  width: 2.1rem;
-  height: 2.1rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  background: linear-gradient(180deg, var(--text) 0%, rgba(245, 243, 255, 0.65) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   line-height: 1;
 }
 
 .nav-links {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex: 1;
   justify-content: center;
-  font-size: 0.78rem;
+  font-size: 0.95rem;
   color: var(--text-secondary);
 }
 
 .nav-links a {
   padding: 0.35rem 0.65rem;
   border-radius: 999px;
-  transition: color 160ms ease, background 160ms ease;
+  color: var(--text-secondary);
   white-space: nowrap;
+  transition: color 160ms ease;
 }
 
-.nav-links a:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.nav-links a:hover { color: var(--text); }
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.nav-github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.65rem;
+  color: var(--text-secondary);
+  transition: color 160ms ease;
+}
+
+.nav-github-link:hover { color: var(--text); }
+
+.nav-github-link svg { flex-shrink: 0; }
+
+.github-star-slot {
+  width: 0;
+  overflow: visible;
+  transition: width 160ms ease;
+}
+
+.nav-github-link--popped .github-star-slot { width: 16px; }
+
+.github-star {
+  display: block;
+  fill: currentColor;
+  stroke: transparent;
+  transform: scale(0);
+  transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.nav-github-link--popped .github-star { transform: scale(1); }
+
+.github-label {
+  overflow: hidden;
+  max-width: 0;
+  white-space: nowrap;
+  text-align: right;
+  transition: max-width 160ms ease;
+}
+
+.nav-github-link--open .github-label { max-width: 3.3rem; }
+
+.nav-github-link:hover .github-star { fill: #EAC54F; }
+
+.nav-github-link--popped.nav-github-link:hover .github-star { transform: scale(1.25); }
 
 .availability-link {
   display: inline-flex;
@@ -315,13 +360,10 @@ table {
 
 /* Mobile nav */
 @media (max-width: 640px) {
-  .main-navigation {
-    top: 0.75rem;
-    width: calc(100% - 1.5rem);
-    max-width: none;
-    padding: 0.4rem;
-    border-radius: 1rem;
+  .navbar-inner {
     flex-wrap: wrap;
+    padding-top: 0.6rem;
+    padding-bottom: 0.6rem;
   }
 
   .mobile-menu-toggle {
@@ -330,13 +372,15 @@ table {
   }
 
   .nav-links {
+    position: static;
+    transform: none;
     display: none;
     flex-direction: column;
     gap: 0.15rem;
     margin: 0;
     padding: 0.5rem 0 0;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
-    font-size: 0.8rem;
+    font-size: 0.9rem;
     text-align: left;
     width: 100%;
   }
@@ -350,20 +394,24 @@ table {
     border-radius: 8px;
   }
 
-  .nav-links a:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .availability-link {
+  .availability-link,
+  .nav-github-link {
     display: none;
   }
 
-  .nav-links--open ~ .availability-link {
+  .nav-links--open ~ .nav-actions {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin-top: 0.35rem;
+  }
+
+  .nav-links--open ~ .nav-actions .availability-link,
+  .nav-links--open ~ .nav-actions .nav-github-link {
     display: inline-flex;
     width: 100%;
     justify-content: center;
     padding: 0.55rem 0.8rem;
-    margin-top: 0.35rem;
   }
 
   .brand-link { padding-left: 0.25rem; }
@@ -412,8 +460,8 @@ table {
 .hero-desc {
   font-size: clamp(0.95rem, 1.8vw, 1.15rem);
   color: var(--text-secondary);
-  line-height: 1.65;
-  max-width: 520px;
+  line-height: 1.45;
+  max-width: 640px;
   margin: 0 auto 2rem;
 }
 
