@@ -24,6 +24,7 @@ def test_workflow_store_exposes_atomic_stage_compare_and_set() -> None:
         "self",
         "session_id",
         "workflow_run_id",
+        "owner_user_id",
         "expected_stage",
         "expected_stage_version",
         "next_stage",
@@ -31,6 +32,29 @@ def test_workflow_store_exposes_atomic_stage_compare_and_set() -> None:
         "sandbox_attempts",
     )
     assert inspect.iscoroutinefunction(WorkflowStore.compare_and_set_stage)
+
+
+def test_workflow_store_exposes_owner_scoped_run_restoration() -> None:
+    signature = inspect.signature(WorkflowStore.get_run)
+
+    assert tuple(signature.parameters) == (
+        "self",
+        "workflow_run_id",
+        "session_id",
+        "owner_user_id",
+    )
+    assert inspect.iscoroutinefunction(WorkflowStore.get_run)
+
+
+def test_workflow_store_exposes_owner_scoped_current_run_recovery() -> None:
+    signature = inspect.signature(WorkflowStore.get_current_run)
+
+    assert tuple(signature.parameters) == (
+        "self",
+        "session_id",
+        "owner_user_id",
+    )
+    assert inspect.iscoroutinefunction(WorkflowStore.get_current_run)
 
 
 def test_approval_store_exposes_atomic_pending_resolution() -> None:

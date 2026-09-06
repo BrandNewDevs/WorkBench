@@ -211,6 +211,25 @@ class WorkflowStore(Protocol):
         """Persist a run after Backend 1 selects its initial stage."""
         ...
 
+    async def get_run(
+        self,
+        *,
+        workflow_run_id: UUID,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> WorkflowRun | None:
+        """Restore one run only when its complete ownership context matches."""
+        ...
+
+    async def get_current_run(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> WorkflowRun | None:
+        """Restore the newest run for one owned workflow session."""
+        ...
+
     async def append_message(self, message: WorkflowMessage) -> WorkflowMessage:
         """Append a sanitized user or assistant message."""
         ...
@@ -220,6 +239,7 @@ class WorkflowStore(Protocol):
         *,
         session_id: UUID,
         workflow_run_id: UUID,
+        owner_user_id: UUID,
         expected_stage: WorkflowStage,
         expected_stage_version: int,
         next_stage: WorkflowStage,

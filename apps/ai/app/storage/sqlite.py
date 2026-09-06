@@ -28,6 +28,8 @@ from app.workflow.contracts import (
     ApprovalStatus,
     ExecutionStatus,
     UtcTimestamp,
+    WorkflowRun,
+    WorkflowRunStatus,
     WorkflowSession,
     WorkflowStage,
     WorkflowStatus,
@@ -188,6 +190,45 @@ CREATE INDEX IF NOT EXISTS workflow_sessions_owner_updated
 ON workflow_sessions (owner_user_id, updated_at DESC)
 """
 
+_CREATE_WORKFLOW_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    sequence INTEGER PRIMARY KEY,
+    workflow_run_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES workflow_sessions(session_id),
+    owner_user_id TEXT NOT NULL,
+    workflow_type TEXT NOT NULL CHECK (
+        workflow_type IN ('inspectionAnalysis', 'codeRepair')
+    ),
+    stage TEXT NOT NULL CHECK (
+        stage IN (
+            'collectingInputs', 'extracting', 'retrieving', 'drafting',
+            'validating', 'planning', 'awaitingApproval', 'exporting',
+            'sandboxExecuting', 'repairing', 'approvalRejected',
+            'completed', 'failed'
+        )
+    ),
+    stage_version INTEGER NOT NULL CHECK (stage_version >= 0),
+    status TEXT NOT NULL CHECK (
+        status IN (
+            'queued', 'active', 'waitingForApproval', 'completed',
+            'failed', 'approvalRejected'
+        )
+    ),
+    sandbox_attempts INTEGER NOT NULL CHECK (sandbox_attempts >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+_CREATE_WORKFLOW_RUNS_CURRENT_INDEX = """
+CREATE INDEX IF NOT EXISTS workflow_runs_session_current
+ON workflow_runs (session_id, sequence DESC)
+"""
+
+_WORKFLOW_RUN_COLUMNS = """workflow_run_id, session_id, owner_user_id,
+workflow_type, stage, stage_version, status, sandbox_attempts, created_at,
+updated_at"""
+
 _CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_sessions_client
 ON workflow_sessions (client_session_id)
@@ -332,6 +373,8 @@ class LocalSQLiteDatabase:
                     "ALTER TABLE workflow_sessions ADD COLUMN client_session_id TEXT"
                 )
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX)
+            await connection.execute(_CREATE_WORKFLOW_RUNS_TABLE)
+            await connection.execute(_CREATE_WORKFLOW_RUNS_CURRENT_INDEX)
             await connection.execute(_CREATE_WORKFLOW_MESSAGES_TABLE)
             # Older local databases predate the client idempotency key; add the
             # column in place so an existing development install keeps its data.
@@ -1085,12 +1128,16 @@ class WorkflowSessionNotFoundError(LookupError):
     """Raised when no workflow session matches the identifier for its owner."""
 
 
-class SQLiteWorkflowStore:
-    """Durable workflow sessions and messages for the local chat API.
+class WorkflowRunAlreadyExistsError(RuntimeError):
+    """Raised when a workflow run identifier has already been persisted."""
 
-    Implements the create-session and append-message portions of the agreed
-    ``WorkflowStore`` port, plus the owned read queries the chat routes need.
-    """
+
+class WorkflowRunContextMismatchError(PermissionError):
+    """Raised when a workflow run does not match its parent session context."""
+
+
+class SQLiteWorkflowStore:
+    """Durable workflow sessions, runs, and messages for the local service."""
 
     _MAX_LISTED_SESSIONS = 100
     _MAX_LISTED_MESSAGES = 200
@@ -1150,6 +1197,203 @@ class SQLiteWorkflowStore:
                 f"Workflow session already exists: {session.session_id}"
             ) from error
         return session
+
+    async def create_run(self, run: WorkflowRun) -> WorkflowRun:
+        """Persist a run and its current-session projection in one transaction."""
+
+        try:
+            async with self._database.open() as connection:
+                cursor = await connection.execute(
+                    """INSERT INTO workflow_runs (
+                        workflow_run_id, session_id, owner_user_id, workflow_type,
+                        stage, stage_version, status, sandbox_attempts,
+                        created_at, updated_at
+                    )
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    FROM workflow_sessions
+                    WHERE session_id = ? AND owner_user_id = ? AND workflow_type = ?""",
+                    (
+                        str(run.workflow_run_id),
+                        str(run.session_id),
+                        str(run.owner_user_id),
+                        run.workflow_type.value,
+                        run.stage.value,
+                        run.stage_version,
+                        run.status.value,
+                        run.sandbox_attempts,
+                        run.created_at.isoformat(),
+                        run.updated_at.isoformat(),
+                        str(run.session_id),
+                        str(run.owner_user_id),
+                        run.workflow_type.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise WorkflowRunContextMismatchError(
+                        "workflow run does not match an existing owned session"
+                    )
+                projection_cursor = await connection.execute(
+                    """UPDATE workflow_sessions
+                    SET stage = ?, status = ?, updated_at = ?
+                    WHERE session_id = ? AND owner_user_id = ? AND workflow_type = ?""",
+                    (
+                        run.stage.value,
+                        self._session_status(run.status).value,
+                        run.updated_at.isoformat(),
+                        str(run.session_id),
+                        str(run.owner_user_id),
+                        run.workflow_type.value,
+                    ),
+                )
+                if projection_cursor.rowcount != 1:
+                    raise WorkflowRunContextMismatchError(
+                        "workflow session projection could not be updated"
+                    )
+        except aiosqlite.IntegrityError as error:
+            if "UNIQUE constraint failed" in str(error):
+                raise WorkflowRunAlreadyExistsError(
+                    f"Workflow run already exists: {run.workflow_run_id}"
+                ) from error
+            raise WorkflowRunContextMismatchError(
+                "workflow run violates the local persistence constraints"
+            ) from error
+        return run
+
+    async def get_run(
+        self,
+        *,
+        workflow_run_id: UUID,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> WorkflowRun | None:
+        """Restore a run only for its exact session and owner."""
+
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                f"""SELECT {_WORKFLOW_RUN_COLUMNS}
+                FROM workflow_runs
+                WHERE workflow_run_id = ? AND session_id = ? AND owner_user_id = ?""",
+                (str(workflow_run_id), str(session_id), str(owner_user_id)),
+            )
+            row = await cursor.fetchone()
+        return self._workflow_run_from_row(row) if row is not None else None
+
+    async def get_current_run(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> WorkflowRun | None:
+        """Restore the newest run for an owned session without exposing sequence."""
+
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                f"""SELECT {_WORKFLOW_RUN_COLUMNS}
+                FROM workflow_runs
+                WHERE session_id = ? AND owner_user_id = ?
+                  AND EXISTS (
+                      SELECT 1 FROM workflow_sessions
+                      WHERE workflow_sessions.session_id = workflow_runs.session_id
+                        AND workflow_sessions.owner_user_id = workflow_runs.owner_user_id
+                  )
+                ORDER BY sequence DESC
+                LIMIT 1""",
+                (str(session_id), str(owner_user_id)),
+            )
+            row = await cursor.fetchone()
+        return self._workflow_run_from_row(row) if row is not None else None
+
+    async def compare_and_set_stage(
+        self,
+        *,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+        expected_stage: WorkflowStage,
+        expected_stage_version: int,
+        next_stage: WorkflowStage,
+        next_status: WorkflowRunStatus,
+        sandbox_attempts: int,
+    ) -> WorkflowRun | None:
+        """Atomically apply one Backend 1-selected transition to a matching run."""
+
+        async with self._database.open() as connection:
+            select_cursor = await connection.execute(
+                f"""SELECT {_WORKFLOW_RUN_COLUMNS}
+                FROM workflow_runs
+                WHERE workflow_run_id = ? AND session_id = ? AND owner_user_id = ?
+                  AND stage = ? AND stage_version = ?""",
+                (
+                    str(workflow_run_id),
+                    str(session_id),
+                    str(owner_user_id),
+                    expected_stage.value,
+                    expected_stage_version,
+                ),
+            )
+            row = await select_cursor.fetchone()
+            if row is None:
+                return None
+
+            current = self._workflow_run_from_row(row)
+            updated_at = self._next_updated_at(current.updated_at)
+            updated = WorkflowRun.model_validate(
+                {
+                    **current.model_dump(),
+                    "stage": next_stage,
+                    "stage_version": expected_stage_version + 1,
+                    "status": next_status,
+                    "sandbox_attempts": sandbox_attempts,
+                    "updated_at": updated_at,
+                }
+            )
+            update_cursor = await connection.execute(
+                """UPDATE workflow_runs
+                SET stage = ?, stage_version = ?, status = ?, sandbox_attempts = ?,
+                    updated_at = ?
+                WHERE workflow_run_id = ? AND session_id = ? AND owner_user_id = ?
+                  AND stage = ? AND stage_version = ?""",
+                (
+                    updated.stage.value,
+                    updated.stage_version,
+                    updated.status.value,
+                    updated.sandbox_attempts,
+                    updated.updated_at.isoformat(),
+                    str(workflow_run_id),
+                    str(session_id),
+                    str(owner_user_id),
+                    expected_stage.value,
+                    expected_stage_version,
+                ),
+            )
+            if update_cursor.rowcount != 1:
+                return None
+
+            await connection.execute(
+                """UPDATE workflow_sessions
+                SET stage = ?, status = ?, updated_at = ?
+                WHERE session_id = ? AND owner_user_id = ?
+                  AND EXISTS (
+                      SELECT 1 FROM workflow_runs AS transitioned
+                      WHERE transitioned.workflow_run_id = ?
+                        AND transitioned.session_id = workflow_sessions.session_id
+                        AND transitioned.owner_user_id = workflow_sessions.owner_user_id
+                        AND transitioned.sequence = (
+                            SELECT MAX(current.sequence)
+                            FROM workflow_runs AS current
+                            WHERE current.session_id = workflow_sessions.session_id
+                        )
+                  )""",
+                (
+                    updated.stage.value,
+                    self._session_status(updated.status).value,
+                    updated.updated_at.isoformat(),
+                    str(session_id),
+                    str(owner_user_id),
+                    str(workflow_run_id),
+                ),
+            )
+        return updated
 
     async def _stored_client_session(
         self,
@@ -1315,6 +1559,37 @@ class SQLiteWorkflowStore:
                 else None
             ),
         )
+
+    @staticmethod
+    def _workflow_run_from_row(row: aiosqlite.Row) -> WorkflowRun:
+        return WorkflowRun(
+            workflow_run_id=UUID(row["workflow_run_id"]),
+            session_id=UUID(row["session_id"]),
+            owner_user_id=UUID(row["owner_user_id"]),
+            workflow_type=WorkflowType(row["workflow_type"]),
+            stage=WorkflowStage(row["stage"]),
+            stage_version=row["stage_version"],
+            status=WorkflowRunStatus(row["status"]),
+            sandbox_attempts=row["sandbox_attempts"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _session_status(status: WorkflowRunStatus) -> WorkflowStatus:
+        return {
+            WorkflowRunStatus.QUEUED: WorkflowStatus.ACTIVE,
+            WorkflowRunStatus.ACTIVE: WorkflowStatus.ACTIVE,
+            WorkflowRunStatus.WAITING_FOR_APPROVAL: WorkflowStatus.ACTIVE,
+            WorkflowRunStatus.COMPLETED: WorkflowStatus.COMPLETED,
+            WorkflowRunStatus.FAILED: WorkflowStatus.FAILED,
+            WorkflowRunStatus.APPROVAL_REJECTED: WorkflowStatus.APPROVAL_REJECTED,
+        }[status]
+
+    @staticmethod
+    def _next_updated_at(current: datetime) -> datetime:
+        now = datetime.now(UTC)
+        return now if now > current else current + timedelta(microseconds=1)
 
     @staticmethod
     def _message_from_row(row: aiosqlite.Row) -> WorkflowMessage:
