@@ -48,7 +48,7 @@ The command prompts for the account details and password, accepts only an empty 
 
 ## Development workflow
 
-Three commands cover a normal round of local work. All of them target the Electron dev database, so a provisioned account works in the app as well as on the command line.
+Three commands cover a normal round of local work. All of them target the Electron dev database, so a provisioned account works in the app as well as on the command line. The workflow commands are plain Node helpers, so they run unchanged on Windows, macOS, and Linux.
 
 ```sh
 pnpm app             # build main/preload, start Vite, launch Electron
@@ -69,7 +69,7 @@ pnpm db:reset           # clear every application table, keep the schema
 
 Password minimum length is 12 characters. Provisioning accepts only an empty `identities` table, so to start over run `pnpm db:reset` first, then `pnpm account:provision`. The `--show-secrets` flag prints argon2id hashes and session token ids for accounts owned by the local machine; it is opt-in development tooling, the default listing stays redacted, and existing tests enforce that (`tests/auth/test_provision_account.py`).
 
-Every account command reads `WORKBENCH_DB` (defaults to the Electron dev database at `~/Library/Application Support/@workbench/desktop/workbench.db`) and `WORKBENCH_PYTHON` (defaults to `apps/ai/.venv/bin/python`) when you need a different database or interpreter.
+Every account command reads `WORKBENCH_DB` when you need a different database; the default is the Electron dev database under the Electron user-data directory for the app named `@workbench/desktop`: `%APPDATA%\@workbench\desktop\workbench.db` on Windows, `~/Library/Application Support/@workbench/desktop/workbench.db` on macOS, and `~/.config/@workbench/desktop/workbench.db` on Linux. Python is resolved exactly like the other workspace commands: `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then PATH.
 
 ### What runs where
 

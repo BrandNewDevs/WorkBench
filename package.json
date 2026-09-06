@@ -14,12 +14,12 @@
     "test": "turbo run test --continue",
     "verify": "pnpm check && pnpm test && pnpm build",
     "app": "pnpm --filter @workbench/desktop dev",
-    "app:dev-login": "WORKBENCH_SKIP_AUTH=1 pnpm --filter @workbench/desktop dev",
-    "app:stop": "pkill -f \"Electron .*WorkBench/apps/desktop\"; pkill -f \"apps/desktop/scripts/dev.mjs\"; true",
-    "account:list": "sh -c 'cd apps/ai && ${WORKBENCH_PYTHON:-./.venv/bin/python} -m app.provision_account --list --database-path \"${WORKBENCH_DB:-\"$HOME/Library/Application Support/@workbench/desktop/workbench.db\"}\"'",
-    "account:provision": "sh -c 'cd apps/ai && ${WORKBENCH_PYTHON:-./.venv/bin/python} -m app.provision_account --database-path \"${WORKBENCH_DB:-\"$HOME/Library/Application Support/@workbench/desktop/workbench.db\"}\"'",
-    "account:secrets": "sh -c 'cd apps/ai && ${WORKBENCH_PYTHON:-./.venv/bin/python} -m app.provision_account --list --show-secrets --database-path \"${WORKBENCH_DB:-\"$HOME/Library/Application Support/@workbench/desktop/workbench.db\"}\"'",
-    "db:reset": "./apps/ai/.venv/bin/python scripts/db_reset.py \"${WORKBENCH_DB:-\"$HOME/Library/Application Support/@workbench/desktop/workbench.db\"}\""
+    "app:dev-login": "node scripts/dev_workflow.mjs dev-login",
+    "app:stop": "node scripts/dev_workflow.mjs stop",
+    "account:list": "node scripts/dev_workflow.mjs account:list",
+    "account:provision": "node scripts/dev_workflow.mjs account:provision",
+    "account:secrets": "node scripts/dev_workflow.mjs account:secrets",
+    "db:reset": "node scripts/dev_workflow.mjs db:reset"
   },
   "devDependencies": {
     "turbo": "^2.5.8"
