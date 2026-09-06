@@ -30,7 +30,7 @@ export default function FlowChart() {
           }
         });
       },
-      { threshold: 0.3, rootMargin: "0px 0px -50px 0px" }
+      { threshold: 0.15, rootMargin: "0px 0px -5% 0px" }
     );
 
     const stepEls = el.querySelectorAll("[data-step-index]");

@@ -29,8 +29,8 @@ export default function FeatureList() {
   return (
     <>
       <ul className="feature-list" aria-label="WorkBench features">
-        {featureDetails.map(({ id, title, category, desc }) => (
-          <li key={id}>
+        {featureDetails.map(({ id, title, category, desc }, i) => (
+          <li key={id} className="feature-list-item" style={{ animationDelay: `${i * 120}ms` }}>
             <FeatureCard
               id={id}
               title={title}
