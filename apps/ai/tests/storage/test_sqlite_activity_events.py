@@ -373,6 +373,9 @@ async def test_append_rejects_persisted_input_id_and_invalid_cursors(tmp_path: P
         )
     with pytest.raises(ValueError, match="poll interval"):
         SQLiteActivityEventStore(database, poll_interval_seconds=0)
+    for invalid_batch_size in (0, 1001, True):
+        with pytest.raises(ValueError, match="batch size"):
+            SQLiteActivityEventStore(database, batch_size=invalid_batch_size)
 
 
 @pytest.mark.asyncio
@@ -431,6 +434,79 @@ async def test_replay_is_ordered_exclusive_and_does_not_duplicate_events(
 
     assert replayed == created[1:]
     assert [event.event_id for event in replayed] == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_replay_paginates_a_backlog_with_a_bounded_batch(tmp_path: Path) -> None:
+    database, _, writer, session, _ = await _stores(tmp_path)
+    reader = SQLiteActivityEventStore(database, batch_size=2)
+    created = [
+        await writer.append(
+            _event(
+                session,
+                event_type=ActivityEventType.SESSION_CREATED,
+                payload={},
+            ),
+            owner_user_id=session.owner_user_id,
+        )
+        for _ in range(5)
+    ]
+
+    first_page = await reader.replay(
+        session_id=session.session_id,
+        owner_user_id=session.owner_user_id,
+        after_event_id=0,
+    )
+    second_page = await reader.replay(
+        session_id=session.session_id,
+        owner_user_id=session.owner_user_id,
+        after_event_id=first_page[-1].event_id,
+    )
+    final_page = await reader.replay(
+        session_id=session.session_id,
+        owner_user_id=session.owner_user_id,
+        after_event_id=second_page[-1].event_id,
+    )
+
+    assert first_page == created[:2]
+    assert second_page == created[2:4]
+    assert final_page == created[4:]
+
+
+@pytest.mark.asyncio
+async def test_subscription_drains_a_backlog_across_bounded_batches(
+    tmp_path: Path,
+) -> None:
+    database, _, writer, session, _ = await _stores(tmp_path)
+    created = [
+        await writer.append(
+            _event(
+                session,
+                event_type=ActivityEventType.SESSION_CREATED,
+                payload={},
+            ),
+            owner_user_id=session.owner_user_id,
+        )
+        for _ in range(5)
+    ]
+    reader = SQLiteActivityEventStore(
+        database,
+        poll_interval_seconds=0.01,
+        batch_size=2,
+    )
+    subscription = cast(
+        AsyncGenerator[ActivityEvent, None],
+        reader.subscribe(
+            session_id=session.session_id,
+            owner_user_id=session.owner_user_id,
+            after_event_id=0,
+        ),
+    )
+
+    received = [await anext(subscription) for _ in range(5)]
+    await subscription.aclose()
+
+    assert received == created
 
 
 @pytest.mark.asyncio

@@ -332,7 +332,7 @@ class ActivityEventStore(Protocol):
         owner_user_id: UUID,
         after_event_id: int,
     ) -> list[ActivityEvent]:
-        """Return durable events after the supplied event sequence."""
+        """Return a bounded page of durable events after the supplied sequence."""
         ...
 
     def subscribe(

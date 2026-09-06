@@ -1659,12 +1659,15 @@ class SQLiteActivityEventStore:
     _DEFAULT_POLL_INTERVAL_SECONDS = 0.1
     _MIN_POLL_INTERVAL_SECONDS = 0.01
     _MAX_POLL_INTERVAL_SECONDS = 5.0
+    _DEFAULT_BATCH_SIZE = 100
+    _MAX_BATCH_SIZE = 1000
 
     def __init__(
         self,
         database: LocalSQLiteDatabase,
         *,
         poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
+        batch_size: int = _DEFAULT_BATCH_SIZE,
     ) -> None:
         if (
             isinstance(poll_interval_seconds, bool)
@@ -1675,8 +1678,15 @@ class SQLiteActivityEventStore:
             <= self._MAX_POLL_INTERVAL_SECONDS
         ):
             raise ValueError("poll interval must be between 0.01 and 5 seconds")
+        if (
+            isinstance(batch_size, bool)
+            or not isinstance(batch_size, int)
+            or not 1 <= batch_size <= self._MAX_BATCH_SIZE
+        ):
+            raise ValueError("batch size must be between 1 and 1000")
         self._database = database
         self._poll_interval_seconds = float(poll_interval_seconds)
+        self._batch_size = batch_size
 
     async def append(
         self,
@@ -1742,7 +1752,7 @@ class SQLiteActivityEventStore:
         owner_user_id: UUID,
         after_event_id: int,
     ) -> list[ActivityEvent]:
-        """Return owned events after an exclusive per-session cursor."""
+        """Return one bounded page after an exclusive per-session cursor."""
 
         self._validate_after_event_id(after_event_id)
         async with self._database.open() as connection:
@@ -1756,6 +1766,7 @@ class SQLiteActivityEventStore:
                 session_id=session_id,
                 owner_user_id=owner_user_id,
                 after_event_id=after_event_id,
+                batch_size=self._batch_size,
             )
         return [self._event_from_row(row) for row in rows]
 
@@ -1807,6 +1818,7 @@ class SQLiteActivityEventStore:
                 session_id=session_id,
                 owner_user_id=owner_user_id,
                 after_event_id=after_event_id,
+                batch_size=self._batch_size,
             )
         return [self._event_from_row(row) for row in rows]
 
@@ -1817,13 +1829,15 @@ class SQLiteActivityEventStore:
         session_id: UUID,
         owner_user_id: UUID,
         after_event_id: int,
+        batch_size: int,
     ) -> list[aiosqlite.Row]:
         cursor = await connection.execute(
             f"""SELECT {_ACTIVITY_EVENT_COLUMNS}
             FROM activity_events
             WHERE session_id = ? AND owner_user_id = ? AND event_id > ?
-            ORDER BY event_id ASC""",
-            (str(session_id), str(owner_user_id), after_event_id),
+            ORDER BY event_id ASC
+            LIMIT ?""",
+            (str(session_id), str(owner_user_id), after_event_id, batch_size),
         )
         return list(await cursor.fetchall())
 
