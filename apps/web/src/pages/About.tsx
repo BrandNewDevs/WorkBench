@@ -2,8 +2,11 @@ export default function About() {
   return (
     <section id="about" className="about-page" aria-labelledby="about-heading">
       <div className="about-content">
+        <a href="#home" className="back-to-home">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
+          Back to home
+        </a>
         <header className="page-heading">
-          <span className="section-label" style={{ justifyContent: "center" }}>The Project</span>
           <h1 id="about-heading">About WorkBench</h1>
           <p>A sovereign, local-first AI workbench for confidential industrial and government work.</p>
         </header>

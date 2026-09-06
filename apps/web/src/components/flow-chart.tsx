@@ -12,11 +12,13 @@ const steps = [
 
 export default function FlowChart() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const lineFillRef = useRef<HTMLDivElement>(null);
   const [visibleSteps, setVisibleSteps] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
+    const lineFill = lineFillRef.current;
+    if (!el || !lineFill) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -33,20 +35,37 @@ export default function FlowChart() {
     const stepEls = el.querySelectorAll("[data-step-index]");
     stepEls.forEach((stepEl) => observer.observe(stepEl));
 
-    return () => observer.disconnect();
+    const handleScroll = () => {
+      const track = el.querySelector(".flow-vertical-track") as HTMLElement;
+      if (!track) return;
+      const rect = track.getBoundingClientRect();
+      const trackTop = rect.top;
+      const trackHeight = rect.height;
+      const viewportHeight = window.innerHeight;
+      const scrolled = viewportHeight - trackTop;
+      const totalScrollable = trackHeight + viewportHeight;
+      const progress = Math.min(Math.max(scrolled / totalScrollable, 0), 1);
+      lineFill.style.height = `${progress * 100}%`;
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    handleScroll();
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("scroll", handleScroll);
+    };
   }, []);
 
   return (
     <div className="flow-vertical" ref={containerRef}>
       <div className="flow-vertical-header">
         <span className="flowchart-badge">Workflow</span>
-        <h2 className="flowchart-title">How It Works</h2>
-        <p className="flowchart-sub">From upload to finished document in seven steps.</p>
       </div>
 
       <div className="flow-vertical-track">
         <div className="flow-vertical-line" />
-        <div className="flow-vertical-line-fill" />
+        <div className="flow-vertical-line-fill" ref={lineFillRef} />
 
         {steps.map((step, i) => {
           const isLeft = i % 2 === 0;

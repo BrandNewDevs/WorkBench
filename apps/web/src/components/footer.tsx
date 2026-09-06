@@ -5,7 +5,7 @@ export default function Footer() {
         <div className="footer-inner">
           <div className="footer-brand">
             <div className="footer-brand-name">WORKBENCH</div>
-            <p className="footer-brand-desc">Private AI. Controlled execution. Reviewable work.</p>
+            <p className="footer-brand-desc">Private AI.<br/>Controlled execution.<br/>Reviewable work.</p>
           </div>
           <div className="footer-links">
             <div className="footer-col">
@@ -24,9 +24,8 @@ export default function Footer() {
             </div>
           </div>
         </div>
-        <div className="footer-bottom">
+        <div className="footer-bottom" style={{ justifyContent: "center" }}>
           <span>&copy; 2026 WorkBench</span>
-          <span>Local-first AI workbench</span>
         </div>
       </div>
     </footer>
