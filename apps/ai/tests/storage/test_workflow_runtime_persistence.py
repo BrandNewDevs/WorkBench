@@ -329,3 +329,43 @@ async def test_recovery_marks_only_expired_active_run(tmp_path: Path) -> None:
     assert len(unfinished) == 2
     marked = next(value for value in unfinished if value.workflow_run_id == active.workflow_run_id)
     assert marked.retryable and marked.interrupted_at == interrupted_at
+
+
+@pytest.mark.asyncio
+async def test_startup_recovers_expired_active_runs(tmp_path: Path) -> None:
+    """Regression: startup must mark stale active runs retryable, not just initialize schema."""
+
+    database = LocalSQLiteDatabase(tmp_path / "workbench.db")
+    await database.initialize()
+    store = SQLiteWorkflowStore(database)
+
+    item = session()
+    await store.create_session(item)
+
+    expired_run = WorkflowRun(
+        workflow_run_id=uuid4(),
+        session_id=item.session_id,
+        owner_user_id=item.owner_user_id,
+        workflow_type=item.workflow_type,
+        stage=WorkflowStage.EXTRACTING,
+        stage_version=1,
+        status=WorkflowRunStatus.ACTIVE,
+        sandbox_attempts=0,
+        created_at=NOW,
+        updated_at=NOW,
+        execution_lease_expires_at=NOW - timedelta(seconds=10),
+    )
+    await store.create_run(expired_run)
+
+    fresh = LocalSQLiteDatabase(tmp_path / "workbench.db")
+    await fresh.initialize()
+    fresh_store = SQLiteWorkflowStore(fresh)
+
+    now = NOW + timedelta(seconds=5)
+    interrupted = await fresh_store.mark_stale_runs_interrupted(
+        stale_before=now, interrupted_at=now,
+    )
+
+    assert len(interrupted) == 1
+    assert interrupted[0].workflow_run_id == expired_run.workflow_run_id
+    assert interrupted[0].retryable is True

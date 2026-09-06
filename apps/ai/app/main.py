@@ -4,6 +4,7 @@ import hmac
 import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 import uvicorn
@@ -139,6 +140,15 @@ def compose_runtime_dependencies(
         if workflow_input_policy is not None
         else None
     )
+
+    async def _startup_with_recovery() -> None:
+        await database.initialize()
+        now = datetime.now(UTC)
+        await workflow_store.mark_stale_runs_interrupted(
+            stale_before=now - timedelta(seconds=settings.workflow_lease_seconds),
+            interrupted_at=now,
+        )
+
     return ApplicationDependencies(
         ai_engine=ai_engine,
         system_health_provider=LocalSystemHealthProvider(database, settings),
@@ -162,7 +172,7 @@ def compose_runtime_dependencies(
             pdf_converter_available=shutil.which(settings.pdf_converter_executable) is not None,
             docker_available=shutil.which(settings.docker_executable) is not None,
         ),
-        startup=database.initialize,
+        startup=_startup_with_recovery,
         shutdown=ai_engine.close,
     )
 

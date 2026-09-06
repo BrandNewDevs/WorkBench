@@ -620,6 +620,7 @@ class LocalSQLiteDatabase:
                         f"ALTER TABLE workflow_runs ADD COLUMN {name} {definition}"
                     )
             await connection.execute(_CREATE_WORKFLOW_RUNS_CURRENT_INDEX)
+            await self._reconcile_legacy_nonterminal_runs(connection)
             await connection.execute(_CREATE_WORKFLOW_RUNS_ONE_NONTERMINAL_INDEX)
             await self._migrate_legacy_activity_events(connection)
             await connection.execute(_CREATE_ACTIVITY_EVENTS_TABLE)
@@ -727,6 +728,30 @@ class LocalSQLiteDatabase:
                 ),
             )
         await connection.execute("DROP TABLE activity_events_phase3_legacy")
+
+    @staticmethod
+    async def _reconcile_legacy_nonterminal_runs(
+        connection: aiosqlite.Connection,
+    ) -> None:
+        """Mark excess nonterminal runs terminal before installing the unique index."""
+
+        nonterminal = "('queued', 'active', 'waitingForApproval')"
+        await connection.execute(
+            f"""UPDATE workflow_runs SET status = 'failed', updated_at = ?
+            WHERE workflow_run_id IN (
+                SELECT r.workflow_run_id FROM workflow_runs r
+                JOIN (
+                    SELECT session_id, MAX(sequence) AS max_seq
+                    FROM workflow_runs
+                    WHERE status IN {nonterminal}
+                    GROUP BY session_id
+                    HAVING COUNT(*) > 1
+                ) dupes ON r.session_id = dupes.session_id
+                AND r.status IN {nonterminal}
+                AND r.sequence < dupes.max_seq
+            )""",
+            (datetime.now(UTC).isoformat(),),
+        )
 
     @staticmethod
     async def _migrate_legacy_workflow_uploads(

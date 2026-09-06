@@ -617,3 +617,60 @@ async def test_sqlite_constraints_reject_invalid_run_values(
                     run.updated_at.isoformat(),
                 ),
             )
+
+
+@pytest.mark.asyncio
+async def test_initialize_reconciles_legacy_multiple_nonterminal_runs(
+    tmp_path: Path,
+) -> None:
+    """Regression: multiple nonterminal runs for one session must not break index creation."""
+
+    db_path = tmp_path / "workbench.db"
+    database = LocalSQLiteDatabase(db_path)
+    await database.initialize()
+    store = SQLiteWorkflowStore(database)
+
+    item = _session()
+    await store.create_session(item)
+
+    run1 = _run(item, status=WorkflowRunStatus.ACTIVE, created_at=_CREATED_AT)
+    later = _CREATED_AT + timedelta(seconds=1)
+    run2 = _run(item, status=WorkflowRunStatus.QUEUED, created_at=later)
+
+    async with database.open() as connection:
+        await connection.execute(
+            "DROP INDEX IF EXISTS workflow_runs_one_nonterminal"
+        )
+        for run in (run1, run2):
+            await connection.execute(
+                """INSERT INTO workflow_runs (
+                    workflow_run_id, session_id, owner_user_id, workflow_type,
+                    stage, stage_version, status, sandbox_attempts,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(run.workflow_run_id),
+                    str(run.session_id),
+                    str(run.owner_user_id),
+                    run.workflow_type.value,
+                    run.stage.value,
+                    run.stage_version,
+                    run.status.value,
+                    run.sandbox_attempts,
+                    run.created_at.isoformat(),
+                    run.updated_at.isoformat(),
+                ),
+            )
+
+    fresh = LocalSQLiteDatabase(db_path)
+    await fresh.initialize()
+
+    async with fresh.open() as connection:
+        cursor = await connection.execute(
+            "SELECT status FROM workflow_runs WHERE session_id = ? ORDER BY sequence",
+            (str(item.session_id),),
+        )
+        statuses = [row["status"] for row in await cursor.fetchall()]
+
+    assert statuses.count("failed") == 1
+    assert statuses.count("active") + statuses.count("queued") == 1
