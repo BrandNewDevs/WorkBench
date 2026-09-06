@@ -2763,6 +2763,40 @@ class SQLiteWorkflowStore:
             ).fetchall()
         return [self._workflow_run_from_row(row) for row in rows]
 
+    async def fail_orphaned_queued_runs(
+        self, *, failed_at: UtcTimestamp
+    ) -> list[WorkflowRun]:
+        """Fail queued runs that were never advanced by the runner.
+
+        In the single-process architecture every queued run on startup is
+        necessarily orphaned: the runner advances queued runs to ``active``
+        synchronously before returning to the event loop.  Failing them
+        clears the one-nonterminal-per-session unique index so subsequent
+        admissions are no longer blocked.
+        """
+
+        async with self._database.open() as connection:
+            await connection.execute("BEGIN IMMEDIATE")
+            changed = await connection.execute(
+                """UPDATE workflow_runs
+                SET status = 'failed', stage = 'failed', updated_at = ?
+                WHERE status = 'queued'
+                RETURNING workflow_run_id""",
+                (failed_at.isoformat(),),
+            )
+            identifiers = [row["workflow_run_id"] for row in await changed.fetchall()]
+            if not identifiers:
+                return []
+            placeholders = ",".join("?" for _ in identifiers)
+            rows = await (
+                await connection.execute(
+                    f"""SELECT {_WORKFLOW_RUN_COLUMNS} FROM workflow_runs
+                    WHERE workflow_run_id IN ({placeholders}) ORDER BY sequence""",
+                    identifiers,
+                )
+            ).fetchall()
+        return [self._workflow_run_from_row(row) for row in rows]
+
     async def claim_retry(
         self, *, workflow_run_id: UUID, expected_stage_version: int, lease_expires_at: UtcTimestamp
     ) -> WorkflowRun | None:

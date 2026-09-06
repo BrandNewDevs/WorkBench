@@ -155,6 +155,7 @@ def compose_runtime_dependencies(
             stale_before=now - timedelta(seconds=settings.workflow_lease_seconds),
             interrupted_at=now,
         )
+        await workflow_store.fail_orphaned_queued_runs(failed_at=now)
         for stale_run in interrupted:
             claimed = await workflow_store.claim_retry(
                 workflow_run_id=stale_run.workflow_run_id,

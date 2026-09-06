@@ -343,6 +343,12 @@ class WorkflowStore(Protocol):
         self, *, stale_before: UtcTimestamp, interrupted_at: UtcTimestamp
     ) -> list[WorkflowRun]: ...
 
+    async def fail_orphaned_queued_runs(
+        self, *, failed_at: UtcTimestamp
+    ) -> list[WorkflowRun]:
+        """Fail queued runs that were never advanced by the runner."""
+        ...
+
     async def claim_retry(
         self, *, workflow_run_id: UUID, expected_stage_version: int, lease_expires_at: UtcTimestamp
     ) -> WorkflowRun | None: ...
