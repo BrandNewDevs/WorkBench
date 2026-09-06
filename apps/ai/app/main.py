@@ -1,6 +1,7 @@
 """FastAPI composition root for the local WorkBench service."""
 
 import hmac
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from hashlib import sha256
@@ -12,24 +13,35 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import RequestResponseEndpoint
 
+from app.ai.local_engine import create_local_ai_engine
 from app.api.auth import build_auth_router, clear_session_cookie
 from app.api.chat import build_chat_router
 from app.api.contracts import ErrorResponse
 from app.api.health_contracts import HealthResponse, HealthStatus
 from app.api.sessions import build_session_router
+from app.artifacts import LibreOfficePdfConverter, LocalDocumentArtifactExecutor
 from app.auth.service import AuthError, AuthService
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies, build_health_response
+from app.local_health import LocalSystemHealthProvider
+from app.ports.local_backend import LocalDeploymentProof
+from app.sandbox import DockerSandboxExecutor
 from app.storage import (
+    LocalKnowledgeSourceStore,
     LocalSessionWorkspaceStore,
     LocalSQLiteDatabase,
     SQLiteActivityEventStore,
+    SQLiteApprovalStore,
+    SQLiteArtifactStore,
     SQLiteAuditStore,
     SQLiteAuthSessionStore,
+    SQLiteDraftStore,
     SQLiteIdentityStore,
     SQLiteSessionFileStore,
     SQLiteWorkflowStore,
 )
+from app.tools.registry import ToolRegistry
+from app.workflow.runner import CheckpointAwareWorkflowRunner, InspectionWorkflowInputPolicy
 
 
 def _health_router(
@@ -87,22 +99,71 @@ async def _lifespan(dependencies: ApplicationDependencies) -> AsyncIterator[None
             await dependencies.shutdown()
 
 
-def compose_runtime_dependencies(settings: ApplicationSettings) -> ApplicationDependencies:
+def compose_runtime_dependencies(
+    settings: ApplicationSettings,
+    *,
+    workflow_input_policy: InspectionWorkflowInputPolicy | None = None,
+) -> ApplicationDependencies:
     """Compose the local SQLite auth stores for a normal service process."""
 
     database = LocalSQLiteDatabase(settings.database_path)
     workflow_store = SQLiteWorkflowStore(database)
+    workspaces = LocalSessionWorkspaceStore(settings.sessions_root)
+    files = SQLiteSessionFileStore(database, workspaces)
+    approvals = SQLiteApprovalStore(database)
+    artifacts = SQLiteArtifactStore(database)
+    drafts = SQLiteDraftStore(database)
+    knowledge = LocalKnowledgeSourceStore(database, settings.knowledge_root)
+    artifact_executor = LocalDocumentArtifactExecutor(
+        drafts,
+        artifacts,
+        workspaces,
+        LibreOfficePdfConverter(
+            settings.pdf_converter_executable,
+            timeout_seconds=settings.pdf_timeout_seconds,
+        ),
+    )
+    sandbox_executor = DockerSandboxExecutor(database, files, settings)
+    ai_engine = create_local_ai_engine(knowledge_root=knowledge.approved_knowledge_root())
+    tool_registry = ToolRegistry(approvals, artifact_executor, sandbox_executor)
+    workflow_runner = (
+        CheckpointAwareWorkflowRunner(
+            workflows=workflow_store,
+            drafts=drafts,
+            approvals=approvals,
+            ai_engine=ai_engine,
+            tool_registry=tool_registry,
+            input_policy=workflow_input_policy,
+            lease_seconds=settings.workflow_lease_seconds,
+        )
+        if workflow_input_policy is not None
+        else None
+    )
     return ApplicationDependencies(
+        ai_engine=ai_engine,
+        system_health_provider=LocalSystemHealthProvider(database, settings),
         identity_store=SQLiteIdentityStore(database),
         auth_session_store=SQLiteAuthSessionStore(database),
         audit_store=SQLiteAuditStore(database),
         chat_store=workflow_store,
         workflow_store=workflow_store,
-        session_file_store=SQLiteSessionFileStore(
-            database, LocalSessionWorkspaceStore(settings.sessions_root)
-        ),
+        session_file_store=files,
         activity_event_store=SQLiteActivityEventStore(database),
+        approval_store=approvals,
+        artifact_store=artifacts,
+        artifact_executor=artifact_executor,
+        knowledge_source_store=knowledge,
+        draft_store=drafts,
+        sandbox_executor=sandbox_executor,
+        workflow_runner=workflow_runner,
+        tool_registry=tool_registry,
+        deployment_proof=LocalDeploymentProof(
+            model_endpoint_classification="loopback",
+            pdf_converter_available=shutil.which(settings.pdf_converter_executable) is not None,
+            docker_available=shutil.which(settings.docker_executable) is not None,
+        ),
         startup=database.initialize,
+        shutdown=ai_engine.close,
     )
 
 
@@ -153,6 +214,7 @@ def create_app(
         version="v1",
         lifespan=lambda _: _lifespan(resolved_dependencies),
     )
+
     @application.middleware("http")
     async def require_managed_capability(
         request: Request, call_next: RequestResponseEndpoint
@@ -192,6 +254,7 @@ def create_app(
     application.state.workflow_store = resolved_dependencies.workflow_store
     application.state.session_file_store = resolved_dependencies.session_file_store
     application.state.activity_event_store = resolved_dependencies.activity_event_store
+    application.state.workflow_runner = resolved_dependencies.workflow_runner
     application.state.upload_max_bytes = resolved_settings.upload_max_bytes
     application.add_exception_handler(RequestValidationError, _validation_error_handler)
     application.add_exception_handler(AuthError, _auth_error_handler)

@@ -76,6 +76,19 @@ class ApplicationSettings(BaseSettings):
     database_path: Path = Field(default_factory=lambda: default_state_directory() / "workbench.db")
     sessions_root: Path = Field(default_factory=lambda: default_state_directory() / "sessions")
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1, le=50 * 1024 * 1024)
+    knowledge_root: Path = Field(default_factory=lambda: default_state_directory() / "knowledge")
+    pdf_converter_executable: str = "soffice"
+    pdf_timeout_seconds: float = Field(default=60, gt=0, le=300)
+    docker_executable: str = "docker"
+    sandbox_image: str = Field(default="workbench-python:local", min_length=1, max_length=200)
+    sandbox_user: str = Field(default="65532:65532", pattern=r"^[0-9]+:[0-9]+$")
+    sandbox_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    sandbox_memory: str = Field(default="256m", pattern=r"^[1-9][0-9]*[mMgG]$")
+    sandbox_cpus: float = Field(default=1.0, gt=0, le=4)
+    sandbox_pids_limit: int = Field(default=64, ge=8, le=512)
+    sandbox_stdout_max_bytes: int = Field(default=32 * 1024, ge=1024, le=65_536)
+    sandbox_stderr_max_bytes: int = Field(default=32 * 1024, ge=1024, le=65_536)
+    workflow_lease_seconds: int = Field(default=120, ge=30, le=3600)
 
     @field_validator("auth_signing_secret")
     @classmethod

@@ -10,16 +10,25 @@ from app.ai.schemas import AIHealthReport, Capability, ModelStatus
 from app.api.health_contracts import HealthResponse, HealthStatus
 from app.ports.local_backend import (
     ActivityEventStore,
+    ApprovalStore,
+    ArtifactExecutor,
+    ArtifactStore,
     AuditStore,
     AuthSessionStore,
     ChatStore,
+    DraftStore,
     IdentityStore,
+    KnowledgeSourceStore,
+    LocalDeploymentProof,
+    SandboxExecutor,
     SessionFileStore,
     SubsystemReadiness,
     SystemHealthProvider,
     SystemHealthReport,
     WorkflowStore,
 )
+from app.tools.registry import ToolRegistry
+from app.workflow.runner import WorkflowRunner
 
 ShutdownCallback = Callable[[], Awaitable[None]]
 StartupCallback = Callable[[], Awaitable[None]]
@@ -38,6 +47,15 @@ class ApplicationDependencies:
     workflow_store: WorkflowStore | None = None
     session_file_store: SessionFileStore | None = None
     activity_event_store: ActivityEventStore | None = None
+    approval_store: ApprovalStore | None = None
+    artifact_store: ArtifactStore | None = None
+    artifact_executor: ArtifactExecutor | None = None
+    knowledge_source_store: KnowledgeSourceStore | None = None
+    draft_store: DraftStore | None = None
+    sandbox_executor: SandboxExecutor | None = None
+    workflow_runner: WorkflowRunner | None = None
+    tool_registry: ToolRegistry | None = None
+    deployment_proof: LocalDeploymentProof | None = None
     shutdown: ShutdownCallback | None = None
     startup: StartupCallback | None = None
 
@@ -116,12 +134,7 @@ def _ai_is_ready(report: AIHealthReport) -> bool:
 def _system_is_ready(report: SystemHealthReport) -> bool:
     """Require every local Backend 2 dependency and its outbound-network control."""
 
-    return (
-        report.storage.ready
-        and report.sandbox.ready
-        and report.audit.ready
-        and report.outbound_network_blocked
-    )
+    return report.storage.ready and report.audit.ready and report.outbound_network_blocked
 
 
 def _auth_dependencies_are_ready(dependencies: ApplicationDependencies) -> bool:
@@ -144,9 +157,7 @@ async def build_health_response(
         _check_system(dependencies.system_health_provider, timeout_seconds),
     )
     is_ready = (
-        _ai_is_ready(ai)
-        and _system_is_ready(system)
-        and _auth_dependencies_are_ready(dependencies)
+        _ai_is_ready(ai) and _system_is_ready(system) and _auth_dependencies_are_ready(dependencies)
     )
     return HealthResponse(
         status=HealthStatus.READY if is_ready else HealthStatus.DEGRADED,
@@ -155,5 +166,6 @@ async def build_health_response(
         sandbox=system.sandbox,
         audit=system.audit,
         outbound_network_blocked=system.outbound_network_blocked,
+        deployment_proof=dependencies.deployment_proof,
         checked_at=datetime.now(UTC),
     )

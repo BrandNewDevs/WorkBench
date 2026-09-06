@@ -1,6 +1,7 @@
 """Local SQLite foundation and Backend 2 metadata persistence."""
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -17,11 +18,18 @@ from app.auth.contracts import UserRole
 from app.ports.local_backend import (
     AuditRecord,
     AuthSessionRecord,
+    PendingApprovalPreparation,
+    SelectedUploadSnapshot,
     StoredArtifact,
+    StoredExtractionFindings,
     StoredIdentity,
+    StoredRetrievedEvidence,
+    WorkflowAdmissionStatus,
     WorkflowMessage,
+    WorkflowRunAdmission,
+    WorkflowRunAdmissionRequest,
 )
-from app.tools.contracts import DocumentExportArguments, ToolExecutionResult
+from app.tools.contracts import DocumentExportArguments, ToolExecutionResult, ValidatedToolCall
 from app.workflow.contracts import (
     ActivityEvent,
     ActivityEventType,
@@ -40,9 +48,7 @@ from app.workflow.contracts import (
     WorkflowType,
 )
 
-_TOOL_EXECUTION_RESULT_ADAPTER: TypeAdapter[ToolExecutionResult] = TypeAdapter(
-    ToolExecutionResult
-)
+_TOOL_EXECUTION_RESULT_ADAPTER: TypeAdapter[ToolExecutionResult] = TypeAdapter(ToolExecutionResult)
 
 _CREATE_IDENTITIES_TABLE = """
 CREATE TABLE IF NOT EXISTS identities (
@@ -221,12 +227,31 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     sandbox_attempts INTEGER NOT NULL CHECK (sandbox_attempts >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+    ,execution_lease_expires_at TEXT
+    ,interrupted_at TEXT
+    ,retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1))
 )
 """
 
 _CREATE_WORKFLOW_RUNS_CURRENT_INDEX = """
 CREATE INDEX IF NOT EXISTS workflow_runs_session_current
 ON workflow_runs (session_id, sequence DESC)
+"""
+
+_NONTERMINAL_RUN_STATUSES = tuple(
+    status.value
+    for status in WorkflowRunStatus
+    if status
+    not in {
+        WorkflowRunStatus.COMPLETED,
+        WorkflowRunStatus.FAILED,
+        WorkflowRunStatus.APPROVAL_REJECTED,
+    }
+)
+_CREATE_WORKFLOW_RUNS_ONE_NONTERMINAL_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_runs_one_nonterminal
+ON workflow_runs(session_id)
+WHERE status IN ('queued', 'active', 'waitingForApproval')
 """
 
 _CREATE_ACTIVITY_EVENTS_TABLE = """
@@ -262,7 +287,7 @@ workflow_run_id, event_type, occurred_at, payload_json"""
 
 _WORKFLOW_RUN_COLUMNS = """workflow_run_id, session_id, owner_user_id,
 workflow_type, stage, stage_version, status, sandbox_attempts, created_at,
-updated_at"""
+updated_at, execution_lease_expires_at, interrupted_at, retryable"""
 
 _CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_sessions_client
@@ -368,6 +393,64 @@ CREATE TABLE IF NOT EXISTS workflow_uploads (
 )
 """
 
+_CREATE_WORKFLOW_RUN_ADMISSIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_run_admissions (
+    session_id TEXT NOT NULL REFERENCES workflow_sessions(session_id) ON DELETE CASCADE,
+    client_message_id TEXT NOT NULL,
+    workflow_run_id TEXT NOT NULL UNIQUE REFERENCES workflow_runs(workflow_run_id),
+    message_id TEXT NOT NULL UNIQUE REFERENCES workflow_messages(message_id),
+    owner_user_id TEXT NOT NULL,
+    semantic_hash TEXT NOT NULL CHECK(length(semantic_hash) = 64),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(session_id, client_message_id)
+)
+"""
+
+_CREATE_WORKFLOW_RUN_INPUTS_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_run_inputs (
+    workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    upload_id TEXT NOT NULL REFERENCES workflow_uploads(upload_id),
+    source_id TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK(size_bytes > 0),
+    sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+    PRIMARY KEY(workflow_run_id, ordinal),
+    UNIQUE(workflow_run_id, upload_id)
+)
+"""
+
+_CREATE_EXTRACTION_FINDINGS_TABLE = """
+CREATE TABLE IF NOT EXISTS extraction_findings (
+    workflow_run_id TEXT PRIMARY KEY REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+    source_upload_ids_json TEXT NOT NULL, findings_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(length(CAST(findings_json AS BLOB)) <= 1048576)
+)
+"""
+
+_CREATE_RETRIEVED_EVIDENCE_TABLE = """
+CREATE TABLE IF NOT EXISTS retrieved_evidence (
+    workflow_run_id TEXT PRIMARY KEY REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+    evidence_json TEXT NOT NULL, created_at TEXT NOT NULL,
+    CHECK(length(CAST(evidence_json AS BLOB)) <= 1048576)
+)
+"""
+
+_CREATE_WORKFLOW_OUTPUTS_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_outputs (
+    workflow_run_id TEXT PRIMARY KEY REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+    approval_id TEXT NOT NULL UNIQUE REFERENCES approvals(approval_id),
+    tool_name TEXT NOT NULL, normalized_arguments TEXT NOT NULL,
+    arguments_hash TEXT NOT NULL CHECK(length(arguments_hash) = 64),
+    created_at TEXT NOT NULL
+)
+"""
+
 _CREATE_WORKFLOW_UPLOADS_SESSION_INDEX = """
 CREATE INDEX IF NOT EXISTS workflow_uploads_session_created
 ON workflow_uploads (session_id, created_at, upload_id)
@@ -428,6 +511,45 @@ class ActivityEventContextMismatchError(PermissionError):
     """Raised when activity access does not match an existing owned workflow context."""
 
 
+async def _insert_activity_event(
+    connection: aiosqlite.Connection,
+    event: ActivityEvent,
+    *,
+    owner_user_id: UUID,
+) -> ActivityEvent:
+    """Insert an event on the caller's transaction without nested connections."""
+
+    if event.event_id != 0:
+        raise ValueError("new activity events must use event_id=0")
+    payload_json = SQLiteActivityEventStore._serialize_payload(event.payload)
+    row = await (
+        await connection.execute(
+            """SELECT COALESCE(MAX(event_id), 0) + 1 AS next_event_id
+            FROM activity_events WHERE session_id = ?""",
+            (str(event.session_id),),
+        )
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("next activity event ID could not be allocated")
+    persisted = event.model_copy(update={"event_id": int(row["next_event_id"])})
+    await connection.execute(
+        """INSERT INTO activity_events (
+            session_id, event_id, owner_user_id, workflow_run_id,
+            event_type, occurred_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            str(persisted.session_id),
+            persisted.event_id,
+            str(owner_user_id),
+            str(persisted.workflow_run_id) if persisted.workflow_run_id else None,
+            persisted.event_type.value,
+            persisted.occurred_at.isoformat(),
+            payload_json,
+        ),
+    )
+    return persisted
+
+
 class SessionMetadata(BaseModel):
     """Durable ownership and lifecycle metadata for one workflow session."""
 
@@ -486,7 +608,19 @@ class LocalSQLiteDatabase:
                 )
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX)
             await connection.execute(_CREATE_WORKFLOW_RUNS_TABLE)
+            cursor = await connection.execute("PRAGMA table_info(workflow_runs)")
+            run_columns = {row[1] for row in await cursor.fetchall()}
+            for name, definition in (
+                ("execution_lease_expires_at", "TEXT"),
+                ("interrupted_at", "TEXT"),
+                ("retryable", "INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0,1))"),
+            ):
+                if name not in run_columns:
+                    await connection.execute(
+                        f"ALTER TABLE workflow_runs ADD COLUMN {name} {definition}"
+                    )
             await connection.execute(_CREATE_WORKFLOW_RUNS_CURRENT_INDEX)
+            await connection.execute(_CREATE_WORKFLOW_RUNS_ONE_NONTERMINAL_INDEX)
             await self._migrate_legacy_activity_events(connection)
             await connection.execute(_CREATE_ACTIVITY_EVENTS_TABLE)
             await connection.execute(_CREATE_ACTIVITY_EVENTS_REPLAY_INDEX)
@@ -504,10 +638,15 @@ class LocalSQLiteDatabase:
             await connection.execute(_CREATE_WORKFLOW_UPLOADS_TABLE)
             await self._migrate_legacy_workflow_uploads(connection)
             await connection.execute(_CREATE_WORKFLOW_UPLOADS_SESSION_INDEX)
+            await connection.execute(_CREATE_WORKFLOW_RUN_ADMISSIONS_TABLE)
+            await connection.execute(_CREATE_WORKFLOW_RUN_INPUTS_TABLE)
+            await connection.execute(_CREATE_EXTRACTION_FINDINGS_TABLE)
+            await connection.execute(_CREATE_RETRIEVED_EVIDENCE_TABLE)
             await connection.execute(_CREATE_KNOWLEDGE_SOURCES_TABLE)
             await connection.execute(_CREATE_GROUNDED_DRAFTS_TABLE)
             await connection.execute(_CREATE_GROUNDED_DRAFTS_OWNER_INDEX)
             await connection.execute(_CREATE_APPROVALS_TABLE)
+            await connection.execute(_CREATE_WORKFLOW_OUTPUTS_TABLE)
             await connection.execute(_CREATE_ARTIFACTS_TABLE)
             await connection.execute(_CREATE_ARTIFACTS_RUN_INDEX)
 
@@ -576,9 +715,7 @@ class LocalSQLiteDatabase:
                     str(event.session_id),
                     event.event_id,
                     row["owner_user_id"],
-                    str(event.workflow_run_id)
-                    if event.workflow_run_id is not None
-                    else None,
+                    str(event.workflow_run_id) if event.workflow_run_id is not None else None,
                     event.event_type.value,
                     event.occurred_at.isoformat(),
                     json.dumps(
@@ -609,9 +746,7 @@ class LocalSQLiteDatabase:
         ):
             return
 
-        await connection.execute(
-            "ALTER TABLE workflow_uploads RENAME TO workflow_uploads_legacy"
-        )
+        await connection.execute("ALTER TABLE workflow_uploads RENAME TO workflow_uploads_legacy")
         await connection.execute("DROP INDEX IF EXISTS workflow_uploads_session_created")
         await connection.execute(_CREATE_WORKFLOW_UPLOADS_TABLE)
         await connection.execute(
@@ -790,6 +925,20 @@ class SQLiteApprovalStore:
 
     def __init__(self, database: LocalSQLiteDatabase) -> None:
         self._database = database
+
+    async def get_for_run(
+        self, *, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
+    ) -> Approval | None:
+        async with self._database.open() as connection:
+            row = await (
+                await connection.execute(
+                    f"""SELECT {_APPROVAL_COLUMNS} FROM approvals
+                    WHERE session_id = ? AND workflow_run_id = ? AND owner_user_id = ?
+                    ORDER BY requested_at DESC LIMIT 1""",
+                    (str(session_id), str(workflow_run_id), str(owner_user_id)),
+                )
+            ).fetchone()
+        return self._approval_from_row(row) if row is not None else None
 
     async def create_pending(self, approval: Approval) -> Approval:
         """Persist one validated pending approval without changing its intent."""
@@ -1378,9 +1527,7 @@ class SQLiteSessionMetadataStore:
             return WorkflowStatus(status)
         except ValueError as error:
             allowed = ", ".join(item.value for item in WorkflowStatus)
-            raise InvalidSessionStatusError(
-                f"Session status must be one of: {allowed}"
-            ) from error
+            raise InvalidSessionStatusError(f"Session status must be one of: {allowed}") from error
 
     @staticmethod
     def _session_from_row(row: aiosqlite.Row) -> SessionMetadata:
@@ -1404,6 +1551,18 @@ class WorkflowRunContextMismatchError(PermissionError):
     """Raised when a workflow run does not match its parent session context."""
 
 
+class WorkflowAdmissionConflictError(RuntimeError):
+    """An admission key or active-run slot conflicts with different work."""
+
+
+class WorkflowResultConflictError(RuntimeError):
+    """An immutable workflow checkpoint already contains different content."""
+
+
+class WorkflowApprovalConflictError(RuntimeError):
+    """Pending approval preparation conflicts with durable output state."""
+
+
 class SQLiteWorkflowStore:
     """Durable workflow sessions, runs, and messages for the local service."""
 
@@ -1412,6 +1571,681 @@ class SQLiteWorkflowStore:
 
     def __init__(self, database: LocalSQLiteDatabase) -> None:
         self._database = database
+
+    async def admit_run(self, request: WorkflowRunAdmissionRequest) -> WorkflowRunAdmission:
+        """Atomically create or replay a run, message, inputs, and accepted event."""
+
+        self._validate_admission_request(request)
+        semantic_hash = self._admission_hash(request)
+        try:
+            async with self._database.open() as connection:
+                await connection.execute("BEGIN IMMEDIATE")
+                replay = await self._load_admission(
+                    connection,
+                    session_id=request.run.session_id,
+                    client_message_id=request.message.client_message_id,
+                    semantic_hash=semantic_hash,
+                    status=WorkflowAdmissionStatus.REPLAYED,
+                )
+                if replay is not None:
+                    return replay
+                await self._require_admission_context(connection, request)
+                await self._insert_run(connection, request.run)
+                await self._insert_message(connection, request.message)
+                for ordinal, upload in enumerate(request.selected_uploads):
+                    await connection.execute(
+                        """INSERT INTO workflow_run_inputs (
+                            workflow_run_id, ordinal, upload_id, source_id,
+                            file_name, mime_type, size_bytes, sha256
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            str(request.run.workflow_run_id),
+                            ordinal,
+                            str(upload.upload_id),
+                            str(upload.source_id),
+                            upload.file_name,
+                            upload.mime_type,
+                            upload.size_bytes,
+                            upload.sha256,
+                        ),
+                    )
+                await connection.execute(
+                    """INSERT INTO workflow_run_admissions (
+                        session_id, client_message_id, workflow_run_id, message_id,
+                        owner_user_id, semantic_hash, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        str(request.run.session_id),
+                        str(request.message.client_message_id),
+                        str(request.run.workflow_run_id),
+                        str(request.message.message_id),
+                        str(request.run.owner_user_id),
+                        semantic_hash,
+                        request.run.created_at.isoformat(),
+                    ),
+                )
+                event = await _insert_activity_event(
+                    connection,
+                    ActivityEvent(
+                        event_id=0,
+                        session_id=request.run.session_id,
+                        workflow_run_id=request.run.workflow_run_id,
+                        event_type=ActivityEventType.MESSAGE_ACCEPTED,
+                        occurred_at=request.message.created_at,
+                        payload={"messageId": str(request.message.message_id)},
+                    ),
+                    owner_user_id=request.run.owner_user_id,
+                )
+                await self._update_projection(connection, request.run)
+                return WorkflowRunAdmission(
+                    status=WorkflowAdmissionStatus.CREATED,
+                    run=request.run,
+                    message=request.message,
+                    selected_uploads=request.selected_uploads,
+                    accepted_event=event,
+                )
+        except aiosqlite.IntegrityError as error:
+            async with self._database.open() as connection:
+                replay = await self._load_admission(
+                    connection,
+                    session_id=request.run.session_id,
+                    client_message_id=request.message.client_message_id,
+                    semantic_hash=semantic_hash,
+                    status=WorkflowAdmissionStatus.REPLAYED,
+                )
+            if replay is not None:
+                return replay
+            raise WorkflowAdmissionConflictError(
+                "session already has different nonterminal work"
+            ) from error
+
+    @staticmethod
+    def _validate_admission_request(request: WorkflowRunAdmissionRequest) -> None:
+        run, message = request.run, request.message
+        if message.client_message_id is None or message.role != "user":
+            raise ValueError("admission requires an idempotent user message")
+        if (
+            message.session_id != run.session_id
+            or message.author_user_id != run.owner_user_id
+            or run.stage is not WorkflowStage.COLLECTING_INPUTS
+            or run.status is not WorkflowRunStatus.QUEUED
+            or any(
+                upload.session_id != run.session_id or upload.owner_user_id != run.owner_user_id
+                for upload in request.selected_uploads
+            )
+        ):
+            raise WorkflowRunContextMismatchError("admission context is inconsistent")
+        upload_ids = tuple(item.upload_id for item in request.selected_uploads)
+        if len(upload_ids) != len(set(upload_ids)):
+            raise ValueError("selected uploads must be unique")
+
+    @staticmethod
+    def _admission_hash(request: WorkflowRunAdmissionRequest) -> str:
+        semantic = {
+            "sessionId": str(request.run.session_id),
+            "ownerUserId": str(request.run.owner_user_id),
+            "workflowType": request.run.workflow_type.value,
+            "message": request.message.content.strip(),
+            "uploads": [
+                upload.model_dump(mode="json", by_alias=True) for upload in request.selected_uploads
+            ],
+        }
+        encoded = json.dumps(
+            semantic, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    async def _require_admission_context(
+        connection: aiosqlite.Connection, request: WorkflowRunAdmissionRequest
+    ) -> None:
+        row = await (
+            await connection.execute(
+                """SELECT workflow_type, status FROM workflow_sessions
+                WHERE session_id = ? AND owner_user_id = ?""",
+                (str(request.run.session_id), str(request.run.owner_user_id)),
+            )
+        ).fetchone()
+        if (
+            row is None
+            or row["workflow_type"] != request.run.workflow_type.value
+            or row["status"] != WorkflowStatus.ACTIVE.value
+        ):
+            raise WorkflowRunContextMismatchError("admission requires an active owned session")
+        for upload in request.selected_uploads:
+            stored = await (
+                await connection.execute(
+                    """SELECT u.source_id, u.file_name, u.mime_type, u.size_bytes,
+                              u.sha256, s.owner_user_id
+                    FROM workflow_uploads AS u
+                    JOIN workflow_sessions AS s ON s.session_id = u.session_id
+                    WHERE u.upload_id = ? AND u.session_id = ?""",
+                    (str(upload.upload_id), str(upload.session_id)),
+                )
+            ).fetchone()
+            expected = (
+                str(upload.source_id),
+                upload.file_name,
+                upload.mime_type,
+                upload.size_bytes,
+                upload.sha256,
+                str(upload.owner_user_id),
+            )
+            if stored is None or tuple(stored) != expected:
+                raise WorkflowRunContextMismatchError("selected upload metadata changed")
+
+    @staticmethod
+    async def _insert_run(connection: aiosqlite.Connection, run: WorkflowRun) -> None:
+        await connection.execute(
+            """INSERT INTO workflow_runs (
+                workflow_run_id, session_id, owner_user_id, workflow_type,
+                stage, stage_version, status, sandbox_attempts, created_at,
+                updated_at, execution_lease_expires_at, interrupted_at, retryable
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(run.workflow_run_id),
+                str(run.session_id),
+                str(run.owner_user_id),
+                run.workflow_type.value,
+                run.stage.value,
+                run.stage_version,
+                run.status.value,
+                run.sandbox_attempts,
+                run.created_at.isoformat(),
+                run.updated_at.isoformat(),
+                run.execution_lease_expires_at.isoformat()
+                if run.execution_lease_expires_at
+                else None,
+                run.interrupted_at.isoformat() if run.interrupted_at else None,
+                int(run.retryable),
+            ),
+        )
+
+    @staticmethod
+    async def _insert_message(connection: aiosqlite.Connection, message: WorkflowMessage) -> None:
+        await connection.execute(
+            """INSERT INTO workflow_messages (
+                message_id, session_id, author_user_id, role, content,
+                created_at, client_message_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(message.message_id),
+                str(message.session_id),
+                str(message.author_user_id) if message.author_user_id else None,
+                message.role,
+                message.content.strip(),
+                message.created_at.isoformat(),
+                str(message.client_message_id),
+            ),
+        )
+
+    async def _load_admission(
+        self,
+        connection: aiosqlite.Connection,
+        *,
+        session_id: UUID,
+        client_message_id: UUID | None,
+        semantic_hash: str,
+        status: WorkflowAdmissionStatus,
+    ) -> WorkflowRunAdmission | None:
+        if client_message_id is None:
+            return None
+        row = await (
+            await connection.execute(
+                f"""SELECT r.{_WORKFLOW_RUN_COLUMNS.replace(", ", ", r.")},
+                    a.semantic_hash, m.message_id, m.author_user_id, m.role,
+                    m.content, m.created_at AS message_created_at,
+                    m.client_message_id
+                FROM workflow_run_admissions AS a
+                JOIN workflow_runs AS r ON r.workflow_run_id = a.workflow_run_id
+                JOIN workflow_messages AS m ON m.message_id = a.message_id
+                WHERE a.session_id = ? AND a.client_message_id = ?""",
+                (str(session_id), str(client_message_id)),
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        if row["semantic_hash"] != semantic_hash:
+            raise WorkflowAdmissionConflictError("admission idempotency key conflicts")
+        run = self._workflow_run_from_row(row)
+        message = WorkflowMessage(
+            message_id=row["message_id"],
+            session_id=run.session_id,
+            author_user_id=row["author_user_id"],
+            role=row["role"],
+            content=row["content"],
+            created_at=row["message_created_at"],
+            client_message_id=row["client_message_id"],
+        )
+        input_rows = await (
+            await connection.execute(
+                """SELECT i.*, r.session_id, r.owner_user_id
+                FROM workflow_run_inputs AS i JOIN workflow_runs AS r USING(workflow_run_id)
+                WHERE i.workflow_run_id = ? ORDER BY i.ordinal""",
+                (str(run.workflow_run_id),),
+            )
+        ).fetchall()
+        uploads = tuple(
+            SelectedUploadSnapshot(
+                upload_id=item["upload_id"],
+                session_id=item["session_id"],
+                owner_user_id=item["owner_user_id"],
+                source_id=item["source_id"],
+                file_name=item["file_name"],
+                mime_type=item["mime_type"],
+                size_bytes=item["size_bytes"],
+                sha256=item["sha256"],
+            )
+            for item in input_rows
+        )
+        event_row = await (
+            await connection.execute(
+                """SELECT * FROM activity_events WHERE session_id = ?
+                AND workflow_run_id = ? AND event_type = 'message.accepted'""",
+                (str(run.session_id), str(run.workflow_run_id)),
+            )
+        ).fetchone()
+        if event_row is None:
+            raise RuntimeError("durable admission is missing its accepted event")
+        return WorkflowRunAdmission(
+            status=status,
+            run=run,
+            message=message,
+            selected_uploads=uploads,
+            accepted_event=SQLiteActivityEventStore._event_from_row(event_row),
+        )
+
+    @staticmethod
+    async def _update_projection(connection: aiosqlite.Connection, run: WorkflowRun) -> None:
+        cursor = await connection.execute(
+            """UPDATE workflow_sessions SET stage = ?, status = ?, updated_at = ?
+            WHERE session_id = ? AND owner_user_id = ? AND workflow_type = ?""",
+            (
+                run.stage.value,
+                SQLiteWorkflowStore._session_status(run.status).value,
+                run.updated_at.isoformat(),
+                str(run.session_id),
+                str(run.owner_user_id),
+                run.workflow_type.value,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise WorkflowRunContextMismatchError("session projection update failed")
+
+    async def save_findings(self, result: StoredExtractionFindings) -> StoredExtractionFindings:
+        payload = self._canonical_models(result.findings)
+        sources = json.dumps(
+            [str(item) for item in result.source_upload_ids], separators=(",", ":")
+        )
+        await self._save_result(
+            "extraction_findings",
+            result.session_id,
+            result.workflow_run_id,
+            result.owner_user_id,
+            payload,
+            result.created_at,
+            sources,
+        )
+        return result
+
+    async def save_evidence(self, result: StoredRetrievedEvidence) -> StoredRetrievedEvidence:
+        payload = self._canonical_models(result.evidence)
+        await self._save_result(
+            "retrieved_evidence",
+            result.session_id,
+            result.workflow_run_id,
+            result.owner_user_id,
+            payload,
+            result.created_at,
+        )
+        return result
+
+    async def _save_result(
+        self,
+        table: str,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+        payload: str,
+        created_at: UtcTimestamp,
+        sources: str | None = None,
+    ) -> None:
+        if len(payload.encode()) > 1024 * 1024:
+            raise ValueError("workflow result exceeds 1 MiB")
+        async with self._database.open() as connection:
+            await connection.execute("BEGIN IMMEDIATE")
+            row = await (
+                await connection.execute(
+                    f"SELECT * FROM {table} WHERE workflow_run_id = ?",
+                    (str(workflow_run_id),),
+                )
+            ).fetchone()
+            if row is not None:
+                field = "findings_json" if table == "extraction_findings" else "evidence_json"
+                same = (
+                    row["session_id"] == str(session_id)
+                    and row["owner_user_id"] == str(owner_user_id)
+                    and row[field] == payload
+                    and row["created_at"] == created_at.isoformat()
+                    and (sources is None or row["source_upload_ids_json"] == sources)
+                )
+                if not same:
+                    raise WorkflowResultConflictError("immutable workflow result conflicts")
+                return
+            owned = await (
+                await connection.execute(
+                    """SELECT 1 FROM workflow_runs WHERE workflow_run_id = ?
+                    AND session_id = ? AND owner_user_id = ?""",
+                    (str(workflow_run_id), str(session_id), str(owner_user_id)),
+                )
+            ).fetchone()
+            if owned is None:
+                raise WorkflowRunContextMismatchError("result does not match an owned run")
+            if table == "extraction_findings":
+                await connection.execute(
+                    "INSERT INTO extraction_findings VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        str(workflow_run_id),
+                        str(session_id),
+                        str(owner_user_id),
+                        sources,
+                        payload,
+                        created_at.isoformat(),
+                    ),
+                )
+            else:
+                await connection.execute(
+                    "INSERT INTO retrieved_evidence VALUES (?, ?, ?, ?, ?)",
+                    (
+                        str(workflow_run_id),
+                        str(session_id),
+                        str(owner_user_id),
+                        payload,
+                        created_at.isoformat(),
+                    ),
+                )
+
+    async def get_findings(
+        self, *, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
+    ) -> StoredExtractionFindings | None:
+        row = await self._get_result(
+            "extraction_findings", session_id, workflow_run_id, owner_user_id
+        )
+        if row is None:
+            return None
+        from app.ai.schemas import Finding
+
+        return StoredExtractionFindings(
+            session_id=session_id,
+            workflow_run_id=workflow_run_id,
+            owner_user_id=owner_user_id,
+            source_upload_ids=tuple(
+                UUID(item) for item in json.loads(row["source_upload_ids_json"])
+            ),
+            findings=tuple(
+                Finding.model_validate_json(json.dumps(item), strict=True)
+                for item in json.loads(row["findings_json"])
+            ),
+            created_at=row["created_at"],
+        )
+
+    async def get_evidence(
+        self, *, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
+    ) -> StoredRetrievedEvidence | None:
+        row = await self._get_result(
+            "retrieved_evidence", session_id, workflow_run_id, owner_user_id
+        )
+        if row is None:
+            return None
+        from app.ai.schemas import EvidenceChunk
+
+        return StoredRetrievedEvidence(
+            session_id=session_id,
+            workflow_run_id=workflow_run_id,
+            owner_user_id=owner_user_id,
+            evidence=tuple(
+                EvidenceChunk.model_validate_json(json.dumps(item), strict=True)
+                for item in json.loads(row["evidence_json"])
+            ),
+            created_at=row["created_at"],
+        )
+
+    async def _get_result(
+        self, table: str, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
+    ) -> aiosqlite.Row | None:
+        async with self._database.open() as connection:
+            return await (
+                await connection.execute(
+                    f"""SELECT * FROM {table} WHERE workflow_run_id = ?
+                    AND session_id = ? AND owner_user_id = ?""",
+                    (str(workflow_run_id), str(session_id), str(owner_user_id)),
+                )
+            ).fetchone()
+
+    @staticmethod
+    def _canonical_models(values: tuple[BaseModel, ...]) -> str:
+        return json.dumps(
+            [item.model_dump(mode="json", by_alias=True) for item in values],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+
+    async def prepare_pending_approval(
+        self,
+        *,
+        run: WorkflowRun,
+        approval: Approval,
+        output: ValidatedToolCall,
+    ) -> PendingApprovalPreparation:
+        """Persist output, approval, transition, projection, and event atomically."""
+
+        normalized = output.arguments.model_dump(mode="json", by_alias=True)
+        normalized_json = json.dumps(
+            normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        computed_hash = hashlib.sha256(normalized_json.encode()).hexdigest()
+        if (
+            run.status is not WorkflowRunStatus.ACTIVE
+            or approval.session_id != run.session_id
+            or approval.workflow_run_id != run.workflow_run_id
+            or approval.owner_user_id != run.owner_user_id
+            or approval.workflow_type is not run.workflow_type
+            or approval.stage is not WorkflowStage.AWAITING_APPROVAL
+            or approval.stage_version != run.stage_version + 1
+            or approval.tool_name != output.tool_name.value
+            or approval.normalized_arguments != normalized
+            or approval.arguments_hash != computed_hash
+            or approval.status is not ApprovalStatus.PENDING
+        ):
+            raise WorkflowApprovalConflictError("pending approval context is inconsistent")
+        try:
+            async with self._database.open() as connection:
+                await connection.execute("BEGIN IMMEDIATE")
+                existing = await self._load_prepared_approval(
+                    connection, run, approval, output, normalized_json, computed_hash
+                )
+                if existing is not None:
+                    return existing
+                current_row = await (
+                    await connection.execute(
+                        f"""SELECT {_WORKFLOW_RUN_COLUMNS} FROM workflow_runs
+                        WHERE workflow_run_id = ? AND session_id = ? AND owner_user_id = ?
+                        AND stage = ? AND stage_version = ? AND status = 'active'""",
+                        (
+                            str(run.workflow_run_id),
+                            str(run.session_id),
+                            str(run.owner_user_id),
+                            run.stage.value,
+                            run.stage_version,
+                        ),
+                    )
+                ).fetchone()
+                if current_row is None:
+                    raise WorkflowApprovalConflictError("workflow state changed")
+                if output.tool_name.value == "request_document_export":
+                    draft_id = normalized.get("draftId")
+                    draft = await (
+                        await connection.execute(
+                            """SELECT 1 FROM grounded_drafts WHERE draft_id = ?
+                            AND workflow_run_id = ? AND session_id = ? AND owner_user_id = ?""",
+                            (
+                                draft_id,
+                                str(run.workflow_run_id),
+                                str(run.session_id),
+                                str(run.owner_user_id),
+                            ),
+                        )
+                    ).fetchone()
+                    if draft is None:
+                        raise WorkflowApprovalConflictError("approved draft is not durable")
+                await connection.execute(
+                    """INSERT INTO approvals (
+                        approval_id, session_id, workflow_run_id, owner_user_id,
+                        workflow_type, stage, stage_version, tool_name,
+                        normalized_arguments, arguments_hash, status, requested_at,
+                        execution_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'notStarted')""",
+                    (
+                        str(approval.approval_id),
+                        str(approval.session_id),
+                        str(approval.workflow_run_id),
+                        str(approval.owner_user_id),
+                        approval.workflow_type.value,
+                        approval.stage.value,
+                        approval.stage_version,
+                        approval.tool_name,
+                        normalized_json,
+                        computed_hash,
+                        approval.requested_at.isoformat(),
+                    ),
+                )
+                await connection.execute(
+                    """INSERT INTO workflow_outputs VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        str(run.workflow_run_id),
+                        str(run.session_id),
+                        str(run.owner_user_id),
+                        str(approval.approval_id),
+                        output.tool_name.value,
+                        normalized_json,
+                        computed_hash,
+                        approval.requested_at.isoformat(),
+                    ),
+                )
+                next_run = run.model_copy(
+                    update={
+                        "stage": WorkflowStage.AWAITING_APPROVAL,
+                        "stage_version": run.stage_version + 1,
+                        "status": WorkflowRunStatus.WAITING_FOR_APPROVAL,
+                        "updated_at": approval.requested_at,
+                        "execution_lease_expires_at": None,
+                    }
+                )
+                cursor = await connection.execute(
+                    """UPDATE workflow_runs SET stage = ?, stage_version = ?, status = ?,
+                        updated_at = ?, execution_lease_expires_at = NULL
+                    WHERE workflow_run_id = ? AND stage = ? AND stage_version = ?
+                    AND status = 'active'""",
+                    (
+                        next_run.stage.value,
+                        next_run.stage_version,
+                        next_run.status.value,
+                        next_run.updated_at.isoformat(),
+                        str(run.workflow_run_id),
+                        run.stage.value,
+                        run.stage_version,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise WorkflowApprovalConflictError("workflow transition lost its race")
+                await self._update_projection(connection, next_run)
+                event = await _insert_activity_event(
+                    connection,
+                    ActivityEvent(
+                        event_id=0,
+                        session_id=run.session_id,
+                        workflow_run_id=run.workflow_run_id,
+                        event_type=ActivityEventType.APPROVAL_REQUIRED,
+                        occurred_at=approval.requested_at,
+                        payload={"approvalId": str(approval.approval_id)},
+                    ),
+                    owner_user_id=run.owner_user_id,
+                )
+                return PendingApprovalPreparation(
+                    run=next_run,
+                    approval=approval,
+                    output=output,
+                    required_event=event,
+                    created_now=True,
+                )
+        except aiosqlite.IntegrityError as error:
+            async with self._database.open() as connection:
+                existing = await self._load_prepared_approval(
+                    connection, run, approval, output, normalized_json, computed_hash
+                )
+            if existing is not None:
+                return existing
+            raise WorkflowApprovalConflictError("pending approval conflicts") from error
+
+    async def _load_prepared_approval(
+        self,
+        connection: aiosqlite.Connection,
+        run: WorkflowRun,
+        approval: Approval,
+        output: ValidatedToolCall,
+        normalized_json: str,
+        computed_hash: str,
+    ) -> PendingApprovalPreparation | None:
+        row = await (
+            await connection.execute(
+                """SELECT a.*, o.tool_name AS output_tool,
+                    o.normalized_arguments AS output_arguments,
+                    o.arguments_hash AS output_hash
+                FROM workflow_outputs AS o JOIN approvals AS a USING(approval_id)
+                WHERE o.workflow_run_id = ?""",
+                (str(run.workflow_run_id),),
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        stored_approval = SQLiteApprovalStore._approval_from_row(row)
+        same = (
+            stored_approval.session_id == approval.session_id
+            and stored_approval.workflow_run_id == approval.workflow_run_id
+            and stored_approval.owner_user_id == approval.owner_user_id
+            and stored_approval.workflow_type is approval.workflow_type
+            and stored_approval.stage is approval.stage
+            and stored_approval.stage_version == approval.stage_version
+            and stored_approval.status is ApprovalStatus.PENDING
+            and row["output_tool"] == output.tool_name.value
+            and row["output_arguments"] == normalized_json
+            and row["output_hash"] == computed_hash
+        )
+        if not same:
+            raise WorkflowApprovalConflictError("durable approval output conflicts")
+        current = await (
+            await connection.execute(
+                f"SELECT {_WORKFLOW_RUN_COLUMNS} FROM workflow_runs WHERE workflow_run_id = ?",
+                (str(run.workflow_run_id),),
+            )
+        ).fetchone()
+        event_row = await (
+            await connection.execute(
+                """SELECT * FROM activity_events WHERE workflow_run_id = ?
+                AND event_type = 'approval.required'""",
+                (str(run.workflow_run_id),),
+            )
+        ).fetchone()
+        if current is None or event_row is None:
+            raise WorkflowApprovalConflictError("prepared approval is incomplete")
+        return PendingApprovalPreparation(
+            run=self._workflow_run_from_row(current),
+            approval=stored_approval,
+            output=output,
+            required_event=SQLiteActivityEventStore._event_from_row(event_row),
+            created_now=False,
+        )
 
     async def create_session(self, session: WorkflowSession) -> WorkflowSession:
         """Insert one owned workflow session.
@@ -1475,9 +2309,10 @@ class SQLiteWorkflowStore:
                     """INSERT INTO workflow_runs (
                         workflow_run_id, session_id, owner_user_id, workflow_type,
                         stage, stage_version, status, sandbox_attempts,
-                        created_at, updated_at
+                        created_at, updated_at, execution_lease_expires_at,
+                        interrupted_at, retryable
                     )
-                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     FROM workflow_sessions
                     WHERE session_id = ? AND owner_user_id = ? AND workflow_type = ?""",
                     (
@@ -1491,6 +2326,11 @@ class SQLiteWorkflowStore:
                         run.sandbox_attempts,
                         run.created_at.isoformat(),
                         run.updated_at.isoformat(),
+                        run.execution_lease_expires_at.isoformat()
+                        if run.execution_lease_expires_at is not None
+                        else None,
+                        run.interrupted_at.isoformat() if run.interrupted_at is not None else None,
+                        int(run.retryable),
                         str(run.session_id),
                         str(run.owner_user_id),
                         run.workflow_type.value,
@@ -1582,6 +2422,7 @@ class SQLiteWorkflowStore:
         next_stage: WorkflowStage,
         next_status: WorkflowRunStatus,
         sandbox_attempts: int,
+        lease_expires_at: UtcTimestamp | None = None,
     ) -> WorkflowRun | None:
         """Atomically apply one Backend 1-selected transition to a matching run."""
 
@@ -1613,12 +2454,16 @@ class SQLiteWorkflowStore:
                     "status": next_status,
                     "sandbox_attempts": sandbox_attempts,
                     "updated_at": updated_at,
+                    "execution_lease_expires_at": lease_expires_at,
+                    "interrupted_at": None,
+                    "retryable": False,
                 }
             )
             update_cursor = await connection.execute(
                 """UPDATE workflow_runs
                 SET stage = ?, stage_version = ?, status = ?, sandbox_attempts = ?,
-                    updated_at = ?
+                    updated_at = ?, execution_lease_expires_at = ?,
+                    interrupted_at = NULL, retryable = 0
                 WHERE workflow_run_id = ? AND session_id = ? AND owner_user_id = ?
                   AND stage = ? AND stage_version = ?""",
                 (
@@ -1627,6 +2472,9 @@ class SQLiteWorkflowStore:
                     updated.status.value,
                     updated.sandbox_attempts,
                     updated.updated_at.isoformat(),
+                    updated.execution_lease_expires_at.isoformat()
+                    if updated.execution_lease_expires_at
+                    else None,
                     str(workflow_run_id),
                     str(session_id),
                     str(owner_user_id),
@@ -1705,9 +2553,7 @@ class SQLiteWorkflowStore:
                 (
                     str(message.message_id),
                     str(message.session_id),
-                    str(message.author_user_id)
-                    if message.author_user_id is not None
-                    else None,
+                    str(message.author_user_id) if message.author_user_id is not None else None,
                     message.role,
                     message.content,
                     message.created_at.isoformat(),
@@ -1765,9 +2611,7 @@ class SQLiteWorkflowStore:
             rows = await cursor.fetchall()
         return [self._workflow_session_from_row(row) for row in rows]
 
-    async def get_session(
-        self, session_id: UUID, owner_user_id: UUID
-    ) -> WorkflowSession:
+    async def get_session(self, session_id: UUID, owner_user_id: UUID) -> WorkflowSession:
         """Return one owned session or raise without revealing other owners' data."""
 
         async with self._database.open() as connection:
@@ -1782,14 +2626,10 @@ class SQLiteWorkflowStore:
             )
             row = await cursor.fetchone()
         if row is None:
-            raise WorkflowSessionNotFoundError(
-                f"Workflow session not found: {session_id}"
-            )
+            raise WorkflowSessionNotFoundError(f"Workflow session not found: {session_id}")
         return self._workflow_session_from_row(row)
 
-    async def list_messages(
-        self, session_id: UUID, owner_user_id: UUID
-    ) -> list[WorkflowMessage]:
+    async def list_messages(self, session_id: UUID, owner_user_id: UUID) -> list[WorkflowMessage]:
         """Return the latest owned messages in durable chronological order."""
 
         async with self._database.open() as connection:
@@ -1822,11 +2662,81 @@ class SQLiteWorkflowStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             client_session_id=(
-                UUID(row["client_session_id"])
-                if row["client_session_id"] is not None
-                else None
+                UUID(row["client_session_id"]) if row["client_session_id"] is not None else None
             ),
         )
+
+    async def list_unfinished_runs(self) -> list[WorkflowRun]:
+        """Return internal recovery candidates without exposing them through HTTP."""
+
+        placeholders = ",".join("?" for _ in _NONTERMINAL_RUN_STATUSES)
+        async with self._database.open() as connection:
+            rows = await (
+                await connection.execute(
+                    f"""SELECT {_WORKFLOW_RUN_COLUMNS} FROM workflow_runs
+                    WHERE status IN ({placeholders}) ORDER BY sequence""",
+                    _NONTERMINAL_RUN_STATUSES,
+                )
+            ).fetchall()
+        return [self._workflow_run_from_row(row) for row in rows]
+
+    async def mark_stale_runs_interrupted(
+        self, *, stale_before: UtcTimestamp, interrupted_at: UtcTimestamp
+    ) -> list[WorkflowRun]:
+        """Idempotently mark expired active operations retryable."""
+
+        async with self._database.open() as connection:
+            await connection.execute("BEGIN IMMEDIATE")
+            changed = await connection.execute(
+                """UPDATE workflow_runs SET interrupted_at = ?, retryable = 1,
+                    execution_lease_expires_at = NULL
+                WHERE status = 'active' AND retryable = 0
+                  AND execution_lease_expires_at IS NOT NULL
+                  AND execution_lease_expires_at <= ?
+                RETURNING workflow_run_id""",
+                (interrupted_at.isoformat(), stale_before.isoformat()),
+            )
+            identifiers = [row["workflow_run_id"] for row in await changed.fetchall()]
+            if not identifiers:
+                return []
+            placeholders = ",".join("?" for _ in identifiers)
+            rows = await (
+                await connection.execute(
+                    f"""SELECT {_WORKFLOW_RUN_COLUMNS} FROM workflow_runs
+                    WHERE workflow_run_id IN ({placeholders}) ORDER BY sequence""",
+                    identifiers,
+                )
+            ).fetchall()
+        return [self._workflow_run_from_row(row) for row in rows]
+
+    async def claim_retry(
+        self, *, workflow_run_id: UUID, expected_stage_version: int, lease_expires_at: UtcTimestamp
+    ) -> WorkflowRun | None:
+        """Claim one interrupted run using its existing stage-version CAS."""
+
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                """UPDATE workflow_runs SET retryable = 0, interrupted_at = NULL,
+                    execution_lease_expires_at = ?, stage_version = stage_version + 1,
+                    updated_at = ?
+                WHERE workflow_run_id = ? AND stage_version = ?
+                  AND status = 'active' AND retryable = 1""",
+                (
+                    lease_expires_at.isoformat(),
+                    datetime.now(UTC).isoformat(),
+                    str(workflow_run_id),
+                    expected_stage_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = await (
+                await connection.execute(
+                    f"SELECT {_WORKFLOW_RUN_COLUMNS} FROM workflow_runs WHERE workflow_run_id = ?",
+                    (str(workflow_run_id),),
+                )
+            ).fetchone()
+        return self._workflow_run_from_row(row) if row is not None else None
 
     @staticmethod
     def _workflow_run_from_row(row: aiosqlite.Row) -> WorkflowRun:
@@ -1841,6 +2751,9 @@ class SQLiteWorkflowStore:
             sandbox_attempts=row["sandbox_attempts"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            execution_lease_expires_at=row["execution_lease_expires_at"],
+            interrupted_at=row["interrupted_at"],
+            retryable=bool(row["retryable"]),
         )
 
     @staticmethod
@@ -1865,17 +2778,13 @@ class SQLiteWorkflowStore:
             message_id=UUID(row["message_id"]),
             session_id=UUID(row["session_id"]),
             author_user_id=(
-                UUID(row["author_user_id"])
-                if row["author_user_id"] is not None
-                else None
+                UUID(row["author_user_id"]) if row["author_user_id"] is not None else None
             ),
             role=row["role"],
             content=row["content"],
             created_at=row["created_at"],
             client_message_id=(
-                UUID(row["client_message_id"])
-                if row["client_message_id"] is not None
-                else None
+                UUID(row["client_message_id"]) if row["client_message_id"] is not None else None
             ),
         )
 
@@ -1925,8 +2834,6 @@ class SQLiteActivityEventStore:
 
         if event.event_id != 0:
             raise ValueError("new activity events must use event_id=0")
-        payload_json = self._serialize_payload(event.payload)
-
         async with self._database.open() as connection:
             await connection.execute("BEGIN IMMEDIATE")
             await self._require_owned_session(
@@ -1942,35 +2849,8 @@ class SQLiteActivityEventStore:
                     owner_user_id=owner_user_id,
                 )
 
-            cursor = await connection.execute(
-                """SELECT COALESCE(MAX(event_id), 0) + 1 AS next_event_id
-                FROM activity_events WHERE session_id = ?""",
-                (str(event.session_id),),
-            )
-            row = await cursor.fetchone()
-            if row is None:
-                raise RuntimeError("next activity event ID could not be allocated")
-            event_id = int(row["next_event_id"])
-
-            await connection.execute(
-                """INSERT INTO activity_events (
-                    session_id, event_id, owner_user_id, workflow_run_id,
-                    event_type, occurred_at, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    str(event.session_id),
-                    event_id,
-                    str(owner_user_id),
-                    str(event.workflow_run_id)
-                    if event.workflow_run_id is not None
-                    else None,
-                    event.event_type.value,
-                    event.occurred_at.isoformat(),
-                    payload_json,
-                ),
-            )
-
-        return event.model_copy(update={"event_id": event_id})
+            persisted = await _insert_activity_event(connection, event, owner_user_id=owner_user_id)
+        return persisted
 
     async def replay(
         self,

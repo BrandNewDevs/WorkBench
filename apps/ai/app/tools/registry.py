@@ -242,6 +242,7 @@ class ToolRegistry:
                     approval_id=approval.approval_id,
                     session_id=workflow_run.session_id,
                     workflow_run_id=workflow_run.workflow_run_id,
+                    execution_claim_token=claim.execution_claim_token,
                     arguments=call.arguments,
                 )
             )

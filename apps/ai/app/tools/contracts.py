@@ -92,6 +92,7 @@ class SandboxExecutionRequest(ApiContractModel):
     approval_id: UUID
     session_id: UUID
     workflow_run_id: UUID
+    execution_claim_token: UUID
     arguments: SandboxArguments
 
 
@@ -132,6 +133,12 @@ class SandboxExecutionResult(ApiContractModel):
     exit_code: int | None = None
     passed: bool | None = None
     failure_code: str | None = Field(default=None, max_length=100)
+    stdout: str = Field(default="", max_length=65_536)
+    stderr: str = Field(default="", max_length=65_536)
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    timed_out: bool = False
+    duration_ms: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def require_consistent_execution_result(self) -> "SandboxExecutionResult":

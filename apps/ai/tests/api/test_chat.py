@@ -14,6 +14,7 @@ from app.config import ApplicationSettings
 from app.health import ApplicationDependencies
 from app.ipc_service import _dispatch
 from app.main import create_app
+from app.ports.local_backend import WorkflowRunAdmission
 from app.storage import (
     LocalSQLiteDatabase,
     SQLiteAuthSessionStore,
@@ -25,6 +26,14 @@ ORIGIN = "http://127.0.0.1:5173"
 CAPABILITY = "A" * 43
 SECRET = "test-signing-secret-material-at-least-forty-eight-bytes-long"
 PASSWORD = "correct horse battery staple"
+
+
+class RecordingWorkflowRunner:
+    def __init__(self) -> None:
+        self.admissions: list[WorkflowRunAdmission] = []
+
+    async def run(self, admission: WorkflowRunAdmission) -> None:
+        self.admissions.append(admission)
 
 
 def _frame(
@@ -102,9 +111,7 @@ async def _build_app_with_two_employees(tmp_path: Path) -> tuple[FastAPI, str, s
                 ),
             )
         )
-        cookie_pair = next(
-            value for name, value in response["headers"] if name == "set-cookie"
-        )
+        cookie_pair = next(value for name, value in response["headers"] if name == "set-cookie")
         assert isinstance(cookie_pair, str)
         return cookie_pair.split(";", 1)[0]
 
@@ -114,9 +121,7 @@ async def _build_app_with_two_employees(tmp_path: Path) -> tuple[FastAPI, str, s
     return app, first_cookie, second_cookie
 
 
-async def _create_session(
-    app: FastAPI, cookie: str, title: str = "Inspection review"
-) -> str:
+async def _create_session(app: FastAPI, cookie: str, title: str = "Inspection review") -> str:
     response = json.loads(
         await _dispatch(
             app,
@@ -245,9 +250,7 @@ async def test_chat_requires_capability_and_an_authenticated_employee(tmp_path: 
     app, cookie, _ = await _build_app_with_two_employees(tmp_path)
     async with app.router.lifespan_context(app):
         without_capability = json.loads(
-            await _dispatch(
-                app, _frame("no-capability", "GET", "/chat/sessions", capability=None)
-            )
+            await _dispatch(app, _frame("no-capability", "GET", "/chat/sessions", capability=None))
         )
         without_cookie = json.loads(
             await _dispatch(app, _frame("no-cookie", "GET", "/chat/sessions"))
@@ -360,22 +363,17 @@ async def test_create_list_and_append_chat_messages(tmp_path: Path) -> None:
     assert created["stage"] == "collectingInputs"
     assert created["status"] == "active"
     assert first_append["status"] == 200
-    assert second_append["status"] == 200
+    assert second_append["status"] == 409
     # A retry of a committed append returns the stored message unchanged, so
     # an ambiguous renderer failure can never duplicate the employee message.
-    assert committed_retry["status"] == 200
-    assert _payload(committed_retry)["messageId"] == _payload(second_append)["messageId"]
-    assert _payload(committed_retry)["clientMessageId"] == retry_key
-    assert conflicting_retry["status"] == 200
-    assert _payload(conflicting_retry)["content"] == "Second message"
+    assert committed_retry["status"] == 409
+    assert conflicting_retry["status"] == 409
     messages = _payload(listed)["messages"]
     assert listed["status"] == 200
-    assert isinstance(messages, list) and len(messages) == 2
+    assert isinstance(messages, list) and len(messages) == 1
     assert messages[0]["content"] == "Find the corrosion findings."
     assert messages[0]["role"] == "user"
     assert messages[0]["authorUserId"] == owner_id
-    assert messages[1]["content"] == "Second message"
-    assert messages[0]["createdAt"] <= messages[1]["createdAt"]
     listed_sessions = _payload(sessions)["sessions"]
     assert isinstance(listed_sessions, list) and len(listed_sessions) == 1
     assert listed_sessions[0]["sessionId"] == session_id
@@ -425,9 +423,7 @@ async def test_concurrent_retries_of_one_append_replay_the_stored_message(tmp_pa
         listed = json.loads(
             await _dispatch(
                 app,
-                _frame(
-                    "messages", "GET", f"/chat/sessions/{session_id}/messages", cookie=cookie
-                ),
+                _frame("messages", "GET", f"/chat/sessions/{session_id}/messages", cookie=cookie),
             )
         )
 
@@ -530,14 +526,53 @@ async def test_chat_data_is_scoped_to_the_owning_employee(tmp_path: Path) -> Non
             )
         )
         own_sessions = json.loads(
-            await _dispatch(
-                app, _frame("own", "GET", "/chat/sessions", cookie=second_cookie)
-            )
+            await _dispatch(app, _frame("own", "GET", "/chat/sessions", cookie=second_cookie))
         )
 
     assert foreign_messages["status"] == 404
     assert foreign_append["status"] == 404
     assert _payload(own_sessions)["sessions"] == []
+
+
+async def test_message_replay_does_not_launch_duplicate_work(tmp_path: Path) -> None:
+    app, cookie, _ = await _build_app_with_two_employees(tmp_path)
+    runner = RecordingWorkflowRunner()
+    app.state.workflow_runner = runner
+    async with app.router.lifespan_context(app):
+        session_id = await _create_session(app, cookie)
+        client_message_id = str(uuid4())
+        body: dict[str, object] = {
+            "content": "Inspect the selected evidence",
+            "clientMessageId": client_message_id,
+        }
+        first = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "message-created",
+                    "POST",
+                    f"/chat/sessions/{session_id}/messages",
+                    cookie=cookie,
+                    body=body,
+                ),
+            )
+        )
+        replay = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "message-replayed",
+                    "POST",
+                    f"/chat/sessions/{session_id}/messages",
+                    cookie=cookie,
+                    body=body,
+                ),
+            )
+        )
+
+    assert first["status"] == replay["status"] == 200
+    assert _payload(first)["messageId"] == _payload(replay)["messageId"]
+    assert len(runner.admissions) == 1
 
 
 class FailingAuditStore:
@@ -582,9 +617,9 @@ async def test_session_creation_survives_an_unavailable_audit_writer(tmp_path: P
                 ),
             )
         )
-        cookie = next(
-            value for name, value in login["headers"] if name == "set-cookie"
-        ).split(";", 1)[0]
+        cookie = next(value for name, value in login["headers"] if name == "set-cookie").split(
+            ";", 1
+        )[0]
         created = json.loads(
             await _dispatch(
                 app,

@@ -22,14 +22,23 @@ from app.ports.local_backend import (
     AuditRecord,
     AuditStore,
     ChatStore,
+    SelectedUploadSnapshot,
+    SessionFileStore,
+    WorkflowAdmissionStatus,
     WorkflowMessage,
+    WorkflowRunAdmissionRequest,
+    WorkflowStore,
 )
 from app.storage import SessionAlreadyExistsError, WorkflowSessionNotFoundError
+from app.storage.sqlite import WorkflowAdmissionConflictError
 from app.workflow.contracts import (
+    WorkflowRun,
+    WorkflowRunStatus,
     WorkflowSession,
     WorkflowStage,
     WorkflowStatus,
 )
+from app.workflow.runner import WorkflowRunner
 
 _UNAVAILABLE = ("chat_store_unavailable", "The local chat storage is unavailable.")
 _NOT_FOUND = (
@@ -70,6 +79,12 @@ def build_chat_router() -> APIRouter:
 
     def _audit_store(request: Request) -> AuditStore:
         return cast(AuditStore, request.app.state.audit_store)
+
+    def _session_files(request: Request) -> SessionFileStore | None:
+        return cast(
+            SessionFileStore | None,
+            getattr(request.app.state, "session_file_store", None),
+        )
 
     async def _owned_session(
         session_id: SessionId, user: AuthenticatedUser, request: Request
@@ -213,16 +228,62 @@ def build_chat_router() -> APIRouter:
         store = _chat_store(request)
         if store is None:
             return _error(*_UNAVAILABLE, 503)
-        return await store.append_message(
-            WorkflowMessage(
-                message_id=uuid4(),
-                session_id=session.session_id,
-                author_user_id=user.user_id,
-                role="user",
-                content=content,
-                created_at=datetime.now(UTC),
-                client_message_id=payload.client_message_id,
-            )
+        message = WorkflowMessage(
+            message_id=uuid4(),
+            session_id=session.session_id,
+            author_user_id=user.user_id,
+            role="user",
+            content=content,
+            created_at=datetime.now(UTC),
+            client_message_id=payload.client_message_id,
         )
+        workflow_store = cast(
+            WorkflowStore | None, getattr(request.app.state, "workflow_store", None)
+        )
+        files = _session_files(request)
+        if workflow_store is None or files is None:
+            return _error(*_UNAVAILABLE, 503)
+        snapshots: list[SelectedUploadSnapshot] = []
+        for upload_id in payload.selected_upload_ids:
+            approved = await files.resolve_approved_path(
+                upload_id=upload_id,
+                session_id=session.session_id,
+                owner_user_id=user.user_id,
+            )
+            stored = await files.get_upload(
+                upload_id=upload_id,
+                session_id=session.session_id,
+                owner_user_id=user.user_id,
+            )
+            if approved is None or stored is None:
+                return _error("upload_not_found", "A selected upload is unavailable.", 404)
+            snapshots.append(
+                SelectedUploadSnapshot(**stored.model_dump(), owner_user_id=user.user_id)
+            )
+        now = datetime.now(UTC)
+        try:
+            admission = await workflow_store.admit_run(
+                WorkflowRunAdmissionRequest(
+                    run=WorkflowRun(
+                        workflow_run_id=uuid4(),
+                        session_id=session.session_id,
+                        owner_user_id=user.user_id,
+                        workflow_type=session.workflow_type,
+                        stage=WorkflowStage.COLLECTING_INPUTS,
+                        stage_version=0,
+                        status=WorkflowRunStatus.QUEUED,
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    message=message,
+                    selected_uploads=tuple(snapshots),
+                )
+            )
+        except WorkflowAdmissionConflictError:
+            return _error("workflow_conflict", "This session already has active work.", 409)
+        runner = cast(WorkflowRunner | None, getattr(request.app.state, "workflow_runner", None))
+        if admission.status is WorkflowAdmissionStatus.CREATED and runner is not None:
+            await runner.run(admission)
+        return admission.message
 
     return router

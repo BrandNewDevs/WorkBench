@@ -85,21 +85,13 @@ async def test_initialize_creates_workflow_runs_without_public_sequence(
     await database.initialize()
 
     async with database.open() as connection:
-        columns = await (
-            await connection.execute("PRAGMA table_info(workflow_runs)")
-        ).fetchall()
-        indexes = await (
-            await connection.execute("PRAGMA index_list(workflow_runs)")
-        ).fetchall()
+        columns = await (await connection.execute("PRAGMA table_info(workflow_runs)")).fetchall()
+        indexes = await (await connection.execute("PRAGMA index_list(workflow_runs)")).fetchall()
         foreign_keys = list(
-            await (
-                await connection.execute("PRAGMA foreign_key_list(workflow_runs)")
-            ).fetchall()
+            await (await connection.execute("PRAGMA foreign_key_list(workflow_runs)")).fetchall()
         )
         tables = await (
-            await connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            await connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         ).fetchall()
 
     assert [row["name"] for row in columns] == [
@@ -114,6 +106,9 @@ async def test_initialize_creates_workflow_runs_without_public_sequence(
         "sandbox_attempts",
         "created_at",
         "updated_at",
+        "execution_lease_expires_at",
+        "interrupted_at",
+        "retryable",
     ]
     assert "sequence" not in WorkflowRun.model_fields
     assert "workflow_runs_session_current" in {row["name"] for row in indexes}
@@ -200,7 +195,11 @@ async def test_get_current_run_returns_newest_owner_scoped_run_after_restart(
     database, store = await _store(tmp_path)
     session = _session()
     empty_session = _session(owner_user_id=session.owner_user_id)
-    first_run = _run(session)
+    first_run = _run(
+        session,
+        stage=WorkflowStage.COMPLETED,
+        status=WorkflowRunStatus.COMPLETED,
+    )
     second_run = _run(
         session,
         stage=WorkflowStage.EXTRACTING,
@@ -434,7 +433,7 @@ async def test_concurrent_compare_and_set_has_exactly_one_winner(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_older_run_transition_does_not_replace_newer_session_projection(
+async def test_database_rejects_a_second_nonterminal_run(
     tmp_path: Path,
 ) -> None:
     _, store = await _store(tmp_path)
@@ -448,23 +447,8 @@ async def test_older_run_transition_does_not_replace_newer_session_projection(
     )
     await store.create_session(session)
     await store.create_run(older)
-    await store.create_run(newer)
-
-    transitioned = await store.compare_and_set_stage(
-        session_id=session.session_id,
-        workflow_run_id=older.workflow_run_id,
-        owner_user_id=session.owner_user_id,
-        expected_stage=older.stage,
-        expected_stage_version=older.stage_version,
-        next_stage=WorkflowStage.EXTRACTING,
-        next_status=WorkflowRunStatus.ACTIVE,
-        sandbox_attempts=0,
-    )
-    projected = await store.get_session(session.session_id, session.owner_user_id)
-
-    assert transitioned is not None
-    assert projected.stage is WorkflowStage.DRAFTING
-    assert projected.updated_at == newer.updated_at
+    with pytest.raises(WorkflowRunAlreadyExistsError):
+        await store.create_run(newer)
 
 
 @pytest.mark.asyncio

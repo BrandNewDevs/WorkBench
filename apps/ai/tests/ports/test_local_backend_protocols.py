@@ -40,6 +40,7 @@ def test_workflow_store_exposes_atomic_stage_compare_and_set() -> None:
         "next_stage",
         "next_status",
         "sandbox_attempts",
+        "lease_expires_at",
     )
     assert inspect.iscoroutinefunction(WorkflowStore.compare_and_set_stage)
 
@@ -98,8 +99,8 @@ def test_artifact_store_requires_the_winning_execution_claim() -> None:
     assert inspect.iscoroutinefunction(ArtifactStore.create)
 
 
-def test_sandbox_execution_contract_remains_unchanged() -> None:
-    assert "execution_claim_token" not in SandboxExecutionRequest.model_fields
+def test_sandbox_execution_contract_binds_the_winning_claim() -> None:
+    assert "execution_claim_token" in SandboxExecutionRequest.model_fields
 
 
 def test_activity_event_store_is_owner_scoped_and_cursor_driven() -> None:

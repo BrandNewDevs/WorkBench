@@ -7,7 +7,7 @@ from pydantic import Field
 
 from app.ai.schemas import AIHealthReport
 from app.api.contracts import ApiContractModel
-from app.ports.local_backend import SubsystemReadiness
+from app.ports.local_backend import LocalDeploymentProof, SubsystemReadiness
 from app.workflow.contracts import UtcTimestamp
 
 
@@ -31,4 +31,5 @@ class HealthResponse(ApiContractModel):
     sandbox: SubsystemReadiness
     audit: SubsystemReadiness
     outbound_network_blocked: bool
+    deployment_proof: LocalDeploymentProof | None = None
     checked_at: UtcTimestamp

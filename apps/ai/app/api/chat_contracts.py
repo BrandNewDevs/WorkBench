@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.api.contracts import ApiContractModel
 from app.ports.local_backend import WorkflowMessage
@@ -37,6 +37,14 @@ class ChatMessageAppendRequest(ApiContractModel):
 
     content: str = Field(min_length=1, max_length=20_000)
     client_message_id: UUID
+    selected_upload_ids: tuple[UUID, ...] = ()
+
+    @field_validator("selected_upload_ids")
+    @classmethod
+    def require_unique_uploads(cls, value: tuple[UUID, ...]) -> tuple[UUID, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("selectedUploadIds must be unique")
+        return value
 
 
 class ChatMessageListEnvelope(ApiContractModel):

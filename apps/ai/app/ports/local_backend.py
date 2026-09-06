@@ -11,6 +11,8 @@ from app.ai.schemas import (
     ApprovedKnowledgePath,
     ApprovedKnowledgeRoot,
     ApprovedPath,
+    EvidenceChunk,
+    Finding,
     GroundedDraft,
 )
 from app.api.contracts import ApiContractModel
@@ -22,6 +24,7 @@ from app.tools.contracts import (
     SandboxExecutionRequest,
     SandboxExecutionResult,
     ToolExecutionResult,
+    ValidatedToolCall,
 )
 from app.workflow.contracts import (
     ActivityEvent,
@@ -108,6 +111,61 @@ class StoredDraft(ApiContractModel):
     owner_user_id: UUID
     draft: GroundedDraft
     created_at: UtcTimestamp
+
+
+class WorkflowAdmissionStatus(StrEnum):
+    CREATED = "created"
+    REPLAYED = "replayed"
+
+
+class SelectedUploadSnapshot(ApiContractModel):
+    upload_id: UUID
+    session_id: UUID
+    owner_user_id: UUID
+    source_id: UUID
+    file_name: str = Field(min_length=1, max_length=255)
+    mime_type: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkflowRunAdmissionRequest(ApiContractModel):
+    run: WorkflowRun
+    message: WorkflowMessage
+    selected_uploads: tuple[SelectedUploadSnapshot, ...] = ()
+
+
+class WorkflowRunAdmission(ApiContractModel):
+    status: WorkflowAdmissionStatus
+    run: WorkflowRun
+    message: WorkflowMessage
+    selected_uploads: tuple[SelectedUploadSnapshot, ...]
+    accepted_event: ActivityEvent
+
+
+class StoredExtractionFindings(ApiContractModel):
+    session_id: UUID
+    workflow_run_id: UUID
+    owner_user_id: UUID
+    source_upload_ids: tuple[UUID, ...]
+    findings: tuple[Finding, ...]
+    created_at: UtcTimestamp
+
+
+class StoredRetrievedEvidence(ApiContractModel):
+    session_id: UUID
+    workflow_run_id: UUID
+    owner_user_id: UUID
+    evidence: tuple[EvidenceChunk, ...]
+    created_at: UtcTimestamp
+
+
+class PendingApprovalPreparation(ApiContractModel):
+    run: WorkflowRun
+    approval: Approval
+    output: ValidatedToolCall
+    required_event: ActivityEvent
+    created_now: bool
 
 
 _WINDOWS_RESERVED_ARTIFACT_NAMES = frozenset(
@@ -202,6 +260,22 @@ class SystemHealthReport(ApiContractModel):
     outbound_network_blocked: bool
 
 
+class LocalDeploymentProof(ApiContractModel):
+    """Machine-readable, non-sensitive facts verified by local composition."""
+
+    storage_backend: str = "sqlite"
+    persistent_storage_local: bool = True
+    knowledge_storage_local: bool = True
+    artifact_storage_local: bool = True
+    model_endpoint_classification: str
+    sandbox_network_policy: str = "none"
+    sandbox_pull_policy: str = "never"
+    pdf_converter_mode: str = "local"
+    pdf_converter_available: bool
+    docker_available: bool
+    external_telemetry_configured: bool = False
+
+
 class IdentityStore(Protocol):
     """Load pre-seeded local accounts; Backend 2 owns the SQLite implementation."""
 
@@ -237,15 +311,41 @@ class WorkflowStore(Protocol):
         """Atomically persist a newly created workflow session."""
         ...
 
-    async def get_session(
-        self, session_id: UUID, owner_user_id: UUID
-    ) -> WorkflowSession:
+    async def get_session(self, session_id: UUID, owner_user_id: UUID) -> WorkflowSession:
         """Return one owned workflow session or raise when it is missing or foreign."""
         ...
 
     async def create_run(self, run: WorkflowRun) -> WorkflowRun:
         """Persist a run after Backend 1 selects its initial stage."""
         ...
+
+    async def admit_run(self, request: WorkflowRunAdmissionRequest) -> WorkflowRunAdmission: ...
+
+    async def save_findings(self, result: StoredExtractionFindings) -> StoredExtractionFindings: ...
+
+    async def get_findings(
+        self, *, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
+    ) -> StoredExtractionFindings | None: ...
+
+    async def save_evidence(self, result: StoredRetrievedEvidence) -> StoredRetrievedEvidence: ...
+
+    async def get_evidence(
+        self, *, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
+    ) -> StoredRetrievedEvidence | None: ...
+
+    async def prepare_pending_approval(
+        self, *, run: WorkflowRun, approval: Approval, output: ValidatedToolCall
+    ) -> PendingApprovalPreparation: ...
+
+    async def list_unfinished_runs(self) -> list[WorkflowRun]: ...
+
+    async def mark_stale_runs_interrupted(
+        self, *, stale_before: UtcTimestamp, interrupted_at: UtcTimestamp
+    ) -> list[WorkflowRun]: ...
+
+    async def claim_retry(
+        self, *, workflow_run_id: UUID, expected_stage_version: int, lease_expires_at: UtcTimestamp
+    ) -> WorkflowRun | None: ...
 
     async def get_run(
         self,
@@ -281,6 +381,7 @@ class WorkflowStore(Protocol):
         next_stage: WorkflowStage,
         next_status: WorkflowRunStatus,
         sandbox_attempts: int,
+        lease_expires_at: UtcTimestamp | None = None,
     ) -> WorkflowRun | None:
         """Atomically advance a run only when its expected state still matches."""
         ...
@@ -314,15 +415,11 @@ class ChatStore(Protocol):
         """Return the owner's sessions, most recently updated first."""
         ...
 
-    async def get_session(
-        self, session_id: UUID, owner_user_id: UUID
-    ) -> WorkflowSession:
+    async def get_session(self, session_id: UUID, owner_user_id: UUID) -> WorkflowSession:
         """Return one owned session or raise when it is missing or foreign."""
         ...
 
-    async def list_messages(
-        self, session_id: UUID, owner_user_id: UUID
-    ) -> list[WorkflowMessage]:
+    async def list_messages(self, session_id: UUID, owner_user_id: UUID) -> list[WorkflowMessage]:
         """Return the latest owned messages in chronological order."""
         ...
 
@@ -413,6 +510,10 @@ class DraftStore(Protocol):
         session_id: UUID,
         workflow_run_id: UUID,
         owner_user_id: UUID,
+    ) -> StoredDraft | None: ...
+
+    async def get_for_run(
+        self, *, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
     ) -> StoredDraft | None: ...
 
 

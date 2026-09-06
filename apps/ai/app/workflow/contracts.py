@@ -280,10 +280,7 @@ def _status_matches_stage(status: WorkflowStatus, stage: WorkflowStage) -> bool:
         (status is WorkflowStatus.ACTIVE and stage not in _TERMINAL_STAGES)
         or (status is WorkflowStatus.COMPLETED and stage is WorkflowStage.COMPLETED)
         or (status is WorkflowStatus.FAILED and stage is WorkflowStage.FAILED)
-        or (
-            status is WorkflowStatus.APPROVAL_REJECTED
-            and stage is WorkflowStage.APPROVAL_REJECTED
-        )
+        or (status is WorkflowStatus.APPROVAL_REJECTED and stage is WorkflowStage.APPROVAL_REJECTED)
     )
 
 
@@ -324,6 +321,9 @@ class WorkflowRun(ApiContractModel):
     sandbox_attempts: int = Field(default=0, ge=0)
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
+    execution_lease_expires_at: UtcTimestamp | None = None
+    interrupted_at: UtcTimestamp | None = None
+    retryable: bool = False
 
     @model_validator(mode="after")
     def require_consistent_workflow_state(self) -> "WorkflowRun":
@@ -360,6 +360,10 @@ class WorkflowRun(ApiContractModel):
             self.workflow_type is WorkflowType.CODE_REPAIR and self.sandbox_attempts < 2
         ):
             raise ValueError("completed code repair requires a successful approved rerun")
+        if self.retryable != (self.interrupted_at is not None):
+            raise ValueError("retryable runs require an interruption timestamp")
+        if self.retryable and self.status is not WorkflowRunStatus.ACTIVE:
+            raise ValueError("only active runs may be marked retryable")
         return self
 
 
@@ -446,9 +450,7 @@ class Approval(ApiContractModel):
         if is_pending and self.execution_status is not ExecutionStatus.NOT_STARTED:
             raise ValueError("pending approval cannot have an execution status")
         if not is_pending and (
-            self.resolved_at is None
-            or self.resolved_by_user_id is None
-            or self.decision is None
+            self.resolved_at is None or self.resolved_by_user_id is None or self.decision is None
         ):
             raise ValueError("resolved approval requires timestamp, user, and decision")
         if self.status is ApprovalStatus.REJECTED:

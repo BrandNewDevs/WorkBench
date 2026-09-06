@@ -88,6 +88,21 @@ class SQLiteDraftStore:
             ).fetchone()
         return self._from_row(row) if row is not None else None
 
+    async def get_for_run(
+        self, *, session_id: UUID, workflow_run_id: UUID, owner_user_id: UUID
+    ) -> StoredDraft | None:
+        """Restore the one application-owned draft for an owned workflow run."""
+
+        async with self._database.open() as connection:
+            row = await (
+                await connection.execute(
+                    f"""SELECT {_COLUMNS} FROM grounded_drafts
+                    WHERE session_id = ? AND workflow_run_id = ? AND owner_user_id = ?""",
+                    (str(session_id), str(workflow_run_id), str(owner_user_id)),
+                )
+            ).fetchone()
+        return self._from_row(row) if row is not None else None
+
     async def resolve_for_export(
         self, request: DocumentExportExecutionRequest
     ) -> StoredDraft | None:
