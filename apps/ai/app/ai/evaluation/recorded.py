@@ -80,9 +80,11 @@ class GoldenRecordedModelAdapter:
         *,
         omit_site_finding: bool = False,
         invalid_draft_attempts: int = 0,
+        include_forbidden_conclusion: bool = False,
     ) -> None:
         self._omit_site_finding = omit_site_finding
         self._invalid_draft_attempts = invalid_draft_attempts
+        self._include_forbidden_conclusion = include_forbidden_conclusion
 
     async def list_models(self) -> tuple[InstalledModel, ...]:
         return tuple(
@@ -133,6 +135,13 @@ class GoldenRecordedModelAdapter:
                 evidence_source_ids=("pump-maintenance-sop",),
             )
         )
+        if self._include_forbidden_conclusion:
+            claims.append(
+                GroundedClaim(
+                    text="The equipment is safe to operate.",
+                    evidence_source_ids=("inspection-report",),
+                )
+            )
         source_ids.append("pump-maintenance-sop")
         draft = GroundedDraft(
             subject="Pump P-17 inspection follow-up",

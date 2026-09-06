@@ -180,7 +180,10 @@ class GoldenEvaluator:
             stage = perf_counter()
             draft_request = DraftRequest(
                 subject=_SUBJECT,
-                objective=_OBJECTIVE,
+                objective=(
+                    f"{_OBJECTIVE} Include this exact uncertainty statement: "
+                    f"{self._corpus.expected.required_uncertainty_statement}"
+                ),
                 findings=analysis.findings,
                 evidence=evidence,
                 template_instructions=self._corpus.approval_note_template.read_text(

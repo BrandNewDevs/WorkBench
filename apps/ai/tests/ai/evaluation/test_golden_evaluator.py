@@ -79,3 +79,29 @@ async def test_recovered_schema_failure_is_counted_without_failing_final_schema(
     assert result.runs[0].metrics.schema_failures == 1
     assert result.runs[0].metrics.final_schema_valid is True
     assert sum(run.metrics.schema_failures for run in result.runs) == 1
+
+
+async def test_forbidden_unsupported_conclusion_fails_with_named_diagnostic(
+    tmp_path: Path,
+) -> None:
+    index_root = tmp_path / "chroma"
+    index_root.mkdir()
+    evaluator = GoldenEvaluator(
+        corpus=load_golden_corpus(GOLDEN_ROOT),
+        model_adapter=GoldenRecordedModelAdapter(include_forbidden_conclusion=True),
+        model_profile=load_model_profile(),
+        knowledge_root=ApprovedKnowledgeRoot(path=index_root),
+    )
+
+    result = await evaluator.run_three_times()
+
+    assert result.passed is False
+    assert all(
+        any(
+            gate.name == "unsupported-critical-claims"
+            and gate.passed is False
+            and "equipment is safe to operate" in gate.diagnostic
+            for gate in run.gates
+        )
+        for run in result.runs
+    )
