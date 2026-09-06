@@ -4,7 +4,8 @@ import { homedir, platform } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
-const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+// Trailing separators are stripped so path-anchored match patterns stay valid.
+const repoRoot = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]+$/, "");
 const aiRoot = join(repoRoot, "apps", "ai");
 const desktopRoot = join(repoRoot, "apps", "desktop");
 const pythonRunner = join(aiRoot, "scripts", "python.mjs");
