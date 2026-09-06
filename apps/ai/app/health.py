@@ -9,13 +9,16 @@ from app.ai.engine import AIEngine
 from app.ai.schemas import AIHealthReport, Capability, ModelStatus
 from app.api.health_contracts import HealthResponse, HealthStatus
 from app.ports.backend2 import (
+    ActivityEventStore,
     AuditStore,
     AuthSessionStore,
     ChatStore,
     IdentityStore,
+    SessionFileStore,
     SubsystemReadiness,
     SystemHealthProvider,
     SystemHealthReport,
+    WorkflowStore,
 )
 
 ShutdownCallback = Callable[[], Awaitable[None]]
@@ -32,6 +35,9 @@ class ApplicationDependencies:
     auth_session_store: AuthSessionStore | None = None
     audit_store: AuditStore | None = None
     chat_store: ChatStore | None = None
+    workflow_store: WorkflowStore | None = None
+    session_file_store: SessionFileStore | None = None
+    activity_event_store: ActivityEventStore | None = None
     shutdown: ShutdownCallback | None = None
     startup: StartupCallback | None = None
 

@@ -16,14 +16,18 @@ from app.api.auth import build_auth_router, clear_session_cookie
 from app.api.chat import build_chat_router
 from app.api.contracts import ErrorResponse
 from app.api.health_contracts import HealthResponse, HealthStatus
+from app.api.sessions import build_session_router
 from app.auth.service import AuthError, AuthService
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies, build_health_response
 from app.storage import (
+    LocalSessionWorkspaceStore,
     LocalSQLiteDatabase,
+    SQLiteActivityEventStore,
     SQLiteAuditStore,
     SQLiteAuthSessionStore,
     SQLiteIdentityStore,
+    SQLiteSessionFileStore,
     SQLiteWorkflowStore,
 )
 
@@ -87,11 +91,17 @@ def compose_runtime_dependencies(settings: ApplicationSettings) -> ApplicationDe
     """Compose the local SQLite auth stores for a normal service process."""
 
     database = LocalSQLiteDatabase(settings.database_path)
+    workflow_store = SQLiteWorkflowStore(database)
     return ApplicationDependencies(
         identity_store=SQLiteIdentityStore(database),
         auth_session_store=SQLiteAuthSessionStore(database),
         audit_store=SQLiteAuditStore(database),
-        chat_store=SQLiteWorkflowStore(database),
+        chat_store=workflow_store,
+        workflow_store=workflow_store,
+        session_file_store=SQLiteSessionFileStore(
+            database, LocalSessionWorkspaceStore(settings.sessions_root)
+        ),
+        activity_event_store=SQLiteActivityEventStore(database),
         startup=database.initialize,
     )
 
@@ -179,11 +189,16 @@ def create_app(
         audit_store=resolved_dependencies.audit_store,
     )
     application.state.chat_store = resolved_dependencies.chat_store
+    application.state.workflow_store = resolved_dependencies.workflow_store
+    application.state.session_file_store = resolved_dependencies.session_file_store
+    application.state.activity_event_store = resolved_dependencies.activity_event_store
+    application.state.upload_max_bytes = resolved_settings.upload_max_bytes
     application.add_exception_handler(RequestValidationError, _validation_error_handler)
     application.add_exception_handler(AuthError, _auth_error_handler)
     application.add_exception_handler(Exception, _unhandled_error_handler)
     application.include_router(_health_router(resolved_settings, resolved_dependencies))
     application.include_router(build_auth_router(resolved_settings))
+    application.include_router(build_session_router())
     application.include_router(build_chat_router())
     return application
 

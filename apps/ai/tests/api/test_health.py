@@ -98,8 +98,8 @@ def _client(dependencies: ApplicationDependencies) -> TestClient:
     return TestClient(create_app(dependencies=dependencies))
 
 
-def test_app_registers_health_auth_and_chat_routes() -> None:
-    """The composition root exposes the completed auth lifecycle and chat surface."""
+def test_app_registers_health_auth_workflow_session_and_chat_routes() -> None:
+    """The composition root exposes the completed employee-facing API surface."""
 
     app = create_app()
     documented_paths = set(app.openapi()["paths"])
@@ -109,6 +109,9 @@ def test_app_registers_health_auth_and_chat_routes() -> None:
         "/auth/login",
         "/auth/session",
         "/auth/logout",
+        "/sessions",
+        "/sessions/{session_id}/uploads",
+        "/sessions/{session_id}/events",
         "/chat/sessions",
         "/chat/sessions/{session_id}",
         "/chat/sessions/{session_id}/messages",

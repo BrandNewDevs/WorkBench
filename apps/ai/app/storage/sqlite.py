@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -334,6 +334,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS workflow_messages_session_client
 ON workflow_messages (session_id, client_message_id)
 """
 
+_CREATE_WORKFLOW_UPLOADS_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_uploads (
+    upload_id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES workflow_sessions(session_id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL UNIQUE,
+    stored_file_name TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+    sha256 TEXT NOT NULL CHECK (
+        length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+    created_at TEXT NOT NULL,
+    UNIQUE (session_id, stored_file_name)
+)
+"""
+
+_CREATE_WORKFLOW_UPLOADS_SESSION_INDEX = """
+CREATE INDEX IF NOT EXISTS workflow_uploads_session_created
+ON workflow_uploads (session_id, created_at, upload_id)
+"""
+
 
 class SessionAlreadyExistsError(RuntimeError):
     """Raised when session metadata already exists for a session identifier."""
@@ -414,6 +436,7 @@ class LocalSQLiteDatabase:
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX)
             await connection.execute(_CREATE_WORKFLOW_RUNS_TABLE)
             await connection.execute(_CREATE_WORKFLOW_RUNS_CURRENT_INDEX)
+            await self._migrate_legacy_activity_events(connection)
             await connection.execute(_CREATE_ACTIVITY_EVENTS_TABLE)
             await connection.execute(_CREATE_ACTIVITY_EVENTS_REPLAY_INDEX)
             await connection.execute(_CREATE_WORKFLOW_MESSAGES_TABLE)
@@ -427,9 +450,91 @@ class LocalSQLiteDatabase:
                 )
             await connection.execute(_CREATE_WORKFLOW_MESSAGES_SESSION_INDEX)
             await connection.execute(_CREATE_WORKFLOW_MESSAGES_CLIENT_INDEX)
+            await connection.execute(_CREATE_WORKFLOW_UPLOADS_TABLE)
+            await connection.execute(_CREATE_WORKFLOW_UPLOADS_SESSION_INDEX)
             await connection.execute(_CREATE_APPROVALS_TABLE)
             await connection.execute(_CREATE_ARTIFACTS_TABLE)
             await connection.execute(_CREATE_ARTIFACTS_RUN_INDEX)
+
+    @staticmethod
+    async def _migrate_legacy_activity_events(
+        connection: aiosqlite.Connection,
+    ) -> None:
+        """Upgrade the temporary Phase 3 event table to Backend 2's owned schema."""
+
+        cursor = await connection.execute("PRAGMA table_info(activity_events)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if not columns or {"owner_user_id", "payload_json"}.issubset(columns):
+            return
+        legacy_columns = {
+            "session_id",
+            "event_id",
+            "workflow_run_id",
+            "event_type",
+            "occurred_at",
+            "payload",
+        }
+        if not legacy_columns.issubset(columns):
+            raise RuntimeError("unsupported activity event schema")
+
+        await connection.execute(
+            "ALTER TABLE activity_events RENAME TO activity_events_phase3_legacy"
+        )
+        await connection.execute(_CREATE_ACTIVITY_EVENTS_TABLE)
+        cursor = await connection.execute(
+            """SELECT legacy.session_id, legacy.event_id, sessions.owner_user_id,
+            legacy.workflow_run_id, legacy.event_type, legacy.occurred_at, legacy.payload
+            FROM activity_events_phase3_legacy AS legacy
+            JOIN workflow_sessions AS sessions ON sessions.session_id = legacy.session_id
+            ORDER BY legacy.session_id, legacy.event_id"""
+        )
+        rows = await cursor.fetchall()
+        offset = 1 if any(int(row["event_id"]) == 0 for row in rows) else 0
+        for row in rows:
+            event_type = ActivityEventType(row["event_type"])
+            raw_payload = json.loads(row["payload"])
+            if not isinstance(raw_payload, dict):
+                raise RuntimeError("legacy activity payload must be a JSON object")
+            if event_type is ActivityEventType.SESSION_CREATED:
+                payload = {}
+            elif event_type is ActivityEventType.UPLOAD_ACCEPTED:
+                payload = {
+                    key: raw_payload[key]
+                    for key in ("uploadId", "sourceId", "fileName", "sizeBytes")
+                }
+            else:
+                payload = raw_payload
+            event = ActivityEvent(
+                event_id=int(row["event_id"]) + offset,
+                session_id=row["session_id"],
+                workflow_run_id=row["workflow_run_id"],
+                event_type=event_type,
+                occurred_at=row["occurred_at"],
+                payload=payload,
+            )
+            await connection.execute(
+                """INSERT INTO activity_events (
+                    session_id, event_id, owner_user_id, workflow_run_id,
+                    event_type, occurred_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(event.session_id),
+                    event.event_id,
+                    row["owner_user_id"],
+                    str(event.workflow_run_id)
+                    if event.workflow_run_id is not None
+                    else None,
+                    event.event_type.value,
+                    event.occurred_at.isoformat(),
+                    json.dumps(
+                        event.payload,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        await connection.execute("DROP TABLE activity_events_phase3_legacy")
 
     def _prepare_secure_paths(self) -> None:
         """Create and restrict the database directory and file before opening SQLite."""
@@ -1781,7 +1886,7 @@ class SQLiteActivityEventStore:
 
         self._validate_after_event_id(after_event_id)
 
-        async def iterate() -> AsyncIterator[ActivityEvent]:
+        async def iterate() -> AsyncGenerator[ActivityEvent, None]:
             cursor = after_event_id
             async with self._database.open() as connection:
                 await self._require_owned_session(

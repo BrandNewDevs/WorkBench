@@ -74,6 +74,8 @@ class ApplicationSettings(BaseSettings):
     auth_session_ttl_seconds: int = Field(default=8 * 60 * 60, ge=60, le=8 * 60 * 60)
     auth_cookie_secure: bool = False
     database_path: Path = Field(default_factory=lambda: default_state_directory() / "workbench.db")
+    sessions_root: Path = Field(default_factory=lambda: default_state_directory() / "sessions")
+    upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1, le=50 * 1024 * 1024)
 
     @field_validator("auth_signing_secret")
     @classmethod

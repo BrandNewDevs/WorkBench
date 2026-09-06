@@ -207,6 +207,12 @@ class WorkflowStore(Protocol):
         """Atomically persist a newly created workflow session."""
         ...
 
+    async def get_session(
+        self, session_id: UUID, owner_user_id: UUID
+    ) -> WorkflowSession:
+        """Return one owned workflow session or raise when it is missing or foreign."""
+        ...
+
     async def create_run(self, run: WorkflowRun) -> WorkflowRun:
         """Persist a run after Backend 1 selects its initial stage."""
         ...
@@ -301,6 +307,7 @@ class SessionFileStore(Protocol):
         upload_id: UUID,
         source_id: UUID,
         file_name: str,
+        mime_type: str,
         content: AsyncIterable[bytes],
     ) -> StoredUpload:
         """Atomically store validated upload content and metadata."""
