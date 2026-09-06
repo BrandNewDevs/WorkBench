@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -59,6 +60,7 @@ def test_jetson_probe_uses_exact_model_and_shared_system_memory(
 
 
 async def test_resource_monitor_captures_peak_without_affecting_operation() -> None:
+    second_sampled = Event()
     samples = iter(
         (
             hardware_module._ResourceSample(40, 100, 60),
@@ -67,7 +69,10 @@ async def test_resource_monitor_captures_peak_without_affecting_operation() -> N
     )
 
     def read_sample() -> hardware_module._ResourceSample | None:
-        return next(samples, None)
+        sample = next(samples, None)
+        if sample is not None and sample.memory_used_bytes == 75:
+            second_sampled.set()
+        return sample
 
     monitor = LocalResourceMonitor(
         _hardware(),
@@ -76,7 +81,8 @@ async def test_resource_monitor_captures_peak_without_affecting_operation() -> N
     )
 
     async def operation() -> str:
-        await asyncio.sleep(0.005)
+        observed = await asyncio.to_thread(second_sampled.wait, 1)
+        assert observed, "resource monitor did not collect the second fixture sample"
         return "completed"
 
     result, observation = await monitor.measure(operation)
