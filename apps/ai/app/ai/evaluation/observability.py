@@ -26,6 +26,7 @@ class ObservationSnapshot:
     """Monotonic counters used to isolate one run from the next."""
 
     schema_failures: int
+    schema_failures_by_capability: tuple[tuple[Capability, int], ...]
     fallback_uses: int
     model_invocations: int
     prompt_tokens: int
@@ -42,6 +43,7 @@ class ObservedModelAdapter:
     def __init__(self, adapter: ModelAdapter) -> None:
         self._adapter = adapter
         self._schema_failures = 0
+        self._schema_failures_by_capability = {capability: 0 for capability in Capability}
         self._fallback_uses = 0
         self._model_invocations = 0
         self._prompt_tokens = 0
@@ -56,6 +58,10 @@ class ObservedModelAdapter:
 
         return ObservationSnapshot(
             schema_failures=self._schema_failures,
+            schema_failures_by_capability=tuple(
+                (capability, self._schema_failures_by_capability[capability])
+                for capability in Capability
+            ),
             fallback_uses=self._fallback_uses,
             model_invocations=self._model_invocations,
             prompt_tokens=self._prompt_tokens,
@@ -76,7 +82,7 @@ class ObservedModelAdapter:
         try:
             result = await self._adapter.generate_text(request)
         except InvalidStructuredOutput:
-            self._schema_failures += 1
+            self._record_schema_failure(Capability.TEXT)
             raise
         self._validate_result(Capability.TEXT, request.output_schema, result)
         return result
@@ -85,13 +91,17 @@ class ObservedModelAdapter:
         try:
             result = await self._adapter.generate_vision(request)
         except InvalidStructuredOutput:
-            self._schema_failures += 1
+            self._record_schema_failure(Capability.VISION)
             raise
         self._validate_result(Capability.VISION, request.output_schema, result)
         return result
 
     async def create_embeddings(self, request: EmbeddingRequest) -> EmbeddingResult:
-        result = await self._adapter.create_embeddings(request)
+        try:
+            result = await self._adapter.create_embeddings(request)
+        except InvalidStructuredOutput:
+            self._record_schema_failure(Capability.EMBEDDING)
+            raise
         self._record_fallback(result.used_fallback)
         self._record_inference(Capability.EMBEDDING, result.model, result.metrics)
         return result
@@ -111,7 +121,7 @@ class ObservedModelAdapter:
         try:
             validate_structured_output(schema, result.structured_output)
         except InvalidStructuredOutput:
-            self._schema_failures += 1
+            self._record_schema_failure(capability)
             raise
         self._record_fallback(result.used_fallback)
         self._record_inference(capability, result.model, result.metrics)
@@ -119,6 +129,10 @@ class ObservedModelAdapter:
     def _record_fallback(self, used_fallback: bool) -> None:
         if used_fallback:
             self._fallback_uses += 1
+
+    def _record_schema_failure(self, capability: Capability) -> None:
+        self._schema_failures += 1
+        self._schema_failures_by_capability[capability] += 1
 
     def _record_inference(
         self,

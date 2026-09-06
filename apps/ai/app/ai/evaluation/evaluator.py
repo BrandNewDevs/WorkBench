@@ -353,6 +353,7 @@ class GoldenEvaluator:
             vision_recall=extraction_successes / expected_count,
             retrieval_ranks=retrieval_ranks,
             schema_failures=after.schema_failures - before.schema_failures,
+            schema_failures_by_capability=_schema_failure_deltas(before, after),
             fallback_uses=after.fallback_uses - before.fallback_uses,
             final_schema_valid=final_schema_valid,
             model_invocations=after.model_invocations - before.model_invocations,
@@ -412,5 +413,17 @@ def _selected_models(
                 if selected_capability is capability
             )
         )
+        for capability in Capability
+    }
+
+
+def _schema_failure_deltas(
+    before: ObservationSnapshot,
+    after: ObservationSnapshot,
+) -> dict[str, int]:
+    before_counts = dict(before.schema_failures_by_capability)
+    after_counts = dict(after.schema_failures_by_capability)
+    return {
+        capability.value: after_counts[capability] - before_counts[capability]
         for capability in Capability
     }

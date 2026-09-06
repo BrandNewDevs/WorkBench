@@ -92,6 +92,7 @@ class GoldenRunMetrics(ContractModel):
     vision_recall: float = Field(ge=0, le=1)
     retrieval_ranks: dict[str, int | None]
     schema_failures: int = Field(ge=0)
+    schema_failures_by_capability: dict[str, int]
     fallback_uses: int = Field(ge=0)
     final_schema_valid: bool
     model_invocations: int = Field(ge=0)

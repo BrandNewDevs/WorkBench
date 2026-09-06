@@ -29,6 +29,30 @@ def test_profile_selection_comes_from_environment(monkeypatch: pytest.MonkeyPatc
     assert profile.embedding_candidates == ("qwen3-embedding:0.6b",)
 
 
+@pytest.mark.parametrize(
+    ("profile_id", "text_model", "vision_model"),
+    (
+        ("jetson-text-candidate", "qwen3:8b", "qwen3-vl:4b"),
+        ("jetson-vision-candidate", "qwen3:4b", "qwen3-vl:8b"),
+    ),
+)
+def test_isolated_jetson_profiles_change_one_capability_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+    profile_id: str,
+    text_model: str,
+    vision_model: str,
+) -> None:
+    """Let operators benchmark text and vision independently."""
+
+    monkeypatch.setenv("WORKBENCH_AI_MODEL_PROFILE", profile_id)
+
+    profile = load_model_profile()
+
+    assert profile.text_candidates[0] == text_model
+    assert profile.vision_candidates[0] == vision_model
+    assert profile.embedding_candidates == ("qwen3-embedding:0.6b",)
+
+
 def test_unknown_profile_is_rejected() -> None:
     """Prevent unreviewed model names from entering runtime selection."""
 

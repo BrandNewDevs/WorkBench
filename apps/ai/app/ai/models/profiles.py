@@ -9,6 +9,8 @@ from app.ai.schemas import GenerationLimits, ModelProfile
 
 SAFE_8GB_PROFILE_ID = "safe-8gb"
 JETSON_CANDIDATE_PROFILE_ID = "jetson-candidate"
+JETSON_TEXT_CANDIDATE_PROFILE_ID = "jetson-text-candidate"
+JETSON_VISION_CANDIDATE_PROFILE_ID = "jetson-vision-candidate"
 
 
 def _profile(
@@ -48,6 +50,16 @@ _APPROVED_PROFILES = MappingProxyType(
         JETSON_CANDIDATE_PROFILE_ID: _profile(
             profile_id=JETSON_CANDIDATE_PROFILE_ID,
             text_candidates=("qwen3:8b", "qwen3:4b", "qwen3:1.7b"),
+            vision_candidates=("qwen3-vl:8b", "qwen3-vl:4b", "qwen3-vl:2b"),
+        ),
+        JETSON_TEXT_CANDIDATE_PROFILE_ID: _profile(
+            profile_id=JETSON_TEXT_CANDIDATE_PROFILE_ID,
+            text_candidates=("qwen3:8b", "qwen3:4b", "qwen3:1.7b"),
+            vision_candidates=("qwen3-vl:4b", "qwen3-vl:2b"),
+        ),
+        JETSON_VISION_CANDIDATE_PROFILE_ID: _profile(
+            profile_id=JETSON_VISION_CANDIDATE_PROFILE_ID,
+            text_candidates=("qwen3:4b", "qwen3:1.7b"),
             vision_candidates=("qwen3-vl:8b", "qwen3-vl:4b", "qwen3-vl:2b"),
         ),
     }

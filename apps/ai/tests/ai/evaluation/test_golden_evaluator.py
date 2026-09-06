@@ -92,6 +92,11 @@ async def test_recovered_schema_failure_is_counted_without_failing_final_schema(
 
     assert result.passed is True
     assert result.runs[0].metrics.schema_failures == 1
+    assert result.runs[0].metrics.schema_failures_by_capability == {
+        "text": 1,
+        "vision": 0,
+        "embedding": 0,
+    }
     assert result.runs[0].metrics.final_schema_valid is True
     assert sum(run.metrics.schema_failures for run in result.runs) == 1
 
