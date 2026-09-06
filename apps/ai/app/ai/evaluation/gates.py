@@ -120,12 +120,30 @@ def draft_gates(
     uncertainty_present = any(
         _normalize(item) == expected_uncertainty for item in draft.uncertainties
     )
+    required_sop = expected.expected_sop_reference
+    required_sop_evidence_present = any(
+        (item.source_id, item.page_number, item.section)
+        == (required_sop.source_id, required_sop.page_number, required_sop.section)
+        for item in request.evidence
+    )
+    required_sop_cited = any(
+        required_sop.source_id in claim.evidence_source_ids
+        for claim in draft.critical_claims
+    )
+    assertion_fields = _draft_assertion_fields(draft)
     forbidden = sorted(
-        conclusion
+        (
+            conclusion,
+            tuple(
+                field_name
+                for field_name, value in assertion_fields
+                if _normalize(conclusion) in _normalize(value)
+            ),
+        )
         for conclusion in expected.forbidden_unsupported_conclusions
         if any(
-            _normalize(conclusion) in _normalize(claim.text)
-            for claim in draft.critical_claims
+            _normalize(conclusion) in _normalize(value)
+            for _, value in assertion_fields
         )
     )
     return (
@@ -148,6 +166,17 @@ def draft_gates(
             ),
         ),
         GoldenGateResult(
+            name="required-sop-citation",
+            passed=required_sop_evidence_present and required_sop_cited,
+            diagnostic=_required_sop_diagnostic(
+                required_sop.source_id,
+                required_sop.page_number,
+                required_sop.section,
+                evidence_present=required_sop_evidence_present,
+                cited=required_sop_cited,
+            ),
+        ),
+        GoldenGateResult(
             name="required-uncertainty",
             passed=uncertainty_present,
             diagnostic=(
@@ -157,12 +186,17 @@ def draft_gates(
             ),
         ),
         GoldenGateResult(
-            name="unsupported-critical-claims",
+            name="forbidden-unsupported-conclusions",
             passed=not forbidden,
             diagnostic=(
-                "No forbidden unsupported conclusion appears in a critical claim."
+                "No forbidden unsupported conclusion appears in the rendered draft content."
                 if not forbidden
-                else f"Forbidden unsupported conclusions: {', '.join(forbidden)}."
+                else "Forbidden unsupported conclusions: "
+                + "; ".join(
+                    f"{conclusion} ({', '.join(fields)})"
+                    for conclusion, fields in forbidden
+                )
+                + "."
             ),
         ),
         GoldenGateResult(
@@ -183,6 +217,49 @@ def reproducibility_signature(run: GoldenRunResult) -> tuple[object, ...]:
         run.metrics.final_schema_valid,
         tuple((gate.name, gate.passed) for gate in run.gates),
     )
+
+
+def _draft_assertion_fields(draft: GroundedDraft) -> tuple[tuple[str, str], ...]:
+    fields: list[tuple[str, str]] = [
+        ("summary", draft.summary),
+        ("recommendation", draft.recommendation),
+    ]
+    fields.extend(
+        (f"criticalClaims[{index}]", claim.text)
+        for index, claim in enumerate(draft.critical_claims)
+    )
+    for index, finding in enumerate(draft.findings):
+        fields.extend(
+            (
+                (f"findings[{index}].title", finding.title),
+                (f"findings[{index}].description", finding.description),
+            )
+        )
+        if finding.uncertainty is not None:
+            fields.append((f"findings[{index}].uncertainty", finding.uncertainty))
+    fields.extend(
+        (f"uncertainties[{index}]", uncertainty)
+        for index, uncertainty in enumerate(draft.uncertainties)
+    )
+    return tuple(fields)
+
+
+def _required_sop_diagnostic(
+    source_id: str,
+    page_number: int,
+    section: str,
+    *,
+    evidence_present: bool,
+    cited: bool,
+) -> str:
+    if not evidence_present:
+        return (
+            f"Required SOP evidence '{source_id}' page {page_number}, section '{section}' "
+            "was not supplied to drafting."
+        )
+    if not cited:
+        return f"No critical claim cites required SOP source '{source_id}'."
+    return f"A critical claim cites the retrieved required SOP source '{source_id}'."
 
 
 def _finding_matches(finding: Finding, expected: ExpectedFinding) -> bool:

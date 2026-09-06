@@ -29,7 +29,7 @@ _UNCERTAINTY = (
 )
 
 
-def _report_findings() -> tuple[Finding, Finding]:
+def _report_findings(*, include_forbidden_conclusion: bool = False) -> tuple[Finding, Finding]:
     location = SourceReference(
         source_id="inspection-report",
         document_name=_REPORT_NAME,
@@ -39,7 +39,14 @@ def _report_findings() -> tuple[Finding, Finding]:
         Finding(
             finding_id="lower-flange-corrosion",
             title="Lower flange surface corrosion",
-            description="Localized orange surface corrosion was observed at the lower flange.",
+            description=(
+                "Localized orange surface corrosion was observed at the lower flange."
+                + (
+                    " The equipment is safe to operate."
+                    if include_forbidden_conclusion
+                    else ""
+                )
+            ),
             severity=FindingSeverity.MEDIUM,
             evidence=(location,),
             uncertainty="Remaining wall thickness was not measured.",
@@ -80,11 +87,13 @@ class GoldenRecordedModelAdapter:
         *,
         omit_site_finding: bool = False,
         invalid_draft_attempts: int = 0,
-        include_forbidden_conclusion: bool = False,
+        forbidden_conclusion_field: str | None = None,
+        omit_sop_citation: bool = False,
     ) -> None:
         self._omit_site_finding = omit_site_finding
         self._invalid_draft_attempts = invalid_draft_attempts
-        self._include_forbidden_conclusion = include_forbidden_conclusion
+        self._forbidden_conclusion_field = forbidden_conclusion_field
+        self._omit_sop_citation = omit_sop_citation
 
     async def list_models(self) -> tuple[InstalledModel, ...]:
         return tuple(
@@ -107,7 +116,11 @@ class GoldenRecordedModelAdapter:
                 metrics=sample_inference_metrics(),
             )
 
-        findings: tuple[Finding, ...] = _report_findings()
+        findings: tuple[Finding, ...] = _report_findings(
+            include_forbidden_conclusion=(
+                self._forbidden_conclusion_field == "findingDescription"
+            )
+        )
         if not self._omit_site_finding:
             findings = (*findings, _site_finding())
         claims = [
@@ -129,25 +142,36 @@ class GoldenRecordedModelAdapter:
                 )
             )
             source_ids.append("site-photograph")
-        claims.append(
-            GroundedClaim(
-                text="The SOP requires measurements and guard restoration before a decision.",
-                evidence_source_ids=("pump-maintenance-sop",),
+        if not self._omit_sop_citation:
+            claims.append(
+                GroundedClaim(
+                    text=(
+                        "The SOP requires measurements and guard restoration before a decision."
+                    ),
+                    evidence_source_ids=("pump-maintenance-sop",),
+                )
             )
-        )
-        if self._include_forbidden_conclusion:
+            source_ids.append("pump-maintenance-sop")
+        if self._forbidden_conclusion_field == "criticalClaim":
             claims.append(
                 GroundedClaim(
                     text="The equipment is safe to operate.",
                     evidence_source_ids=("inspection-report",),
                 )
             )
-        source_ids.append("pump-maintenance-sop")
         draft = GroundedDraft(
             subject="Pump P-17 inspection follow-up",
-            summary="Synthetic inspection observations require verified follow-up.",
+            summary=(
+                "The equipment is safe to operate."
+                if self._forbidden_conclusion_field == "summary"
+                else "Synthetic inspection observations require verified follow-up."
+            ),
             findings=findings,
-            recommendation="Obtain the measurements and restore the guard before review.",
+            recommendation=(
+                "The equipment is safe to operate."
+                if self._forbidden_conclusion_field == "recommendation"
+                else "Obtain the measurements and restore the guard before review."
+            ),
             critical_claims=tuple(claims),
             evidence_source_ids=tuple(source_ids),
             uncertainties=(_UNCERTAINTY,),
@@ -163,7 +187,11 @@ class GoldenRecordedModelAdapter:
         extracted_text = "Synthetic inspection cover page."
         warnings: tuple[str, ...] = ()
         if source_id == "inspection-report" and page_number == 2:
-            findings = _report_findings()
+            findings = _report_findings(
+                include_forbidden_conclusion=(
+                    self._forbidden_conclusion_field == "findingDescription"
+                )
+            )
             extracted_text = (
                 "Localized corrosion at lower flange. Oil seepage below shaft seal. "
                 "One coupling guard bolt missing."

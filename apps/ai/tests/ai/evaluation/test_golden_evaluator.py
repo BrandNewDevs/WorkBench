@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.ai.evaluation.corpus import load_golden_corpus
 from app.ai.evaluation.evaluator import GoldenEvaluator
 from app.ai.evaluation.recorded import GoldenRecordedModelAdapter
@@ -81,14 +83,21 @@ async def test_recovered_schema_failure_is_counted_without_failing_final_schema(
     assert sum(run.metrics.schema_failures for run in result.runs) == 1
 
 
-async def test_forbidden_unsupported_conclusion_fails_with_named_diagnostic(
+@pytest.mark.parametrize(
+    "output_field",
+    ("summary", "recommendation", "findingDescription", "criticalClaim"),
+)
+async def test_forbidden_conclusion_in_any_assertion_field_fails_with_named_diagnostic(
     tmp_path: Path,
+    output_field: str,
 ) -> None:
     index_root = tmp_path / "chroma"
     index_root.mkdir()
     evaluator = GoldenEvaluator(
         corpus=load_golden_corpus(GOLDEN_ROOT),
-        model_adapter=GoldenRecordedModelAdapter(include_forbidden_conclusion=True),
+        model_adapter=GoldenRecordedModelAdapter(
+            forbidden_conclusion_field=output_field,
+        ),
         model_profile=load_model_profile(),
         knowledge_root=ApprovedKnowledgeRoot(path=index_root),
     )
@@ -98,10 +107,40 @@ async def test_forbidden_unsupported_conclusion_fails_with_named_diagnostic(
     assert result.passed is False
     assert all(
         any(
-            gate.name == "unsupported-critical-claims"
+            gate.name == "forbidden-unsupported-conclusions"
             and gate.passed is False
             and "equipment is safe to operate" in gate.diagnostic
             for gate in run.gates
         )
+        for run in result.runs
+    )
+
+
+async def test_valid_citations_still_fail_when_required_sop_is_not_cited(
+    tmp_path: Path,
+) -> None:
+    index_root = tmp_path / "chroma"
+    index_root.mkdir()
+    evaluator = GoldenEvaluator(
+        corpus=load_golden_corpus(GOLDEN_ROOT),
+        model_adapter=GoldenRecordedModelAdapter(omit_sop_citation=True),
+        model_profile=load_model_profile(),
+        knowledge_root=ApprovedKnowledgeRoot(path=index_root),
+    )
+
+    result = await evaluator.run_three_times()
+
+    assert result.passed is False
+    assert all(
+        any(
+            gate.name == "required-sop-citation"
+            and gate.passed is False
+            and "pump-maintenance-sop" in gate.diagnostic
+            for gate in run.gates
+        )
+        for run in result.runs
+    )
+    assert all(
+        next(gate for gate in run.gates if gate.name == "citation-integrity").passed
         for run in result.runs
     )
