@@ -113,6 +113,10 @@ class LocalDocumentArtifactExecutor:
                 paths[ArtifactFormat.PDF] = pdf_path
                 created_paths.append(pdf_path)
 
+            if ArtifactFormat.DOCX not in request.arguments.formats:
+                docx_path.unlink()
+                created_paths.remove(docx_path)
+
             metadata_records: list[StoredArtifact] = []
             for format_ in request.arguments.formats:
                 path = paths[format_]
@@ -131,8 +135,6 @@ class LocalDocumentArtifactExecutor:
                 )
                 for metadata in persisted
             ]
-            if ArtifactFormat.DOCX not in request.arguments.formats:
-                docx_path.unlink(missing_ok=True)
             return DocumentExportResult(
                 status=ExecutionStatus.COMPLETED, artifacts=tuple(references)
             )

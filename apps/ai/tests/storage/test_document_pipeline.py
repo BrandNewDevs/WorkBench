@@ -229,3 +229,44 @@ async def test_pdf_failure_keeps_valid_docx_and_registers_nothing(tmp_path: Path
         )
         == []
     )
+
+
+@pytest.mark.asyncio
+async def test_pdf_only_cleanup_failure_does_not_persist_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, drafts, artifacts, workspaces, request = await _context(
+        tmp_path, (ArtifactFormat.PDF,)
+    )
+    resolved = await drafts.resolve_for_export(request)
+    assert resolved is not None
+    docx_path = (
+        workspaces.get_session_workspace(str(resolved.session_id)).artifacts
+        / f"approval-note-{resolved.draft_id}.docx"
+    )
+    original_unlink = Path.unlink
+    failed_once = False
+
+    def fail_intermediate_docx(candidate: Path, *, missing_ok: bool = False) -> None:
+        nonlocal failed_once
+        if candidate == docx_path and not failed_once:
+            failed_once = True
+            raise PermissionError("simulated DOCX cleanup failure")
+        original_unlink(candidate, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_intermediate_docx)
+    result = await LocalDocumentArtifactExecutor(
+        drafts, artifacts, workspaces, FakePdfConverter()
+    ).create_artifacts(request)
+
+    assert result.status.value == "failed"
+    assert not docx_path.exists()
+    assert not docx_path.with_suffix(".pdf").exists()
+    assert (
+        await artifacts.list_for_run(
+            session_id=resolved.session_id,
+            workflow_run_id=resolved.workflow_run_id,
+            owner_user_id=resolved.owner_user_id,
+        )
+        == []
+    )
