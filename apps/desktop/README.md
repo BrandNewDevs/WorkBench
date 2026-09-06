@@ -41,10 +41,10 @@ For local UI work, `WORKBENCH_SKIP_AUTH=1 pnpm --filter @workbench/desktop dev` 
 Electron starts FastAPI with inherited stdin and stdout pipes. FastAPI does not bind a TCP port in managed desktop mode. Electron main verifies an HMAC readiness response using a launch-only capability, then sends the small approved API set over that child-owned pipe through trusted renderer IPC. A process that binds a loopback port after FastAPI exits cannot receive a cookie, credential, or capability because no request uses loopback. FastAPI still checks the capability and exact renderer origin. Session cookies remain HttpOnly in Electron's private session partition and Electron forwards them only over the verified pipe. Electron uses `WORKBENCH_PYTHON` first, then `apps/ai/.venv`, then Python on `PATH`; an empty override is treated as unset. Set `WORKBENCH_PYTHON` to the Python 3.11+ executable when it is not already on `PATH`. Before the first authenticated checkout launch, provision the one local employee account from an interactive terminal:
 
 ```sh
-pnpm --filter @workbench/ai provision-account
+pnpm account:provision
 ```
 
-The command reads the password without echoing it, creates an employee only when the database has no identities, and has no HTTP equivalent. It does not ship a default account or password. See `.env.example` for the local development variables.
+The command prompts for the details interactively and targets the Electron development database, the same `<userData>/workbench.db` the desktop app reads, so the account is available at the first login. The underlying `pnpm --filter @workbench/ai provision-account` supports `--database-path` when you need a different database. It reads the password without echoing it, creates an employee only when the database has no identities, and has no HTTP equivalent. It does not ship a default account or password. See `.env.example` for the local development variables.
 
 ## Checks
 

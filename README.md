@@ -70,13 +70,15 @@ Run once before the first launch. The command prompts interactively for account 
 
 ```sh
 # Interactive prompt; run after Step 2 (or after `pnpm db:reset` to start over)
-pnpm --filter @workbench/ai provision-account
+pnpm account:provision
 
 # Optional, non-interactive: list provisioned accounts without secrets
-pnpm --filter @workbench/ai provision-account --list
+pnpm account:list
 ```
 
-Provisioning accepts only an empty `identities` table, so to start over run `pnpm db:reset` first, then `pnpm --filter @workbench/ai provision-account`. The `--show-secrets` flag prints argon2id hashes and session token ids for accounts owned by the local machine; it is opt-in development tooling, the default listing stays redacted, and existing tests enforce that (`tests/auth/test_provision_account.py`).
+Every workflow command under "Development workflow" targets the Electron development database (overridable with `WORKBENCH_DB`), so an account provisioned here is available at the desktop login screen after `pnpm app`. The underlying `pnpm --filter @workbench/ai provision-account` defaults to FastAPI's standalone-server database, which `pnpm app` does not read; call it directly only with an explicit `--database-path`.
+
+Provisioning accepts only an empty `identities` table, so to start over run `pnpm db:reset` first, then `pnpm account:provision`. The `--show-secrets` flag prints argon2id hashes and session token ids for accounts owned by the local machine; it is opt-in development tooling, the default listing stays redacted, and existing tests enforce that (`tests/auth/test_provision_account.py`).
 
 ### Step 4 — Run the desktop app
 
@@ -88,7 +90,7 @@ pnpm app:stop        # stop Electron and the dev server
 
 `pnpm app` starts one FastAPI process per Electron instance over anonymous stdio pipes. There is nothing to run by hand first; the main process spawns it, verifies it by HMAC challenge, and points it at `<userData>/workbench.db`. When the request chain misbehaves or accounts get mixed up, run `pnpm app:stop`, reset with `pnpm db:reset`, and start again.
 
-FastAPI stores its default SQLite database in the current user's application-data directory, not in the source tree: `%LOCALAPPDATA%\\WorkBench` on Windows, `~/Library/Application Support/WorkBench` on macOS, and `$XDG_DATA_HOME/workbench` or `~/.local/share/workbench` on Linux. Electron uses that same FastAPI default when it manages the service.
+Different database paths exist by design. When Electron manages the service, it passes `WORKBENCH_APP_DATABASE_PATH` so FastAPI uses `<userData>/workbench.db`: `%APPDATA%\@workbench\desktop\workbench.db` on Windows for a development checkout (`WorkBench` instead of `@workbench\desktop` in packaged installs), `~/Library/Application Support/@workbench/desktop/workbench.db` on macOS, and `~/.config/@workbench/desktop/workbench.db` on Linux — the same paths the account commands default to. Without that override, `python -m app.main` stores its standalone database in the per-user application-data directory: `%LOCALAPPDATA%\WorkBench` on Windows, `~/Library/Application Support/WorkBench` on macOS, and `$XDG_DATA_HOME/workbench` or `~/.local/share/workbench` on Linux. The standalone default matters only for manual services; provisioning or resetting through the workflow commands above targets the database the desktop app actually reads.
 
 ## Development workflow
 
