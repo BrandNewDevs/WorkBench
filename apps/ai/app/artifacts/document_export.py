@@ -113,20 +113,24 @@ class LocalDocumentArtifactExecutor:
                 paths[ArtifactFormat.PDF] = pdf_path
                 created_paths.append(pdf_path)
 
-            references: list[ArtifactReference] = []
+            metadata_records: list[StoredArtifact] = []
             for format_ in request.arguments.formats:
                 path = paths[format_]
-                metadata = self._metadata(request, stored, format_, path)
-                await self._artifacts.create(
-                    metadata, execution_claim_token=request.execution_claim_token
-                )
-                references.append(
+                metadata_records.append(self._metadata(request, stored, format_, path))
+            persisted = await self._artifacts.create_many(
+                tuple(metadata_records),
+                execution_claim_token=request.execution_claim_token,
+            )
+            references = [
+                (
                     ArtifactReference(
                         artifact_id=metadata.artifact_id,
-                        format=format_,
+                        format=metadata.format,
                         file_name=metadata.file_name,
                     )
                 )
+                for metadata in persisted
+            ]
             if ArtifactFormat.DOCX not in request.arguments.formats:
                 docx_path.unlink(missing_ok=True)
             return DocumentExportResult(

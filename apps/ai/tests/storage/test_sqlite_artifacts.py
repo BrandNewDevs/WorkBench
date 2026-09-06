@@ -273,6 +273,36 @@ async def test_duplicate_id_and_case_insensitive_session_filename_are_rejected(
         )
 
 
+@pytest.mark.asyncio
+async def test_artifact_batch_rolls_back_all_metadata_on_conflict(tmp_path: Path) -> None:
+    context = await _context(
+        tmp_path,
+        formats=(ArtifactFormat.DOCX, ArtifactFormat.PDF),
+    )
+    assert context.execution_claim_token is not None
+    conflicting_pdf = context.artifact.model_copy(
+        update={
+            "format": ArtifactFormat.PDF,
+            "file_name": "inspection-draft.pdf",
+        }
+    )
+
+    with pytest.raises(ArtifactAlreadyExistsError):
+        await context.artifact_store.create_many(
+            (context.artifact, conflicting_pdf),
+            execution_claim_token=context.execution_claim_token,
+        )
+
+    assert (
+        await context.artifact_store.list_for_run(
+            session_id=context.artifact.session_id,
+            workflow_run_id=context.artifact.workflow_run_id,
+            owner_user_id=context.artifact.owner_user_id,
+        )
+        == []
+    )
+
+
 @pytest.mark.parametrize(
     ("update", "message"),
     [

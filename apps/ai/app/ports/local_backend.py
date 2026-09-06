@@ -469,6 +469,15 @@ class ArtifactStore(Protocol):
         """Persist metadata only for the winning approved export claim."""
         ...
 
+    async def create_many(
+        self,
+        artifacts: tuple[StoredArtifact, ...],
+        *,
+        execution_claim_token: UUID,
+    ) -> tuple[StoredArtifact, ...]:
+        """Atomically persist all metadata for one approved export claim."""
+        ...
+
     async def get(
         self,
         *,

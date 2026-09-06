@@ -1094,11 +1094,44 @@ class SQLiteArtifactStore:
     ) -> StoredArtifact:
         """Insert metadata only when the exact approved export claim authorizes it."""
 
+        await self.create_many((artifact,), execution_claim_token=execution_claim_token)
+        return artifact
+
+    async def create_many(
+        self,
+        artifacts: tuple[StoredArtifact, ...],
+        *,
+        execution_claim_token: UUID,
+    ) -> tuple[StoredArtifact, ...]:
+        """Insert one export's artifact metadata in a single transaction."""
+
+        if not artifacts:
+            raise ValueError("at least one artifact is required")
+        first = artifacts[0]
+        if any(
+            (
+                artifact.approval_id,
+                artifact.session_id,
+                artifact.workflow_run_id,
+                artifact.owner_user_id,
+                artifact.draft_id,
+            )
+            != (
+                first.approval_id,
+                first.session_id,
+                first.workflow_run_id,
+                first.owner_user_id,
+                first.draft_id,
+            )
+            for artifact in artifacts[1:]
+        ):
+            raise ArtifactContextMismatchError("artifact batch has mixed provenance")
+
         approval_identity = (
-            str(artifact.approval_id),
-            str(artifact.session_id),
-            str(artifact.workflow_run_id),
-            str(artifact.owner_user_id),
+            str(first.approval_id),
+            str(first.session_id),
+            str(first.workflow_run_id),
+            str(first.owner_user_id),
             str(execution_claim_token),
         )
         try:
@@ -1134,16 +1167,17 @@ class SQLiteArtifactStore:
                     raise ArtifactContextMismatchError(
                         "approved document-export arguments are invalid"
                     ) from error
-                if (
-                    arguments.draft_id != artifact.draft_id
-                    or artifact.format not in arguments.formats
-                ):
-                    raise ArtifactContextMismatchError(
-                        "artifact draft or format does not match the approved arguments"
-                    )
+                for artifact in artifacts:
+                    if (
+                        arguments.draft_id != artifact.draft_id
+                        or artifact.format not in arguments.formats
+                    ):
+                        raise ArtifactContextMismatchError(
+                            "artifact draft or format does not match the approved arguments"
+                        )
 
-                cursor = await connection.execute(
-                    """INSERT INTO artifacts (
+                    cursor = await connection.execute(
+                        """INSERT INTO artifacts (
                         artifact_id, session_id, workflow_run_id, owner_user_id,
                         approval_id, draft_id, format, file_name, size_bytes,
                         sha256, created_at
@@ -1163,26 +1197,26 @@ class SQLiteArtifactStore:
                       AND approval.execution_status = 'queued'
                       AND approval.tool_name = 'request_document_export'
                       AND approval.normalized_arguments = ?""",
-                    (
-                        str(artifact.artifact_id),
-                        str(artifact.session_id),
-                        str(artifact.workflow_run_id),
-                        str(artifact.owner_user_id),
-                        str(artifact.approval_id),
-                        str(artifact.draft_id),
-                        artifact.format.value,
-                        artifact.file_name,
-                        artifact.size_bytes,
-                        artifact.sha256,
-                        artifact.created_at.isoformat(),
-                        *approval_identity,
-                        arguments_row["normalized_arguments"],
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    raise ArtifactContextMismatchError(
-                        "artifact authorization changed before metadata was persisted"
+                        (
+                            str(artifact.artifact_id),
+                            str(artifact.session_id),
+                            str(artifact.workflow_run_id),
+                            str(artifact.owner_user_id),
+                            str(artifact.approval_id),
+                            str(artifact.draft_id),
+                            artifact.format.value,
+                            artifact.file_name,
+                            artifact.size_bytes,
+                            artifact.sha256,
+                            artifact.created_at.isoformat(),
+                            *approval_identity,
+                            arguments_row["normalized_arguments"],
+                        ),
                     )
+                    if cursor.rowcount != 1:
+                        raise ArtifactContextMismatchError(
+                            "artifact authorization changed before metadata was persisted"
+                        )
         except aiosqlite.IntegrityError as error:
             if "UNIQUE constraint failed" in str(error):
                 raise ArtifactAlreadyExistsError(
@@ -1191,7 +1225,7 @@ class SQLiteArtifactStore:
             raise ArtifactContextMismatchError(
                 "artifact metadata violates the local persistence constraints"
             ) from error
-        return artifact
+        return artifacts
 
     async def get(
         self,
