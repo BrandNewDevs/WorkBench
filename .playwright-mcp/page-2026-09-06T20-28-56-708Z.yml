@@ -1,0 +1,166 @@
+- generic [ref=f1e3]:
+  - navigation "Main navigation" [ref=f1e4]:
+    - link "WorkBench home" [ref=f1e5] [cursor=pointer]:
+      - /url: "#top"
+      - generic [ref=f1e6]: WB
+    - generic [ref=f1e7]:
+      - link "Features" [ref=f1e8] [cursor=pointer]:
+        - /url: "#features"
+      - link "About" [ref=f1e9] [cursor=pointer]:
+        - /url: "#about"
+      - link "GitHub" [ref=f1e10] [cursor=pointer]:
+        - /url: https://github.com/BrandNewDevs/WorkBench
+    - link "Download" [ref=f1e11] [cursor=pointer]:
+      - /url: "#download"
+  - main [ref=f1e12]:
+    - region [ref=f1e13]:
+      - generic [ref=f1e14]:
+        - link "Back to home" [ref=f1e15] [cursor=pointer]:
+          - /url: "#home"
+        - generic [ref=f1e18]:
+          - heading "About WorkBench" [level=1] [ref=f1e19]
+          - paragraph [ref=f1e20]: A sovereign, local-first AI workbench for confidential industrial and government work.
+          - generic [ref=f1e21]:
+            - generic [ref=f1e22]: Key Takeaways
+            - generic [ref=f1e26]:
+              - generic [ref=f1e28]:
+                - generic [ref=f1e29]: "0"
+                - generic [ref=f1e30]: External API Calls
+              - generic [ref=f1e33]:
+                - generic [ref=f1e34]: 100%
+                - generic [ref=f1e35]: On-Premise
+              - generic [ref=f1e38]:
+                - generic [ref=f1e39]: "1"
+                - generic [ref=f1e40]: Workstation
+              - generic [ref=f1e43]:
+                - generic [ref=f1e44]: <2s
+                - generic [ref=f1e45]: Local Inference
+        - generic [ref=f1e46]:
+          - heading "Vision & Mission" [level=2] [ref=f1e47]
+          - generic [ref=f1e48]:
+            - article [ref=f1e49]:
+              - generic [ref=f1e50]: Our Vision
+              - paragraph [ref=f1e55]: We envision a future where organizations can harness the power of AI without compromising data sovereignty, enabling faster decision-making while maintaining complete control over their most confidential information.
+            - article [ref=f1e56]:
+              - generic [ref=f1e57]: Our Mission
+              - paragraph [ref=f1e63]: To deliver practical AI capabilities that operate entirely on-premise, ensuring that confidential inspection reports, SOPs, and operational data never leave the organization's controlled environment.
+        - generic [ref=f1e64]:
+          - heading "Core Principles" [level=2] [ref=f1e65]
+          - generic [ref=f1e66]:
+            - article [ref=f1e67]:
+              - generic [ref=f1e68]: Local-First Architecture
+              - paragraph [ref=f1e72]: All inference, embeddings, OCR/vision, retrieval, tool execution, artifacts, logs, and session data remain on the local machine. No cloud APIs, no remote fallbacks, no telemetry.
+            - article [ref=f1e73]:
+              - generic [ref=f1e74]: Air-Gapped Operation
+              - paragraph [ref=f1e83]: Designed to work in completely isolated environments with zero external connections. Zero external API use with live network verification.
+            - article [ref=f1e84]:
+              - generic [ref=f1e85]: Approval-Gated Workflow
+              - paragraph [ref=f1e90]: Human oversight at every critical step. The AI proposes; deterministic logic enforces routing, validation, and permission checks. Users approve all side effects.
+            - article [ref=f1e91]:
+              - generic [ref=f1e92]: Evidence-Based Output
+              - paragraph [ref=f1e97]: Citations are application-controlled from source metadata. Artifacts are labeled as drafts until approval. The system states uncertainty rather than inventing conclusions.
+        - generic [ref=f1e98]:
+          - heading "Meet Our Team" [level=2] [ref=f1e99]
+          - generic [ref=f1e100]:
+            - article [ref=f1e101]:
+              - generic [ref=f1e102]: JK
+              - heading "Jiya Kumari" [level=3] [ref=f1e103]
+              - generic [ref=f1e104]: Team Leader / Frontend Engineer
+              - link "Jiya Kumari GitHub" [ref=f1e105] [cursor=pointer]:
+                - /url: https://github.com/jiya-22
+            - article [ref=f1e108]:
+              - generic [ref=f1e109]: SS
+              - heading "Shivangi Sharma" [level=3] [ref=f1e110]
+              - generic [ref=f1e111]: Frontend Engineer
+              - link "Shivangi Sharma GitHub" [ref=f1e112] [cursor=pointer]:
+                - /url: https://github.com/shivangiii18
+            - article [ref=f1e115]:
+              - generic [ref=f1e116]: YS
+              - heading "Yajush Srivastava" [level=3] [ref=f1e117]
+              - generic [ref=f1e118]: AI Engineer
+              - link "Yajush Srivastava GitHub" [ref=f1e119] [cursor=pointer]:
+                - /url: https://github.com/Yajush-afk
+            - article [ref=f1e122]:
+              - generic [ref=f1e123]: KB
+              - heading "Kritiraj Basumatary" [level=3] [ref=f1e124]
+              - generic [ref=f1e125]: Frontend/Design Engineer
+              - link "Kritiraj Basumatary GitHub" [ref=f1e126] [cursor=pointer]:
+                - /url: https://github.com/fuzzyKenny
+            - article [ref=f1e129]:
+              - generic [ref=f1e130]: KS
+              - heading "Kushagra Saxena" [level=3] [ref=f1e131]
+              - generic [ref=f1e132]: Backend Engineer
+              - link "Kushagra Saxena GitHub" [ref=f1e133] [cursor=pointer]:
+                - /url: https://github.com/Kushagra0210
+            - article [ref=f1e136]:
+              - generic [ref=f1e137]: AS
+              - heading "Akshat Singh" [level=3] [ref=f1e138]
+              - generic [ref=f1e139]: Backend Engineer
+              - link "Akshat Singh GitHub" [ref=f1e140] [cursor=pointer]:
+                - /url: https://github.com/AkshatSingh4477
+        - generic [ref=f1e143]:
+          - heading "Why WorkBench?" [level=2] [ref=f1e144]
+          - generic [ref=f1e145]:
+            - generic [ref=f1e146]:
+              - generic [ref=f1e147]: WorkBench
+              - list [ref=f1e148]:
+                - listitem [ref=f1e149]: 100% on-premise data
+                - listitem [ref=f1e152]: Air-gapped capable
+                - listitem [ref=f1e155]: Complete data sovereignty
+                - listitem [ref=f1e158]: Government/Industrial ready
+                - listitem [ref=f1e161]: Local inference
+                - listitem [ref=f1e164]: One-time hardware cost
+                - listitem [ref=f1e167]: Source-verified citations
+                - listitem [ref=f1e170]: Complete local audit trail
+            - generic [ref=f1e173]:
+              - generic [ref=f1e174]: Cloud AI
+              - list [ref=f1e175]:
+                - listitem [ref=f1e176]: External server storage
+                - listitem [ref=f1e180]: Requires internet
+                - listitem [ref=f1e184]: Third-party dependent
+                - listitem [ref=f1e188]: Variable compliance
+                - listitem [ref=f1e192]: Network dependent
+                - listitem [ref=f1e196]: Recurring subscription
+                - listitem [ref=f1e200]: Model-generated citations
+                - listitem [ref=f1e204]: Partial external audit
+        - generic [ref=f1e208]:
+          - heading "Technology" [level=2] [ref=f1e209]
+          - generic [ref=f1e211]:
+            - generic [ref=f1e212]: Electron + React + TypeScript
+            - generic [ref=f1e217]: Python + FastAPI
+            - generic [ref=f1e222]: Ollama (Qwen3 / Qwen3-VL)
+            - generic [ref=f1e227]: Chroma (local)
+            - generic [ref=f1e234]: SQLite
+            - generic [ref=f1e239]: Docker (network-disabled)
+            - generic [ref=f1e244]: Electron + React + TypeScript
+            - generic [ref=f1e249]: Python + FastAPI
+            - generic [ref=f1e254]: Ollama (Qwen3 / Qwen3-VL)
+            - generic [ref=f1e259]: Chroma (local)
+            - generic [ref=f1e266]: SQLite
+            - generic [ref=f1e271]: Docker (network-disabled)
+  - contentinfo [ref=f1e276]:
+    - generic [ref=f1e277]:
+      - generic [ref=f1e278]:
+        - generic [ref=f1e279]:
+          - generic [ref=f1e280]: WORKBENCH
+          - paragraph [ref=f1e281]: Private AI.Controlled execution.Reviewable work.
+        - generic [ref=f1e282]:
+          - generic [ref=f1e283]:
+            - heading "Product" [level=4] [ref=f1e284]
+            - list [ref=f1e285]:
+              - listitem [ref=f1e286]:
+                - link "Features" [ref=f1e287] [cursor=pointer]:
+                  - /url: "#features"
+              - listitem [ref=f1e288]:
+                - link "Download" [ref=f1e289] [cursor=pointer]:
+                  - /url: "#download"
+          - generic [ref=f1e290]:
+            - heading "Project" [level=4] [ref=f1e291]
+            - list [ref=f1e292]:
+              - listitem [ref=f1e293]:
+                - link "About" [ref=f1e294] [cursor=pointer]:
+                  - /url: "#about"
+              - listitem [ref=f1e295]:
+                - link "GitHub" [ref=f1e296] [cursor=pointer]:
+                  - /url: https://github.com/BrandNewDevs/WorkBench
+      - generic [ref=f1e297]: © 2026 WorkBench

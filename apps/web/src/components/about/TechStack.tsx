@@ -1,14 +1,22 @@
 import { useEffect, useRef } from "react";
-import { Monitor, Server, BrainCircuit, Layers, Database, Box } from "lucide-react";
+import { Layers } from "lucide-react";
+import type { IconType } from "react-icons";
+import {
+  SiDocker,
+  SiElectron,
+  SiFastapi,
+  SiOllama,
+  SiSqlite,
+} from "react-icons/si";
 import AboutSection from "./AboutSection";
 
-const stackItems = [
-  { icon: Monitor, label: "Client", name: "Electron + React + TypeScript" },
-  { icon: Server, label: "Backend", name: "Python + FastAPI" },
-  { icon: BrainCircuit, label: "AI Runtime", name: "Ollama (Qwen3 / Qwen3-VL)" },
-  { icon: Layers, label: "Vector Store", name: "Chroma (local)" },
-  { icon: Database, label: "Database", name: "SQLite" },
-  { icon: Box, label: "Sandbox", name: "Docker (network-disabled)" },
+const stackItems: ReadonlyArray<{ icon: IconType; name: string; color: string }> = [
+  { icon: SiElectron, name: "Electron + React + TypeScript", color: "#47848f" },
+  { icon: SiFastapi, name: "Python + FastAPI", color: "#009688" },
+  { icon: SiOllama, name: "Ollama (Qwen3 / Qwen3-VL)", color: "#ffffff" },
+  { icon: Layers, name: "Chroma (local)", color: "#ff6f61" },
+  { icon: SiSqlite, name: "SQLite", color: "#003b57" },
+  { icon: SiDocker, name: "Docker (network-disabled)", color: "#2496ed" },
 ];
 
 export default function TechStack() {
@@ -33,10 +41,11 @@ export default function TechStack() {
     <AboutSection title="Technology">
       <div className="tech-carousel">
         <div className="tech-track" ref={trackRef} style={{ animationPlayState: "paused" }}>
-          {[...stackItems, ...stackItems].map(({ icon: Icon, label, name }, i) => (
-            <div key={`${label}-${i}`} className="tech-card">
-              <div className="tech-card-icon"><Icon size={22} strokeWidth={1.5} /></div>
-              <span className="tech-card-label">{label}</span>
+          {[...stackItems, ...stackItems].map(({ icon: Icon, name, color }, i) => (
+            <div key={`${name}-${i}`} className="tech-card">
+              <div className="tech-card-icon" style={{ color }}>
+                <Icon size={28} aria-hidden="true" />
+              </div>
               <span className="tech-card-name">{name}</span>
             </div>
           ))}
