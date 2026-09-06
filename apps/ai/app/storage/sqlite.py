@@ -2705,6 +2705,35 @@ class SQLiteWorkflowStore:
             ).fetchall()
         return [self._workflow_run_from_row(row) for row in rows]
 
+    async def get_run_inputs(
+        self, *, workflow_run_id: UUID
+    ) -> tuple[SelectedUploadSnapshot, ...]:
+        """Return persisted selected uploads for a workflow run."""
+
+        async with self._database.open() as connection:
+            rows = await (
+                await connection.execute(
+                    """SELECT upload_id, session_id, owner_user_id, source_id,
+                    file_name, mime_type, size_bytes, sha256
+                    FROM workflow_run_inputs
+                    WHERE workflow_run_id = ? ORDER BY ordinal""",
+                    (str(workflow_run_id),),
+                )
+            ).fetchall()
+        return tuple(
+            SelectedUploadSnapshot(
+                upload_id=UUID(row["upload_id"]),
+                session_id=UUID(row["session_id"]),
+                owner_user_id=UUID(row["owner_user_id"]),
+                source_id=UUID(row["source_id"]),
+                file_name=row["file_name"],
+                mime_type=row["mime_type"],
+                size_bytes=row["size_bytes"],
+                sha256=row["sha256"],
+            )
+            for row in rows
+        )
+
     async def mark_stale_runs_interrupted(
         self, *, stale_before: UtcTimestamp, interrupted_at: UtcTimestamp
     ) -> list[WorkflowRun]:

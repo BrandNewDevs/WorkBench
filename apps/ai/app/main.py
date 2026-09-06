@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from uuid import uuid4
 
 import uvicorn
 from fastapi import APIRouter, FastAPI, Request
@@ -25,7 +26,12 @@ from app.auth.service import AuthError, AuthService
 from app.config import ApplicationSettings
 from app.health import ApplicationDependencies, build_health_response
 from app.local_health import LocalSystemHealthProvider
-from app.ports.local_backend import LocalDeploymentProof
+from app.ports.local_backend import (
+    LocalDeploymentProof,
+    WorkflowAdmissionStatus,
+    WorkflowMessage,
+    WorkflowRunAdmission,
+)
 from app.sandbox import DockerSandboxExecutor
 from app.storage import (
     LocalKnowledgeSourceStore,
@@ -42,6 +48,7 @@ from app.storage import (
     SQLiteWorkflowStore,
 )
 from app.tools.registry import ToolRegistry
+from app.workflow.contracts import ActivityEvent, ActivityEventType
 from app.workflow.runner import CheckpointAwareWorkflowRunner, InspectionWorkflowInputPolicy
 
 
@@ -148,13 +155,53 @@ def compose_runtime_dependencies(
             stale_before=now - timedelta(seconds=settings.workflow_lease_seconds),
             interrupted_at=now,
         )
-        if interrupted:
-            async with database.open() as connection:
-                for run in interrupted:
+        for stale_run in interrupted:
+            claimed = await workflow_store.claim_retry(
+                workflow_run_id=stale_run.workflow_run_id,
+                expected_stage_version=stale_run.stage_version,
+                lease_expires_at=now + timedelta(seconds=settings.workflow_lease_seconds),
+            )
+            if claimed is None or workflow_runner is None:
+                if claimed is not None:
+                    async with database.open() as connection:
+                        await connection.execute(
+                            "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
+                            "WHERE workflow_run_id = ? AND status = 'active'",
+                            (now.isoformat(), str(claimed.workflow_run_id)),
+                        )
+                continue
+            selected_uploads = await workflow_store.get_run_inputs(
+                workflow_run_id=claimed.workflow_run_id,
+            )
+            synthetic_message = WorkflowMessage(
+                message_id=uuid4(),
+                session_id=claimed.session_id,
+                author_user_id=claimed.owner_user_id,
+                role="user",
+                content="[startup recovery]",
+                created_at=now,
+            )
+            admission = WorkflowRunAdmission(
+                status=WorkflowAdmissionStatus.CREATED,
+                run=claimed,
+                message=synthetic_message,
+                selected_uploads=selected_uploads,
+                accepted_event=ActivityEvent(
+                    event_id=0,
+                    session_id=claimed.session_id,
+                    workflow_run_id=claimed.workflow_run_id,
+                    event_type=ActivityEventType.MESSAGE_ACCEPTED,
+                    occurred_at=now,
+                ),
+            )
+            try:
+                await workflow_runner.run(admission)
+            except Exception:
+                async with database.open() as connection:
                     await connection.execute(
                         "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
-                        "WHERE workflow_run_id = ? AND status = 'active' AND retryable = 1",
-                        (now.isoformat(), str(run.workflow_run_id)),
+                        "WHERE workflow_run_id = ? AND status = 'active'",
+                        (now.isoformat(), str(claimed.workflow_run_id)),
                     )
 
     return ApplicationDependencies(

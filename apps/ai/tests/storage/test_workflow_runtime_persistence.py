@@ -372,7 +372,7 @@ async def test_startup_recovers_expired_active_runs(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_startup_recovery_frees_nonterminal_slot_for_new_admission(
+async def test_startup_recovery_claim_then_fail_frees_nonterminal_slot(
     tmp_path: Path,
 ) -> None:
     """Regression: interrupted runs must not permanently block new admissions."""
@@ -409,13 +409,21 @@ async def test_startup_recovery_frees_nonterminal_slot_for_new_admission(
     )
     assert len(interrupted) == 1
 
+    claimed = await fresh_store.claim_retry(
+        workflow_run_id=expired_run.workflow_run_id,
+        expected_stage_version=expired_run.stage_version,
+        lease_expires_at=now + timedelta(seconds=120),
+    )
+    assert claimed is not None
+    assert claimed.retryable is False
+    assert claimed.interrupted_at is None
+
     async with fresh.open() as connection:
-        for run in interrupted:
-            await connection.execute(
-                "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
-                "WHERE workflow_run_id = ? AND status = 'active' AND retryable = 1",
-                (now.isoformat(), str(run.workflow_run_id)),
-            )
+        await connection.execute(
+            "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
+            "WHERE workflow_run_id = ? AND status = 'active'",
+            (now.isoformat(), str(claimed.workflow_run_id)),
+        )
 
     new_admission = admission(item, uuid4(), "New analysis")
     result = await fresh_store.admit_run(new_admission)
