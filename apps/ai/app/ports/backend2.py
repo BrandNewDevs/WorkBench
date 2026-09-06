@@ -5,12 +5,13 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 from app.ai.schemas import ApprovedPath
 from app.api.contracts import ApiContractModel
 from app.auth.contracts import UserRole
 from app.tools.contracts import (
+    ArtifactFormat,
     DocumentExportExecutionRequest,
     DocumentExportResult,
     SandboxExecutionRequest,
@@ -75,6 +76,58 @@ class StoredUpload(ApiContractModel):
     size_bytes: int = Field(ge=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: UtcTimestamp
+
+
+_WINDOWS_RESERVED_ARTIFACT_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"LPT{number}" for number in range(1, 10)),
+    }
+)
+
+
+class StoredArtifact(ApiContractModel):
+    """Durable metadata for one locally generated artifact, never its bytes or path."""
+
+    artifact_id: UUID
+    session_id: UUID
+    workflow_run_id: UUID
+    owner_user_id: UUID
+    approval_id: UUID
+    draft_id: UUID
+    format: ArtifactFormat
+    file_name: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: UtcTimestamp
+
+    @field_validator("file_name")
+    @classmethod
+    def require_safe_file_name(cls, value: str) -> str:
+        """Reject path syntax and Windows names unsafe for the local workspace."""
+
+        windows_stem = value.split(".", maxsplit=1)[0].upper()
+        if (
+            value in {".", ".."}
+            or any(character in '<>:"/\\|?*' for character in value)
+            or any(ord(character) < 32 for character in value)
+            or value.endswith((" ", "."))
+            or windows_stem in _WINDOWS_RESERVED_ARTIFACT_NAMES
+        ):
+            raise ValueError("file_name must be one safe local path component")
+        return value
+
+    @model_validator(mode="after")
+    def require_matching_extension(self) -> "StoredArtifact":
+        """Bind the visible filename extension to the validated artifact format."""
+
+        if not self.file_name.lower().endswith(f".{self.format.value}"):
+            raise ValueError("file_name extension must match artifact format")
+        return self
 
 
 class AuditAction(StrEnum):
@@ -245,6 +298,39 @@ class ActivityEventStore(Protocol):
         """Subscribe to new session events without embedding an SSE transport."""
         ...
 
+
+class ArtifactStore(Protocol):
+    """Persist claim-authorized metadata for locally generated artifacts."""
+
+    async def create(
+        self,
+        artifact: StoredArtifact,
+        *,
+        execution_claim_token: UUID,
+    ) -> StoredArtifact:
+        """Persist metadata only for the winning approved export claim."""
+        ...
+
+    async def get(
+        self,
+        *,
+        artifact_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+    ) -> StoredArtifact | None:
+        """Return one artifact only when its complete ownership context matches."""
+        ...
+
+    async def list_for_run(
+        self,
+        *,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+    ) -> list[StoredArtifact]:
+        """Return one owner's artifacts for a workflow run in stable order."""
+        ...
 
 class ApprovalStore(Protocol):
     """Persist immutable approval intent and resolve it with compare-and-set semantics."""

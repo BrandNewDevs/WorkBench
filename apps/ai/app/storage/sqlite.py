@@ -9,16 +9,17 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import aiosqlite
-from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from app.auth.contracts import UserRole
 from app.ports.backend2 import (
     AuditRecord,
     AuthSessionRecord,
+    StoredArtifact,
     StoredIdentity,
     WorkflowMessage,
 )
-from app.tools.contracts import ToolExecutionResult
+from app.tools.contracts import DocumentExportArguments, ToolExecutionResult
 from app.workflow.contracts import (
     Approval,
     ApprovalDecision,
@@ -203,6 +204,48 @@ CREATE INDEX IF NOT EXISTS workflow_messages_session_order
 ON workflow_messages (session_id, sequence)
 """
 
+_CREATE_ARTIFACTS_TABLE = """
+CREATE TABLE IF NOT EXISTS artifacts (
+    artifact_id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES workflow_sessions(session_id) ON DELETE CASCADE,
+    workflow_run_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    approval_id TEXT NOT NULL REFERENCES approvals(approval_id),
+    draft_id TEXT NOT NULL,
+    format TEXT NOT NULL CHECK (format IN ('docx', 'pdf')),
+    file_name TEXT NOT NULL COLLATE NOCASE CHECK (
+        length(file_name) BETWEEN 1 AND 255
+        AND file_name NOT IN ('.', '..')
+        AND instr(file_name, '/') = 0
+        AND instr(file_name, '\\') = 0
+        AND instr(file_name, ':') = 0
+        AND instr(file_name, '*') = 0
+        AND instr(file_name, '?') = 0
+        AND instr(file_name, '"') = 0
+        AND instr(file_name, '<') = 0
+        AND instr(file_name, '>') = 0
+        AND instr(file_name, '|') = 0
+        AND file_name = rtrim(file_name, ' .')
+    ),
+    size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+    sha256 TEXT NOT NULL CHECK (
+        length(sha256) = 64
+        AND sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+    created_at TEXT NOT NULL,
+    UNIQUE (session_id, file_name),
+    CHECK (
+        (format = 'docx' AND lower(file_name) GLOB '*.docx')
+        OR (format = 'pdf' AND lower(file_name) GLOB '*.pdf')
+    )
+)
+"""
+
+_CREATE_ARTIFACTS_RUN_INDEX = """
+CREATE INDEX IF NOT EXISTS artifacts_run_created
+ON artifacts (session_id, workflow_run_id, owner_user_id, created_at, artifact_id)
+"""
+
 
 class SessionAlreadyExistsError(RuntimeError):
     """Raised when session metadata already exists for a session identifier."""
@@ -210,6 +253,14 @@ class SessionAlreadyExistsError(RuntimeError):
 
 class InvalidSessionStatusError(ValueError):
     """Raised when a caller supplies a status outside the canonical session states."""
+
+
+class ArtifactAlreadyExistsError(RuntimeError):
+    """Raised when an artifact ID or session-local filename is already persisted."""
+
+
+class ArtifactContextMismatchError(PermissionError):
+    """Raised when artifact metadata is not authorized by the winning approval claim."""
 
 
 class SessionMetadata(BaseModel):
@@ -263,6 +314,8 @@ class LocalSQLiteDatabase:
             await connection.execute(_CREATE_WORKFLOW_MESSAGES_TABLE)
             await connection.execute(_CREATE_WORKFLOW_MESSAGES_SESSION_INDEX)
             await connection.execute(_CREATE_APPROVALS_TABLE)
+            await connection.execute(_CREATE_ARTIFACTS_TABLE)
+            await connection.execute(_CREATE_ARTIFACTS_RUN_INDEX)
 
     def _prepare_secure_paths(self) -> None:
         """Create and restrict the database directory and file before opening SQLite."""
@@ -718,6 +771,186 @@ class SQLiteApprovalStore:
         if value.tzinfo is None or value.utcoffset() != timedelta(0):
             raise ValueError(f"{field_name} must be timezone-aware UTC")
         return value.astimezone(UTC).isoformat()
+
+
+class SQLiteArtifactStore:
+    """Persist local artifact metadata authorized by the winning export claim."""
+
+    def __init__(self, database: LocalSQLiteDatabase) -> None:
+        self._database = database
+
+    async def create(
+        self,
+        artifact: StoredArtifact,
+        *,
+        execution_claim_token: UUID,
+    ) -> StoredArtifact:
+        """Insert metadata only when the exact approved export claim authorizes it."""
+
+        approval_identity = (
+            str(artifact.approval_id),
+            str(artifact.session_id),
+            str(artifact.workflow_run_id),
+            str(artifact.owner_user_id),
+            str(execution_claim_token),
+        )
+        try:
+            async with self._database.open() as connection:
+                arguments_cursor = await connection.execute(
+                    """SELECT approval.normalized_arguments
+                    FROM approvals AS approval
+                    JOIN workflow_sessions AS workflow_session
+                      ON workflow_session.session_id = approval.session_id
+                    WHERE approval.approval_id = ?
+                      AND approval.session_id = ?
+                      AND approval.workflow_run_id = ?
+                      AND approval.owner_user_id = ?
+                      AND approval.execution_claim_token = ?
+                      AND workflow_session.owner_user_id = approval.owner_user_id
+                      AND approval.status = 'approved'
+                      AND approval.decision = 'approved'
+                      AND approval.execution_status = 'queued'
+                      AND approval.tool_name = 'request_document_export'""",
+                    approval_identity,
+                )
+                arguments_row = await arguments_cursor.fetchone()
+                if arguments_row is None:
+                    raise ArtifactContextMismatchError(
+                        "artifact is not authorized by the matching execution claim"
+                    )
+
+                try:
+                    arguments = DocumentExportArguments.model_validate_json(
+                        arguments_row["normalized_arguments"]
+                    )
+                except ValidationError as error:
+                    raise ArtifactContextMismatchError(
+                        "approved document-export arguments are invalid"
+                    ) from error
+                if (
+                    arguments.draft_id != artifact.draft_id
+                    or artifact.format not in arguments.formats
+                ):
+                    raise ArtifactContextMismatchError(
+                        "artifact draft or format does not match the approved arguments"
+                    )
+
+                cursor = await connection.execute(
+                    """INSERT INTO artifacts (
+                        artifact_id, session_id, workflow_run_id, owner_user_id,
+                        approval_id, draft_id, format, file_name, size_bytes,
+                        sha256, created_at
+                    )
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    FROM approvals AS approval
+                    JOIN workflow_sessions AS workflow_session
+                      ON workflow_session.session_id = approval.session_id
+                    WHERE approval.approval_id = ?
+                      AND approval.session_id = ?
+                      AND approval.workflow_run_id = ?
+                      AND approval.owner_user_id = ?
+                      AND approval.execution_claim_token = ?
+                      AND workflow_session.owner_user_id = approval.owner_user_id
+                      AND approval.status = 'approved'
+                      AND approval.decision = 'approved'
+                      AND approval.execution_status = 'queued'
+                      AND approval.tool_name = 'request_document_export'
+                      AND approval.normalized_arguments = ?""",
+                    (
+                        str(artifact.artifact_id),
+                        str(artifact.session_id),
+                        str(artifact.workflow_run_id),
+                        str(artifact.owner_user_id),
+                        str(artifact.approval_id),
+                        str(artifact.draft_id),
+                        artifact.format.value,
+                        artifact.file_name,
+                        artifact.size_bytes,
+                        artifact.sha256,
+                        artifact.created_at.isoformat(),
+                        *approval_identity,
+                        arguments_row["normalized_arguments"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ArtifactContextMismatchError(
+                        "artifact authorization changed before metadata was persisted"
+                    )
+        except aiosqlite.IntegrityError as error:
+            if "UNIQUE constraint failed" in str(error):
+                raise ArtifactAlreadyExistsError(
+                    "artifact ID or session-local filename already exists"
+                ) from error
+            raise ArtifactContextMismatchError(
+                "artifact metadata violates the local persistence constraints"
+            ) from error
+        return artifact
+
+    async def get(
+        self,
+        *,
+        artifact_id: UUID,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+    ) -> StoredArtifact | None:
+        """Return metadata only for its exact artifact and ownership context."""
+
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                """SELECT artifact_id, session_id, workflow_run_id, owner_user_id,
+                          approval_id, draft_id, format, file_name, size_bytes,
+                          sha256, created_at
+                FROM artifacts
+                WHERE artifact_id = ? AND session_id = ? AND workflow_run_id = ?
+                  AND owner_user_id = ?""",
+                (
+                    str(artifact_id),
+                    str(session_id),
+                    str(workflow_run_id),
+                    str(owner_user_id),
+                ),
+            )
+            row = await cursor.fetchone()
+        return self._artifact_from_row(row) if row is not None else None
+
+    async def list_for_run(
+        self,
+        *,
+        session_id: UUID,
+        workflow_run_id: UUID,
+        owner_user_id: UUID,
+    ) -> list[StoredArtifact]:
+        """List one owner's run artifacts in deterministic creation order."""
+
+        async with self._database.open() as connection:
+            cursor = await connection.execute(
+                """SELECT artifact_id, session_id, workflow_run_id, owner_user_id,
+                          approval_id, draft_id, format, file_name, size_bytes,
+                          sha256, created_at
+                FROM artifacts
+                WHERE session_id = ? AND workflow_run_id = ? AND owner_user_id = ?
+                ORDER BY created_at ASC, artifact_id ASC""",
+                (str(session_id), str(workflow_run_id), str(owner_user_id)),
+            )
+            rows = await cursor.fetchall()
+        return [self._artifact_from_row(row) for row in rows]
+
+    @staticmethod
+    def _artifact_from_row(row: aiosqlite.Row) -> StoredArtifact:
+        return StoredArtifact(
+            artifact_id=row["artifact_id"],
+            session_id=row["session_id"],
+            workflow_run_id=row["workflow_run_id"],
+            owner_user_id=row["owner_user_id"],
+            approval_id=row["approval_id"],
+            draft_id=row["draft_id"],
+            format=row["format"],
+            file_name=row["file_name"],
+            size_bytes=row["size_bytes"],
+            sha256=row["sha256"],
+            created_at=row["created_at"],
+        )
 
 
 class SQLiteSessionMetadataStore:

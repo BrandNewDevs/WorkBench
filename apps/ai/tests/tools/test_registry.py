@@ -361,6 +361,10 @@ async def test_approved_call_reaches_only_the_bound_executor() -> None:
     assert result.result is not None
     assert result.result.status is ExecutionStatus.COMPLETED
     assert len(artifacts.calls) == 1
+    assert (
+        artifacts.calls[0].execution_claim_token
+        == approvals.claim_tokens[approval.approval_id]
+    )
     assert sandbox.calls == []
 
 

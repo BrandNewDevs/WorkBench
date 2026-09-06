@@ -7,11 +7,14 @@ from app.storage.session_workspace import (
     WorkspacePathError,
 )
 from app.storage.sqlite import (
+    ArtifactAlreadyExistsError,
+    ArtifactContextMismatchError,
     InvalidSessionStatusError,
     LocalSQLiteDatabase,
     SessionAlreadyExistsError,
     SessionMetadata,
     SQLiteApprovalStore,
+    SQLiteArtifactStore,
     SQLiteAuditStore,
     SQLiteAuthSessionStore,
     SQLiteIdentityStore,
@@ -21,10 +24,13 @@ from app.storage.sqlite import (
 )
 
 __all__ = [
+    "ArtifactAlreadyExistsError",
+    "ArtifactContextMismatchError",
     "InvalidSessionStatusError",
     "LocalSQLiteDatabase",
     "LocalSessionWorkspaceStore",
     "SQLiteApprovalStore",
+    "SQLiteArtifactStore",
     "SQLiteAuditStore",
     "SQLiteAuthSessionStore",
     "SQLiteIdentityStore",

@@ -2,7 +2,8 @@
 
 import inspect
 
-from app.ports.backend2 import ApprovalStore, IdentityStore, WorkflowStore
+from app.ports.backend2 import ApprovalStore, ArtifactStore, IdentityStore, WorkflowStore
+from app.tools.contracts import SandboxExecutionRequest
 
 
 def test_identity_store_supports_immutable_lookup_for_session_restoration() -> None:
@@ -50,3 +51,18 @@ def test_approval_store_exposes_an_atomic_execution_claim() -> None:
     assert "workflow_type" in signature.parameters
     assert "arguments_hash" in signature.parameters
     assert inspect.iscoroutinefunction(ApprovalStore.claim_execution)
+
+
+def test_artifact_store_requires_the_winning_execution_claim() -> None:
+    signature = inspect.signature(ArtifactStore.create)
+
+    assert tuple(signature.parameters) == (
+        "self",
+        "artifact",
+        "execution_claim_token",
+    )
+    assert inspect.iscoroutinefunction(ArtifactStore.create)
+
+
+def test_sandbox_execution_contract_remains_unchanged() -> None:
+    assert "execution_claim_token" not in SandboxExecutionRequest.model_fields
