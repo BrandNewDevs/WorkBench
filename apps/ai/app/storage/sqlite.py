@@ -1,6 +1,8 @@
 """Local SQLite foundation and Backend 2 metadata persistence."""
 
+import asyncio
 import json
+import math
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -21,6 +23,8 @@ from app.ports.backend2 import (
 )
 from app.tools.contracts import DocumentExportArguments, ToolExecutionResult
 from app.workflow.contracts import (
+    ActivityEvent,
+    ActivityEventType,
     Approval,
     ApprovalDecision,
     ApprovalExecutionClaim,
@@ -225,6 +229,37 @@ CREATE INDEX IF NOT EXISTS workflow_runs_session_current
 ON workflow_runs (session_id, sequence DESC)
 """
 
+_CREATE_ACTIVITY_EVENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS activity_events (
+    session_id TEXT NOT NULL REFERENCES workflow_sessions(session_id),
+    event_id INTEGER NOT NULL CHECK (event_id > 0),
+    owner_user_id TEXT NOT NULL,
+    workflow_run_id TEXT REFERENCES workflow_runs(workflow_run_id),
+    event_type TEXT NOT NULL CHECK (
+        event_type IN (
+            'session.created', 'upload.accepted', 'message.accepted',
+            'workflow.stageChanged', 'workflow.progress', 'message.completed',
+            'approval.required', 'approval.resolved', 'artifact.created',
+            'sandbox.completed', 'workflow.failed'
+        )
+    ),
+    occurred_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL CHECK (
+        typeof(payload_json) = 'text'
+        AND length(CAST(payload_json AS BLOB)) <= 8192
+    ),
+    PRIMARY KEY (session_id, event_id)
+)
+"""
+
+_CREATE_ACTIVITY_EVENTS_REPLAY_INDEX = """
+CREATE INDEX IF NOT EXISTS activity_events_owner_replay
+ON activity_events (session_id, owner_user_id, event_id)
+"""
+
+_ACTIVITY_EVENT_COLUMNS = """session_id, event_id, owner_user_id,
+workflow_run_id, event_type, occurred_at, payload_json"""
+
 _WORKFLOW_RUN_COLUMNS = """workflow_run_id, session_id, owner_user_id,
 workflow_type, stage, stage_version, status, sandbox_attempts, created_at,
 updated_at"""
@@ -316,6 +351,10 @@ class ArtifactContextMismatchError(PermissionError):
     """Raised when artifact metadata is not authorized by the winning approval claim."""
 
 
+class ActivityEventContextMismatchError(PermissionError):
+    """Raised when activity access does not match an existing owned workflow context."""
+
+
 class SessionMetadata(BaseModel):
     """Durable ownership and lifecycle metadata for one workflow session."""
 
@@ -375,6 +414,8 @@ class LocalSQLiteDatabase:
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX)
             await connection.execute(_CREATE_WORKFLOW_RUNS_TABLE)
             await connection.execute(_CREATE_WORKFLOW_RUNS_CURRENT_INDEX)
+            await connection.execute(_CREATE_ACTIVITY_EVENTS_TABLE)
+            await connection.execute(_CREATE_ACTIVITY_EVENTS_REPLAY_INDEX)
             await connection.execute(_CREATE_WORKFLOW_MESSAGES_TABLE)
             # Older local databases predate the client idempotency key; add the
             # column in place so an existing development install keeps its data.
@@ -1597,7 +1638,9 @@ class SQLiteWorkflowStore:
             message_id=UUID(row["message_id"]),
             session_id=UUID(row["session_id"]),
             author_user_id=(
-                UUID(row["author_user_id"]) if row["author_user_id"] is not None else None
+                UUID(row["author_user_id"])
+                if row["author_user_id"] is not None
+                else None
             ),
             role=row["role"],
             content=row["content"],
@@ -1607,4 +1650,244 @@ class SQLiteWorkflowStore:
                 if row["client_message_id"] is not None
                 else None
             ),
+        )
+
+
+class SQLiteActivityEventStore:
+    """Persist sanitized activity events and poll SQLite for live delivery."""
+
+    _DEFAULT_POLL_INTERVAL_SECONDS = 0.1
+    _MIN_POLL_INTERVAL_SECONDS = 0.01
+    _MAX_POLL_INTERVAL_SECONDS = 5.0
+
+    def __init__(
+        self,
+        database: LocalSQLiteDatabase,
+        *,
+        poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
+    ) -> None:
+        if (
+            isinstance(poll_interval_seconds, bool)
+            or not isinstance(poll_interval_seconds, (int, float))
+            or not math.isfinite(poll_interval_seconds)
+            or not self._MIN_POLL_INTERVAL_SECONDS
+            <= poll_interval_seconds
+            <= self._MAX_POLL_INTERVAL_SECONDS
+        ):
+            raise ValueError("poll interval must be between 0.01 and 5 seconds")
+        self._database = database
+        self._poll_interval_seconds = float(poll_interval_seconds)
+
+    async def append(
+        self,
+        event: ActivityEvent,
+        *,
+        owner_user_id: UUID,
+    ) -> ActivityEvent:
+        """Atomically assign and persist the next ID for an owned session."""
+
+        if event.event_id != 0:
+            raise ValueError("new activity events must use event_id=0")
+        payload_json = self._serialize_payload(event.payload)
+
+        async with self._database.open() as connection:
+            await connection.execute("BEGIN IMMEDIATE")
+            await self._require_owned_session(
+                connection,
+                session_id=event.session_id,
+                owner_user_id=owner_user_id,
+            )
+            if event.workflow_run_id is not None:
+                await self._require_owned_run(
+                    connection,
+                    workflow_run_id=event.workflow_run_id,
+                    session_id=event.session_id,
+                    owner_user_id=owner_user_id,
+                )
+
+            cursor = await connection.execute(
+                """SELECT COALESCE(MAX(event_id), 0) + 1 AS next_event_id
+                FROM activity_events WHERE session_id = ?""",
+                (str(event.session_id),),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("next activity event ID could not be allocated")
+            event_id = int(row["next_event_id"])
+
+            await connection.execute(
+                """INSERT INTO activity_events (
+                    session_id, event_id, owner_user_id, workflow_run_id,
+                    event_type, occurred_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(event.session_id),
+                    event_id,
+                    str(owner_user_id),
+                    str(event.workflow_run_id)
+                    if event.workflow_run_id is not None
+                    else None,
+                    event.event_type.value,
+                    event.occurred_at.isoformat(),
+                    payload_json,
+                ),
+            )
+
+        return event.model_copy(update={"event_id": event_id})
+
+    async def replay(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+        after_event_id: int,
+    ) -> list[ActivityEvent]:
+        """Return owned events after an exclusive per-session cursor."""
+
+        self._validate_after_event_id(after_event_id)
+        async with self._database.open() as connection:
+            await self._require_owned_session(
+                connection,
+                session_id=session_id,
+                owner_user_id=owner_user_id,
+            )
+            rows = await self._read_rows_after(
+                connection,
+                session_id=session_id,
+                owner_user_id=owner_user_id,
+                after_event_id=after_event_id,
+            )
+        return [self._event_from_row(row) for row in rows]
+
+    def subscribe(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+        after_event_id: int,
+    ) -> AsyncIterator[ActivityEvent]:
+        """Poll SQLite without retaining a connection while waiting or yielding."""
+
+        self._validate_after_event_id(after_event_id)
+
+        async def iterate() -> AsyncIterator[ActivityEvent]:
+            cursor = after_event_id
+            async with self._database.open() as connection:
+                await self._require_owned_session(
+                    connection,
+                    session_id=session_id,
+                    owner_user_id=owner_user_id,
+                )
+
+            while True:
+                events = await self._poll_after(
+                    session_id=session_id,
+                    owner_user_id=owner_user_id,
+                    after_event_id=cursor,
+                )
+                if not events:
+                    await asyncio.sleep(self._poll_interval_seconds)
+                    continue
+                for event in events:
+                    yield event
+                    cursor = event.event_id
+
+        return iterate()
+
+    async def _poll_after(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+        after_event_id: int,
+    ) -> list[ActivityEvent]:
+        async with self._database.open() as connection:
+            rows = await self._read_rows_after(
+                connection,
+                session_id=session_id,
+                owner_user_id=owner_user_id,
+                after_event_id=after_event_id,
+            )
+        return [self._event_from_row(row) for row in rows]
+
+    @staticmethod
+    async def _read_rows_after(
+        connection: aiosqlite.Connection,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+        after_event_id: int,
+    ) -> list[aiosqlite.Row]:
+        cursor = await connection.execute(
+            f"""SELECT {_ACTIVITY_EVENT_COLUMNS}
+            FROM activity_events
+            WHERE session_id = ? AND owner_user_id = ? AND event_id > ?
+            ORDER BY event_id ASC""",
+            (str(session_id), str(owner_user_id), after_event_id),
+        )
+        return list(await cursor.fetchall())
+
+    @staticmethod
+    async def _require_owned_session(
+        connection: aiosqlite.Connection,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> None:
+        cursor = await connection.execute(
+            """SELECT 1 FROM workflow_sessions
+            WHERE session_id = ? AND owner_user_id = ?""",
+            (str(session_id), str(owner_user_id)),
+        )
+        if await cursor.fetchone() is None:
+            raise ActivityEventContextMismatchError(
+                "activity event does not match an existing owned workflow context"
+            )
+
+    @staticmethod
+    async def _require_owned_run(
+        connection: aiosqlite.Connection,
+        *,
+        workflow_run_id: UUID,
+        session_id: UUID,
+        owner_user_id: UUID,
+    ) -> None:
+        cursor = await connection.execute(
+            """SELECT 1 FROM workflow_runs
+            WHERE workflow_run_id = ? AND session_id = ? AND owner_user_id = ?""",
+            (str(workflow_run_id), str(session_id), str(owner_user_id)),
+        )
+        if await cursor.fetchone() is None:
+            raise ActivityEventContextMismatchError(
+                "activity event does not match an existing owned workflow context"
+            )
+
+    @staticmethod
+    def _serialize_payload(payload: object) -> str:
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if len(serialized.encode("utf-8")) > 8 * 1024:
+            raise ValueError("canonical activity payload must not exceed 8 KiB")
+        return serialized
+
+    @staticmethod
+    def _validate_after_event_id(after_event_id: int) -> None:
+        if isinstance(after_event_id, bool) or not isinstance(after_event_id, int):
+            raise TypeError("after_event_id must be an integer")
+        if after_event_id < 0:
+            raise ValueError("after_event_id must be nonnegative")
+
+    @staticmethod
+    def _event_from_row(row: aiosqlite.Row) -> ActivityEvent:
+        return ActivityEvent(
+            event_id=row["event_id"],
+            session_id=row["session_id"],
+            workflow_run_id=row["workflow_run_id"],
+            event_type=ActivityEventType(row["event_type"]),
+            occurred_at=row["occurred_at"],
+            payload=json.loads(row["payload_json"]),
         )

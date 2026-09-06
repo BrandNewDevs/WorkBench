@@ -5,10 +5,12 @@ from datetime import UTC, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from app.auth.contracts import AuthenticatedUser, UserRole
 from app.workflow.contracts import (
+    ActivityEvent,
+    ActivityEventType,
     Approval,
     ApprovalDecision,
     ApprovalStatus,
@@ -177,3 +179,92 @@ def test_workflow_contracts_reject_inconsistent_states(
 
     with pytest.raises(ValidationError):
         model()
+
+
+def test_activity_payload_is_canonicalized_to_allowlisted_camel_case_metadata() -> None:
+    upload_id = uuid4()
+    source_id = uuid4()
+
+    event = ActivityEvent(
+        event_id=0,
+        session_id=uuid4(),
+        event_type=ActivityEventType.UPLOAD_ACCEPTED,
+        occurred_at=datetime.now(UTC),
+        payload={
+            "upload_id": str(upload_id),
+            "source_id": str(source_id),
+            "file_name": "inspection.jpg",
+            "size_bytes": 128,
+        },
+    )
+
+    assert event.payload == {
+        "uploadId": str(upload_id),
+        "sourceId": str(source_id),
+        "fileName": "inspection.jpg",
+        "sizeBytes": 128,
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"messageId": str(uuid4()), "prompt": "confidential"},
+        {"messageId": {"nested": "object"}},
+        {"messageId": str(uuid4()), "stdout": "secret output"},
+        {"messageId": str(uuid4()), "body": "full message"},
+    ],
+)
+def test_activity_payload_rejects_unapproved_or_sensitive_metadata(
+    payload: dict[str, JsonValue],
+) -> None:
+    with pytest.raises(ValidationError):
+        ActivityEvent(
+            event_id=0,
+            session_id=uuid4(),
+            event_type=ActivityEventType.MESSAGE_ACCEPTED,
+            occurred_at=datetime.now(UTC),
+            payload=payload,
+        )
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    [
+        "../inspection.jpg",
+        "folder/inspection.jpg",
+        "C:\\inspection.jpg",
+        "inspection?.jpg",
+        "inspection.jpg.",
+        "CON.txt",
+    ],
+)
+def test_upload_activity_rejects_unsafe_file_names(file_name: str) -> None:
+    with pytest.raises(ValidationError, match="safe local path component"):
+        ActivityEvent(
+            event_id=0,
+            session_id=uuid4(),
+            event_type=ActivityEventType.UPLOAD_ACCEPTED,
+            occurred_at=datetime.now(UTC),
+            payload={
+                "uploadId": str(uuid4()),
+                "sourceId": str(uuid4()),
+                "fileName": file_name,
+                "sizeBytes": 1,
+            },
+        )
+
+
+def test_sandbox_activity_requires_a_sanitized_terminal_result() -> None:
+    with pytest.raises(ValidationError):
+        ActivityEvent(
+            event_id=0,
+            session_id=uuid4(),
+            event_type=ActivityEventType.SANDBOX_COMPLETED,
+            occurred_at=datetime.now(UTC),
+            payload={
+                "status": ExecutionStatus.QUEUED,
+                "passed": False,
+                "failureCode": "still_running",
+            },
+        )

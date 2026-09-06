@@ -316,15 +316,32 @@ class SessionFileStore(Protocol):
 class ActivityEventStore(Protocol):
     """Persist ordered session events and make them available for replay/live delivery."""
 
-    async def append(self, event: ActivityEvent) -> ActivityEvent:
+    async def append(
+        self,
+        event: ActivityEvent,
+        *,
+        owner_user_id: UUID,
+    ) -> ActivityEvent:
         """Append one event with a Backend 2-assigned per-session sequence."""
         ...
 
-    async def replay(self, session_id: UUID, after_event_id: int) -> list[ActivityEvent]:
+    async def replay(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+        after_event_id: int,
+    ) -> list[ActivityEvent]:
         """Return durable events after the supplied event sequence."""
         ...
 
-    def subscribe(self, session_id: UUID) -> AsyncIterator[ActivityEvent]:
+    def subscribe(
+        self,
+        *,
+        session_id: UUID,
+        owner_user_id: UUID,
+        after_event_id: int,
+    ) -> AsyncIterator[ActivityEvent]:
         """Subscribe to new session events without embedding an SSE transport."""
         ...
 

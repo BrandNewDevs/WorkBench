@@ -1,11 +1,19 @@
 """Immutable state and event contracts for Backend 1 workflows."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import AfterValidator, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    Field,
+    JsonValue,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from app.api.contracts import ApiContractModel
 
@@ -103,6 +111,128 @@ class ExecutionStatus(StrEnum):
     QUEUED = "queued"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+_WINDOWS_RESERVED_FILE_NAMES = frozenset(
+    {
+        "AUX",
+        "CON",
+        "NUL",
+        "PRN",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"LPT{number}" for number in range(1, 10)),
+    }
+)
+_ACTIVITY_EVENT_MAX_PAYLOAD_BYTES = 8 * 1024
+
+
+class _EmptyActivityPayload(ApiContractModel):
+    pass
+
+
+class _UploadAcceptedPayload(ApiContractModel):
+    upload_id: UUID
+    source_id: UUID
+    file_name: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(ge=1)
+
+    @field_validator("file_name")
+    @classmethod
+    def require_safe_file_name(cls, value: str) -> str:
+        windows_stem = value.split(".", maxsplit=1)[0].upper()
+        if (
+            value in {".", ".."}
+            or any(character in '<>:"/\\|?*' for character in value)
+            or any(ord(character) < 32 for character in value)
+            or value.endswith((" ", "."))
+            or windows_stem in _WINDOWS_RESERVED_FILE_NAMES
+        ):
+            raise ValueError("fileName must be one safe local path component")
+        return value
+
+
+class _MessageActivityPayload(ApiContractModel):
+    message_id: UUID
+
+
+class _StageChangedPayload(ApiContractModel):
+    previous_stage: WorkflowStage
+    stage: WorkflowStage
+    stage_version: int = Field(ge=0)
+    status: WorkflowRunStatus
+
+
+class _WorkflowProgressPayload(ApiContractModel):
+    stage: WorkflowStage
+    completed_units: int = Field(ge=0)
+    total_units: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def require_bounded_progress(self) -> "_WorkflowProgressPayload":
+        if self.completed_units > self.total_units:
+            raise ValueError("completedUnits must not exceed totalUnits")
+        return self
+
+
+class _ApprovalRequiredPayload(ApiContractModel):
+    approval_id: UUID
+
+
+class _ApprovalResolvedPayload(ApiContractModel):
+    approval_id: UUID
+    decision: ApprovalDecision
+
+
+class _ArtifactCreatedPayload(ApiContractModel):
+    artifact_id: UUID
+
+
+class _SandboxCompletedPayload(ApiContractModel):
+    status: ExecutionStatus
+    exit_code: int | None = None
+    passed: bool
+    failure_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+
+    @model_validator(mode="after")
+    def require_terminal_result(self) -> "_SandboxCompletedPayload":
+        if self.status is ExecutionStatus.COMPLETED:
+            if self.exit_code != 0 or not self.passed or self.failure_code is not None:
+                raise ValueError("completed sandbox metadata must report a passing exit")
+        elif self.status is ExecutionStatus.FAILED:
+            if self.passed or self.failure_code is None:
+                raise ValueError("failed sandbox metadata requires a failure code")
+        else:
+            raise ValueError("sandbox activity status must be completed or failed")
+        return self
+
+
+class _WorkflowFailedPayload(ApiContractModel):
+    stage: WorkflowStage
+    failure_code: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+
+
+_ACTIVITY_PAYLOAD_MODELS: dict[ActivityEventType, type[ApiContractModel]] = {
+    ActivityEventType.SESSION_CREATED: _EmptyActivityPayload,
+    ActivityEventType.UPLOAD_ACCEPTED: _UploadAcceptedPayload,
+    ActivityEventType.MESSAGE_ACCEPTED: _MessageActivityPayload,
+    ActivityEventType.STAGE_CHANGED: _StageChangedPayload,
+    ActivityEventType.PROGRESS: _WorkflowProgressPayload,
+    ActivityEventType.MESSAGE_COMPLETED: _MessageActivityPayload,
+    ActivityEventType.APPROVAL_REQUIRED: _ApprovalRequiredPayload,
+    ActivityEventType.APPROVAL_RESOLVED: _ApprovalResolvedPayload,
+    ActivityEventType.ARTIFACT_CREATED: _ArtifactCreatedPayload,
+    ActivityEventType.SANDBOX_COMPLETED: _SandboxCompletedPayload,
+    ActivityEventType.WORKFLOW_FAILED: _WorkflowFailedPayload,
+}
 
 
 _INSPECTION_STAGES = frozenset(
@@ -242,6 +372,34 @@ class ActivityEvent(ApiContractModel):
     event_type: ActivityEventType
     occurred_at: UtcTimestamp
     payload: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("payload")
+    @classmethod
+    def validate_and_normalize_payload(
+        cls,
+        value: dict[str, JsonValue],
+        info: ValidationInfo,
+    ) -> dict[str, JsonValue]:
+        """Allow only bounded, event-specific, user-visible metadata."""
+
+        event_type = info.data.get("event_type")
+        if not isinstance(event_type, ActivityEventType):
+            raise ValueError("eventType must be validated before payload")
+        validated = _ACTIVITY_PAYLOAD_MODELS[event_type].model_validate(value)
+        canonical = validated.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+        )
+        serialized = json.dumps(
+            canonical,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if len(serialized.encode("utf-8")) > _ACTIVITY_EVENT_MAX_PAYLOAD_BYTES:
+            raise ValueError("canonical activity payload must not exceed 8 KiB")
+        return canonical
 
 
 class Approval(ApiContractModel):

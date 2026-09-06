@@ -2,7 +2,13 @@
 
 import inspect
 
-from app.ports.backend2 import ApprovalStore, ArtifactStore, IdentityStore, WorkflowStore
+from app.ports.backend2 import (
+    ActivityEventStore,
+    ApprovalStore,
+    ArtifactStore,
+    IdentityStore,
+    WorkflowStore,
+)
 from app.tools.contracts import SandboxExecutionRequest
 
 
@@ -90,3 +96,26 @@ def test_artifact_store_requires_the_winning_execution_claim() -> None:
 
 def test_sandbox_execution_contract_remains_unchanged() -> None:
     assert "execution_claim_token" not in SandboxExecutionRequest.model_fields
+
+
+def test_activity_event_store_is_owner_scoped_and_cursor_driven() -> None:
+    append = inspect.signature(ActivityEventStore.append)
+    replay = inspect.signature(ActivityEventStore.replay)
+    subscribe = inspect.signature(ActivityEventStore.subscribe)
+
+    assert tuple(append.parameters) == ("self", "event", "owner_user_id")
+    assert tuple(replay.parameters) == (
+        "self",
+        "session_id",
+        "owner_user_id",
+        "after_event_id",
+    )
+    assert tuple(subscribe.parameters) == (
+        "self",
+        "session_id",
+        "owner_user_id",
+        "after_event_id",
+    )
+    assert inspect.iscoroutinefunction(ActivityEventStore.append)
+    assert inspect.iscoroutinefunction(ActivityEventStore.replay)
+    assert not inspect.iscoroutinefunction(ActivityEventStore.subscribe)
