@@ -61,7 +61,11 @@ class LocalAIEngine:
         self._vision = VisionAnalyzer(
             dependencies.model_adapter,
             dependencies.model_profile,
-            visual_normalizer or LocalVisualNormalizer(),
+            (
+                visual_normalizer
+                if visual_normalizer is not None
+                else LocalVisualNormalizer()
+            ),
         )
         self._text = StructuredTextGenerator(
             dependencies.model_adapter,
@@ -193,7 +197,7 @@ def create_local_ai_engine(
     the approved Chroma root. The returned engine owns the Ollama adapter lifecycle.
     """
 
-    profile = model_profile or load_model_profile()
+    profile = model_profile if model_profile is not None else load_model_profile()
     normalizer = LocalVisualNormalizer(vision_settings)
     chroma_client = create_persistent_chroma_client(knowledge_root)
     model_adapter = create_ollama_adapter(

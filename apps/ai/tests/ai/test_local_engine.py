@@ -302,7 +302,7 @@ async def test_local_engine_reports_knowledge_health_without_exposing_failures()
     assert health.knowledge_error == "KnowledgeIndexUnavailable"
 
 
-async def test_local_engine_factory_has_no_runtime_side_effect(tmp_path: Path) -> None:
+async def test_local_engine_factory_does_not_require_running_ollama(tmp_path: Path) -> None:
     """Construct and close the production module without contacting local Ollama."""
 
     engine = create_local_ai_engine(
