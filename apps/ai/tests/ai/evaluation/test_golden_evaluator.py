@@ -39,6 +39,19 @@ async def test_recorded_golden_workflow_passes_three_consecutive_runs(
     )
     assert all(run.metrics.final_schema_valid for run in result.runs)
     assert all(run.metrics.fallback_uses == 0 for run in result.runs)
+    assert all(run.metrics.model_invocations > 0 for run in result.runs)
+    assert all(run.metrics.prompt_tokens > 0 for run in result.runs)
+    assert all(run.metrics.generated_tokens > 0 for run in result.runs)
+    assert all(run.metrics.generation_tokens_per_second is not None for run in result.runs)
+    assert all(
+        run.metrics.selected_models
+        == {
+            "text": ("qwen3:4b",),
+            "vision": ("qwen3-vl:4b",),
+            "embedding": ("qwen3-embedding:0.6b",),
+        }
+        for run in result.runs
+    )
     assert all(run.metrics.total_duration_ms >= 0 for run in result.runs)
 
 

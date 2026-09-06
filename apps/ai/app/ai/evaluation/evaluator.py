@@ -28,6 +28,7 @@ from app.ai.schemas import (
     ApprovedKnowledgeRoot,
     ApprovedPath,
     ApprovedVisualInput,
+    Capability,
     DraftRequest,
     EvidenceChunk,
     InputModality,
@@ -354,6 +355,17 @@ class GoldenEvaluator:
             schema_failures=after.schema_failures - before.schema_failures,
             fallback_uses=after.fallback_uses - before.fallback_uses,
             final_schema_valid=final_schema_valid,
+            model_invocations=after.model_invocations - before.model_invocations,
+            prompt_tokens=after.prompt_tokens - before.prompt_tokens,
+            generated_tokens=after.generated_tokens - before.generated_tokens,
+            model_total_duration_ms=_nanoseconds_to_milliseconds(
+                after.model_total_duration_ns - before.model_total_duration_ns
+            ),
+            model_load_duration_ms=_nanoseconds_to_milliseconds(
+                after.model_load_duration_ns - before.model_load_duration_ns
+            ),
+            generation_tokens_per_second=_tokens_per_second(before, after),
+            selected_models=_selected_models(before, after),
             operation_durations_ms=durations,
             total_duration_ms=_elapsed_ms(started),
         )
@@ -370,3 +382,35 @@ class GoldenEvaluator:
 
 def _elapsed_ms(started: float) -> float:
     return max(0.0, (perf_counter() - started) * 1_000)
+
+
+def _nanoseconds_to_milliseconds(value: int) -> float:
+    return max(0.0, value / 1_000_000)
+
+
+def _tokens_per_second(
+    before: ObservationSnapshot,
+    after: ObservationSnapshot,
+) -> float | None:
+    generated_tokens = after.generated_tokens - before.generated_tokens
+    duration_ns = after.generation_duration_ns - before.generation_duration_ns
+    if generated_tokens <= 0 or duration_ns <= 0:
+        return None
+    return generated_tokens / (duration_ns / 1_000_000_000)
+
+
+def _selected_models(
+    before: ObservationSnapshot,
+    after: ObservationSnapshot,
+) -> dict[str, tuple[str, ...]]:
+    selections = after.model_selections[len(before.model_selections) :]
+    return {
+        capability.value: tuple(
+            dict.fromkeys(
+                model
+                for selected_capability, model in selections
+                if selected_capability is capability
+            )
+        )
+        for capability in Capability
+    }
