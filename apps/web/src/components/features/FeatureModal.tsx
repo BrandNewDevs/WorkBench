@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { X } from "lucide-react";
 
 export interface Feature {
   title: string;
@@ -8,18 +9,17 @@ export interface Feature {
 export default function FeatureModal({ feature, onClose }: { feature: Feature | null; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const restoreFocusRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
 
-  if (feature && restoreFocusRef.current === null && document.activeElement instanceof HTMLElement) {
-    restoreFocusRef.current = document.activeElement;
-  }
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
 
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousHtmlOverflow = document.documentElement.style.overflow;
     const previousBodyOverflow = document.body.style.overflow;
     document.documentElement.style.overflow = "hidden";
@@ -31,7 +31,7 @@ export default function FeatureModal({ feature, onClose }: { feature: Feature | 
       if (dialog.open) dialog.close();
       document.documentElement.style.overflow = previousHtmlOverflow;
       document.body.style.overflow = previousBodyOverflow;
-      if (restoreFocusRef.current?.isConnected) restoreFocusRef.current.focus();
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
     };
   }, []);
 
@@ -53,10 +53,8 @@ export default function FeatureModal({ feature, onClose }: { feature: Feature | 
       }}
     >
       <div className="feature-modal-content">
-        <button ref={closeButtonRef} className="feature-modal-close" type="button" onClick={onCloseRef.current} aria-label="Close feature details">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <path d="M1 1L13 13M1 13L13 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
+        <button ref={closeButtonRef} className="feature-modal-close" type="button" onClick={() => onCloseRef.current()} aria-label="Close feature details">
+          <X size={14} aria-hidden="true" />
         </button>
         <span className="feature-modal-tag">{feature.title}</span>
         <h2 id="feature-modal-title" className="feature-modal-title">{feature.title}</h2>

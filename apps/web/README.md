@@ -1,8 +1,6 @@
 # WorkBench web
 
-`apps/web` is the WorkBench single-page application. Vite runs the development server and production build. The UI uses React with TypeScript, TSX, and Tailwind CSS. ESLint checks the source, pnpm manages dependencies, and Turborepo runs workspace tasks from the repository root.
-
-Tailwind CSS is loaded from `src/index.css` and integrated with Vite through `@tailwindcss/vite`.
+`apps/web` is the WorkBench single-page application. Vite runs the development server and production build. The UI uses React with TypeScript and TSX, styled with plain CSS design tokens in `src/index.css`. ESLint checks the source, pnpm manages dependencies, and Turborepo runs workspace tasks from the repository root.
 
 ## Install
 
