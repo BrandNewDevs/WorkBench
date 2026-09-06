@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { Bot, CircleCheck, Eye, FileText, Lock, Search } from "lucide-react";
 import FeatureCard from "./FeatureCard";
@@ -24,13 +24,41 @@ const featureIcons: Record<(typeof featureDetails)[number]["id"], JSX.Element> =
 
 export default function FeatureList() {
   const [activeFeatureId, setActiveFeatureId] = useState<string | null>(null);
+  const [visibleCards, setVisibleCards] = useState<Set<number>>(new Set());
+  const listRef = useRef<HTMLUListElement>(null);
   const activeData = activeFeatureId ? (featureDetails.find((f) => f.id === activeFeatureId) ?? null) : null;
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const idx = Number(entry.target.getAttribute("data-card-index"));
+          if (entry.isIntersecting) {
+            setVisibleCards((prev) => new Set([...prev, idx]));
+          }
+        });
+      },
+      { threshold: 0.05, rootMargin: "0px 0px -10px 0px" }
+    );
+
+    const cardEls = el.querySelectorAll("[data-card-index]");
+    cardEls.forEach((cardEl) => observer.observe(cardEl));
+
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <>
-      <ul className="feature-list" aria-label="WorkBench features">
-        {featureDetails.map(({ id, title, category, desc }) => (
-          <li key={id}>
+      <ul className="feature-list" aria-label="WorkBench features" ref={listRef}>
+        {featureDetails.map(({ id, title, category, desc }, i) => (
+          <li
+            key={id}
+            data-card-index={i}
+            className={`feature-list-item ${i % 2 === 0 ? "from-left" : "from-right"} ${visibleCards.has(i) ? "visible" : ""}`}
+          >
             <FeatureCard
               id={id}
               title={title}
