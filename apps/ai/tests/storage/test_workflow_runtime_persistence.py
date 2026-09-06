@@ -369,3 +369,54 @@ async def test_startup_recovers_expired_active_runs(tmp_path: Path) -> None:
     assert len(interrupted) == 1
     assert interrupted[0].workflow_run_id == expired_run.workflow_run_id
     assert interrupted[0].retryable is True
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_frees_nonterminal_slot_for_new_admission(
+    tmp_path: Path,
+) -> None:
+    """Regression: interrupted runs must not permanently block new admissions."""
+
+    database = LocalSQLiteDatabase(tmp_path / "workbench.db")
+    await database.initialize()
+    store = SQLiteWorkflowStore(database)
+
+    item = session()
+    await store.create_session(item)
+
+    expired_run = WorkflowRun(
+        workflow_run_id=uuid4(),
+        session_id=item.session_id,
+        owner_user_id=item.owner_user_id,
+        workflow_type=item.workflow_type,
+        stage=WorkflowStage.EXTRACTING,
+        stage_version=1,
+        status=WorkflowRunStatus.ACTIVE,
+        sandbox_attempts=0,
+        created_at=NOW,
+        updated_at=NOW,
+        execution_lease_expires_at=NOW - timedelta(seconds=10),
+    )
+    await store.create_run(expired_run)
+
+    fresh = LocalSQLiteDatabase(tmp_path / "workbench.db")
+    await fresh.initialize()
+    fresh_store = SQLiteWorkflowStore(fresh)
+
+    now = NOW + timedelta(seconds=5)
+    interrupted = await fresh_store.mark_stale_runs_interrupted(
+        stale_before=now, interrupted_at=now,
+    )
+    assert len(interrupted) == 1
+
+    async with fresh.open() as connection:
+        for run in interrupted:
+            await connection.execute(
+                "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
+                "WHERE workflow_run_id = ? AND status = 'active' AND retryable = 1",
+                (now.isoformat(), str(run.workflow_run_id)),
+            )
+
+    new_admission = admission(item, uuid4(), "New analysis")
+    result = await fresh_store.admit_run(new_admission)
+    assert result.status == WorkflowAdmissionStatus.CREATED

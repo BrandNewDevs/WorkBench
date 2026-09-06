@@ -144,10 +144,18 @@ def compose_runtime_dependencies(
     async def _startup_with_recovery() -> None:
         await database.initialize()
         now = datetime.now(UTC)
-        await workflow_store.mark_stale_runs_interrupted(
+        interrupted = await workflow_store.mark_stale_runs_interrupted(
             stale_before=now - timedelta(seconds=settings.workflow_lease_seconds),
             interrupted_at=now,
         )
+        if interrupted:
+            async with database.open() as connection:
+                for run in interrupted:
+                    await connection.execute(
+                        "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
+                        "WHERE workflow_run_id = ? AND status = 'active' AND retryable = 1",
+                        (now.isoformat(), str(run.workflow_run_id)),
+                    )
 
     return ApplicationDependencies(
         ai_engine=ai_engine,
