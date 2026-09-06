@@ -92,8 +92,17 @@ class GoldenRunMetrics(ContractModel):
     vision_recall: float = Field(ge=0, le=1)
     retrieval_ranks: dict[str, int | None]
     schema_failures: int = Field(ge=0)
+    schema_failures_by_capability: dict[str, int]
     fallback_uses: int = Field(ge=0)
     final_schema_valid: bool
+    model_invocations: int = Field(ge=0)
+    prompt_tokens: int = Field(ge=0)
+    generated_tokens: int = Field(ge=0)
+    model_client_elapsed_ms: float = Field(ge=0)
+    model_total_duration_ms: float = Field(ge=0)
+    model_load_duration_ms: float = Field(ge=0)
+    generation_tokens_per_second: float | None = Field(default=None, ge=0)
+    selected_models: dict[str, tuple[str, ...]]
     operation_durations_ms: dict[str, float]
     total_duration_ms: float = Field(ge=0)
 

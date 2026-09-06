@@ -8,8 +8,10 @@ from app.ai.errors import InvalidStructuredOutput
 from app.ai.models.ports import ModelAdapter
 from app.ai.models.structured_output import validate_structured_output
 from app.ai.schemas import (
+    Capability,
     EmbeddingRequest,
     EmbeddingResult,
+    InferenceMetrics,
     InstalledModel,
     ModelProfile,
     ModelRuntimeHealth,
@@ -24,7 +26,16 @@ class ObservationSnapshot:
     """Monotonic counters used to isolate one run from the next."""
 
     schema_failures: int
+    schema_failures_by_capability: tuple[tuple[Capability, int], ...]
     fallback_uses: int
+    model_invocations: int
+    prompt_tokens: int
+    generated_tokens: int
+    model_client_elapsed_ms: float
+    model_total_duration_ns: int
+    model_load_duration_ns: int
+    generation_duration_ns: int
+    model_selections: tuple[tuple[Capability, str], ...]
 
 
 class ObservedModelAdapter:
@@ -33,14 +44,35 @@ class ObservedModelAdapter:
     def __init__(self, adapter: ModelAdapter) -> None:
         self._adapter = adapter
         self._schema_failures = 0
+        self._schema_failures_by_capability = {capability: 0 for capability in Capability}
         self._fallback_uses = 0
+        self._model_invocations = 0
+        self._prompt_tokens = 0
+        self._generated_tokens = 0
+        self._model_client_elapsed_ms = 0.0
+        self._model_total_duration_ns = 0
+        self._model_load_duration_ns = 0
+        self._generation_duration_ns = 0
+        self._model_selections: list[tuple[Capability, str]] = []
 
     def snapshot(self) -> ObservationSnapshot:
         """Capture content-free counters before or after one evaluation run."""
 
         return ObservationSnapshot(
             schema_failures=self._schema_failures,
+            schema_failures_by_capability=tuple(
+                (capability, self._schema_failures_by_capability[capability])
+                for capability in Capability
+            ),
             fallback_uses=self._fallback_uses,
+            model_invocations=self._model_invocations,
+            prompt_tokens=self._prompt_tokens,
+            generated_tokens=self._generated_tokens,
+            model_client_elapsed_ms=self._model_client_elapsed_ms,
+            model_total_duration_ns=self._model_total_duration_ns,
+            model_load_duration_ns=self._model_load_duration_ns,
+            generation_duration_ns=self._generation_duration_ns,
+            model_selections=tuple(self._model_selections),
         )
 
     async def list_models(self) -> tuple[InstalledModel, ...]:
@@ -52,24 +84,29 @@ class ObservedModelAdapter:
     async def generate_text(self, request: TextGenerationRequest) -> TextGenerationResult:
         try:
             result = await self._adapter.generate_text(request)
-        except InvalidStructuredOutput:
-            self._schema_failures += 1
+        except InvalidStructuredOutput as error:
+            self._record_invalid_output(Capability.TEXT, error)
             raise
-        self._validate_result(request.output_schema, result)
+        self._validate_result(Capability.TEXT, request.output_schema, result)
         return result
 
     async def generate_vision(self, request: VisionGenerationRequest) -> TextGenerationResult:
         try:
             result = await self._adapter.generate_vision(request)
-        except InvalidStructuredOutput:
-            self._schema_failures += 1
+        except InvalidStructuredOutput as error:
+            self._record_invalid_output(Capability.VISION, error)
             raise
-        self._validate_result(request.output_schema, result)
+        self._validate_result(Capability.VISION, request.output_schema, result)
         return result
 
     async def create_embeddings(self, request: EmbeddingRequest) -> EmbeddingResult:
-        result = await self._adapter.create_embeddings(request)
+        try:
+            result = await self._adapter.create_embeddings(request)
+        except InvalidStructuredOutput as error:
+            self._record_invalid_output(Capability.EMBEDDING, error)
+            raise
         self._record_fallback(result.used_fallback)
+        self._record_inference(Capability.EMBEDDING, result.model, result.metrics)
         return result
 
     async def unload(self) -> None:
@@ -80,16 +117,54 @@ class ObservedModelAdapter:
 
     def _validate_result(
         self,
+        capability: Capability,
         schema: dict[str, JsonValue],
         result: TextGenerationResult,
     ) -> None:
+        # The local invocation completed, so retain its content-free evidence even
+        # when the returned structured payload is rejected below.
+        self._record_fallback(result.used_fallback)
+        self._record_inference(capability, result.model, result.metrics)
         try:
             validate_structured_output(schema, result.structured_output)
         except InvalidStructuredOutput:
-            self._schema_failures += 1
+            self._record_schema_failure(capability)
             raise
-        self._record_fallback(result.used_fallback)
 
     def _record_fallback(self, used_fallback: bool) -> None:
         if used_fallback:
             self._fallback_uses += 1
+
+    def _record_schema_failure(self, capability: Capability) -> None:
+        self._schema_failures += 1
+        self._schema_failures_by_capability[capability] += 1
+
+    def _record_invalid_output(
+        self,
+        capability: Capability,
+        error: InvalidStructuredOutput,
+    ) -> None:
+        """Record a rejection plus any safe evidence retained by the adapter."""
+
+        self._record_schema_failure(capability)
+        if error.model is None or error.metrics is None:
+            return
+        self._record_fallback(error.used_fallback)
+        self._record_inference(capability, error.model, error.metrics)
+
+    def _record_inference(
+        self,
+        capability: Capability,
+        model: str,
+        metrics: InferenceMetrics,
+    ) -> None:
+        """Aggregate only non-confidential model and timing metadata."""
+
+        self._model_invocations += 1
+        self._prompt_tokens += metrics.prompt_eval_count or 0
+        self._generated_tokens += metrics.eval_count or 0
+        self._model_client_elapsed_ms += metrics.client_elapsed_ms
+        self._model_total_duration_ns += metrics.total_duration_ns or 0
+        self._model_load_duration_ns += metrics.load_duration_ns or 0
+        self._generation_duration_ns += metrics.eval_duration_ns or 0
+        self._model_selections.append((capability, model))
