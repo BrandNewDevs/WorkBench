@@ -20,6 +20,8 @@ from app.storage.sqlite import (
     SQLiteIdentityStore,
     SQLiteSessionMetadataStore,
     SQLiteWorkflowStore,
+    WorkflowRunAlreadyExistsError,
+    WorkflowRunContextMismatchError,
     WorkflowSessionNotFoundError,
 )
 
@@ -39,6 +41,8 @@ __all__ = [
     "SessionAlreadyExistsError",
     "SessionMetadata",
     "SessionWorkspace",
+    "WorkflowRunAlreadyExistsError",
+    "WorkflowRunContextMismatchError",
     "WorkflowSessionNotFoundError",
     "WorkspaceArea",
     "WorkspacePathError",
