@@ -116,9 +116,17 @@ function stopPosix() {
       fail(`app:stop failed: pkill exited with status ${result.status ?? "unknown"}.`);
     }
   }
-  const survivors = () => patterns.filter(
-    (pattern) => spawnSync("pgrep", ["-f", pattern], { cwd: repoRoot, shell: false, stdio: "ignore" }).status === 0,
-  );
+  const survivors = () => patterns.filter((pattern) => {
+    const result = spawnSync("pgrep", ["-f", pattern], { cwd: repoRoot, shell: false, stdio: "ignore" });
+    if (result.error) {
+      fail(`app:stop could not run pgrep: ${result.error.message}`);
+    }
+    // Exit 1 means no process matched; anything else is a pgrep failure.
+    if (result.status !== 0 && result.status !== 1) {
+      fail(`app:stop failed: pgrep exited with status ${result.status ?? "unknown"}.`);
+    }
+    return result.status === 0;
+  });
   const waitForExit = (timeoutMilliseconds) => {
     const deadline = Date.now() + timeoutMilliseconds;
     while (Date.now() < deadline) {
