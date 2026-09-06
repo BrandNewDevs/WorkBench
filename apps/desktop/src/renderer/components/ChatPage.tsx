@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useState } from "react";
-import { FileText, Image, Paperclip, Send, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { FileText, Image, LoaderCircle, Paperclip, Send, X } from "lucide-react";
 import type {
   ChatAttachmentSelectionResult,
   SelectedChatAttachment,
@@ -7,7 +7,9 @@ import type {
   UploadKind,
   UploadSelectionResult,
 } from "../../shared/contracts";
-import type { ChatThread, ChatThreadId } from "../hooks/useChatThreads";
+import type { ChatThread, ChatThreadId, ChatThreads } from "../hooks/useChatThreads";
+import { Message } from "./Message";
+import { SessionStageStrip } from "./SessionStageStrip";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
@@ -18,10 +20,15 @@ const ExampleWorkflow = lazy(async () => {
 });
 
 type ChatPageProps = {
+  backendConnected: boolean;
   examplesEnabled: boolean;
   onAttachmentsChange: (threadId: ChatThreadId, attachments: readonly SelectedChatAttachment[]) => void;
   onDraftChange: (threadId: ChatThreadId, draft: string) => void;
   onInspectionFilesChange: (threadId: ChatThreadId, kind: UploadKind, file?: SelectedUploadFile) => void;
+  onRetryMessages: (threadId: ChatThreadId) => void;
+  onRetrySessions: () => void;
+  onSend: (threadId: ChatThreadId) => void;
+  sessionsState: ChatThreads["sessionsState"];
   thread: ChatThread;
 };
 
@@ -89,13 +96,21 @@ function attachmentKey(file: SelectedChatAttachment): string {
 }
 
 type ChatComposerProps = {
+  canSend: boolean;
+  disabledReason?: string;
   draft: string;
   isSelecting: boolean;
+  isSending: boolean;
   onDraftChange: (draft: string) => void;
+  onSend: () => void;
   onSelectAttachments: () => void;
 };
 
-function ChatComposer({ draft, isSelecting, onDraftChange, onSelectAttachments }: ChatComposerProps) {
+function ChatComposer({ canSend, disabledReason, draft, isSelecting, isSending, onDraftChange, onSend, onSelectAttachments }: ChatComposerProps) {
+  const send = useCallback(() => {
+    if (canSend && !isSending) onSend();
+  }, [canSend, isSending, onSend]);
+
   return (
     <div className="relative overflow-hidden rounded-lg border border-border bg-background shadow-sm">
       <Label className="sr-only" htmlFor="chat-draft">Message draft</Label>
@@ -103,6 +118,12 @@ function ChatComposer({ draft, isSelecting, onDraftChange, onSelectAttachments }
         className="field-sizing-content min-h-16 max-h-48 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3 py-2.5 pb-12 pr-24 shadow-none focus-visible:border-transparent focus-visible:ring-0"
         id="chat-draft"
         onChange={(event) => onDraftChange(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+            event.preventDefault();
+            send();
+          }
+        }}
         placeholder="Message WorkBench"
         value={draft}
       />
@@ -117,8 +138,21 @@ function ChatComposer({ draft, isSelecting, onDraftChange, onSelectAttachments }
         >
           <Paperclip aria-hidden="true" className="size-4" strokeWidth={1.75} />
         </Button>
-        <Button aria-label="Sending is unavailable in this preview" disabled size="icon" type="button" variant="ghost">
-          <Send aria-hidden="true" className="size-4" strokeWidth={1.75} />
+        <Button
+          aria-busy={isSending}
+          aria-label={isSending ? "Sending message" : disabledReason ?? "Send message"}
+          disabled={!canSend}
+          onClick={send}
+          size="icon"
+          title={disabledReason}
+          type="button"
+          variant="ghost"
+        >
+          {isSending ? (
+            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" strokeWidth={1.75} />
+          ) : (
+            <Send aria-hidden="true" className="size-4" strokeWidth={1.75} />
+          )}
         </Button>
       </div>
     </div>
@@ -159,7 +193,50 @@ function SelectedFileRow({ selection, disabled, onRemove, onReplace }: FileSelec
   );
 }
 
-export function ChatPage({ examplesEnabled, onAttachmentsChange, onDraftChange, onInspectionFilesChange, thread }: ChatPageProps) {
+function MessagesView({ onRetryMessages, thread }: { onRetryMessages: (threadId: ChatThreadId) => void; thread: ChatThread }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const messageCount = thread.messages.length;
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [messageCount]);
+
+  return (
+    <div ref={listRef} className="min-h-0 overflow-y-auto">
+      <h1 className="sr-only">{thread.title}</h1>
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 pb-4 pt-6" aria-label="Messages">
+        {thread.messages.map((message) => (
+          <Message key={message.messageId} message={message} />
+        ))}
+        {thread.messagesState === "loading" && <p className="text-sm text-muted-foreground" role="status">Loading messages…</p>}
+        {thread.messagesState === "error" && (
+          <div className="rounded-lg border border-border bg-muted/30 px-4 py-3" role="status">
+            <p className="text-sm text-foreground">Persisted messages could not be loaded from FastAPI.</p>
+            <Button className="mt-2 h-8 px-2.5 text-xs" onClick={() => onRetryMessages(thread.id)} type="button" variant="outline">
+              Retry
+            </Button>
+          </div>
+        )}
+        {thread.messagesState === "ready" && messageCount === 0 && (
+          <p className="text-sm text-muted-foreground">This chat has no stored messages yet.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ChatPage({
+  backendConnected,
+  examplesEnabled,
+  onAttachmentsChange,
+  onDraftChange,
+  onInspectionFilesChange,
+  onRetryMessages,
+  onRetrySessions,
+  onSend,
+  sessionsState,
+  thread,
+}: ChatPageProps) {
   const [selectionMessage, setSelectionMessage] = useState<string | undefined>();
   const [selecting, setSelecting] = useState(false);
   const threadId = thread.id;
@@ -168,6 +245,7 @@ export function ChatPage({ examplesEnabled, onAttachmentsChange, onDraftChange, 
     ...Object.values(inspectionFiles).filter((file): file is SelectedUploadFile => file !== undefined).map((file) => ({ source: "inspectionStarter" as const, file })),
     ...attachments.map((file) => ({ source: "chatAttachment" as const, file })),
   ];
+  const isBoundThread = thread.source === "local" && thread.sessionId !== undefined;
 
   const selectInspectionFile = useCallback(async (requestedKind: UploadKind) => {
     if (selecting) return;
@@ -226,18 +304,39 @@ export function ChatPage({ examplesEnabled, onAttachmentsChange, onDraftChange, 
   }, [attachments, onAttachmentsChange, threadId]);
 
   const hasFiles = selectedFiles.length > 0;
-
   const isExampleThread = examplesEnabled && thread.source === "example";
+  const isSending = thread.sendState === "sending";
+  const sessionClosed = thread.status !== undefined && thread.status !== "active";
+  const canSend = backendConnected && !sessionClosed && draft.trim().length > 0 && !isSending;
+  const sendDisabledReason = !backendConnected
+    ? "Sending requires a local employee sign-in."
+    : sessionClosed
+      ? "This chat session is closed."
+      : draft.trim().length === 0
+        ? "Write a message first."
+        : undefined;
+
+  const showMessagesView = isBoundThread || thread.messages.length > 0;
 
   return (
-    <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] px-8 pb-16 pt-10">
-      <div className="min-h-0 overflow-y-auto">
+    <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] px-8 pb-16 pt-10">
+      {sessionsState === "error" && (
+        <div className="mx-auto mb-3 w-full max-w-3xl rounded-lg border border-border bg-muted/30 px-4 py-3" role="status">
+          <p className="text-sm text-foreground">Recent chats could not be loaded from FastAPI.</p>
+          <Button className="mt-2 h-8 px-2.5 text-xs" onClick={onRetrySessions} type="button" variant="outline">
+            Retry
+          </Button>
+        </div>
+      )}
+      <div className="min-h-0 overflow-hidden">
         {isExampleThread ? (
-          <section aria-label="Example workflow">
+          <section aria-label="Example workflow" className="min-h-0 overflow-y-auto">
             <Suspense fallback={<p className="mx-auto w-full max-w-3xl py-8 text-sm text-muted-foreground">Loading example...</p>}>
               <ExampleWorkflow />
             </Suspense>
           </section>
+        ) : showMessagesView ? (
+          <MessagesView onRetryMessages={onRetryMessages} thread={thread} />
         ) : (
           <section aria-labelledby="chat-heading" className="flex min-h-full items-center justify-center pb-4">
             <div className={`w-full ${hasFiles ? "max-w-xl" : "max-w-md text-center"}`}>
@@ -275,12 +374,24 @@ export function ChatPage({ examplesEnabled, onAttachmentsChange, onDraftChange, 
         )}
       </div>
       <div className="mx-auto w-full max-w-2xl pt-4">
+        {isBoundThread && thread.stage !== undefined && thread.status !== undefined && (
+          <div className="mb-2">
+            <SessionStageStrip stage={thread.stage} status={thread.status} workflowType={thread.workflowType} />
+          </div>
+        )}
         <ChatComposer
+          canSend={canSend}
+          disabledReason={sendDisabledReason}
           draft={draft}
           isSelecting={selecting}
+          isSending={isSending}
           onDraftChange={(nextDraft) => onDraftChange(threadId, nextDraft)}
+          onSend={() => onSend(threadId)}
           onSelectAttachments={() => void selectChatAttachments()}
         />
+        {thread.sendState === "error" && thread.sendError !== undefined && (
+          <p aria-live="assertive" className="mt-2 text-sm text-destructive" role="status">{thread.sendError}</p>
+        )}
       </div>
     </section>
   );

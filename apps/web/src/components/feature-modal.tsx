@@ -58,7 +58,7 @@ export default function FeatureModal({ feature, onClose }: { feature: Feature | 
             <path d="M1 1L13 13M1 13L13 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         </button>
-        <span className="feature-modal-tag">{feature.title === "Local AI" ? "Local AI" : "Other features"}</span>
+        <span className="feature-modal-tag">{feature.title}</span>
         <h2 id="feature-modal-title" className="feature-modal-title">{feature.title}</h2>
         <p id="feature-modal-description" className="feature-modal-desc">{feature.desc}</p>
       </div>

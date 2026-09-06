@@ -4,12 +4,12 @@ function AnimatedField() {
       <svg className="flow-lines" viewBox="0 0 700 500" preserveAspectRatio="xMidYMid slice">
         <defs>
           <linearGradient id="flowGradient" x1="0" x2="1">
-            <stop offset="0" stopColor="#8d7cff" stopOpacity=".1" />
-            <stop offset=".5" stopColor="#8d7cff" />
-            <stop offset="1" stopColor="#ff9a6e" />
+            <stop offset="0" stopColor="#8B5CF6" stopOpacity=".05" />
+            <stop offset=".5" stopColor="#8B5CF6" stopOpacity=".3" />
+            <stop offset="1" stopColor="#A78BFA" stopOpacity=".05" />
           </linearGradient>
         </defs>
-        <g fill="none" stroke="url(#flowGradient)" strokeWidth="1.2">
+        <g fill="none" stroke="url(#flowGradient)" strokeWidth="1">
           <path d="M-40 60 C170 90 230 230 350 250 S530 130 740 70" />
           <path d="M-40 100 C170 120 230 235 350 250 S530 155 740 100" />
           <path d="M-40 140 C165 150 240 240 350 250 S535 180 740 130" />

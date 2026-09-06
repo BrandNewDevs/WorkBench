@@ -184,14 +184,6 @@ export interface WorkflowFinding {
   citationIds: readonly string[];
 }
 
-export interface WorkflowMessage {
-  messageId: string;
-  author: "employee" | "assistant";
-  text: string;
-  createdAt?: string;
-  status?: WorkflowStatus;
-}
-
 export interface WorkflowUploadProgress {
   uploadId: string;
   fileName: string;
@@ -239,6 +231,8 @@ export const chatSessionSchema = z.strictObject({
   status: chatSessionStatusSchema,
   createdAt: chatTimestampSchema,
   updatedAt: chatTimestampSchema,
+  /** Null for sessions stored before the renderer idempotency key existed. */
+  clientSessionId: uuidSchema.nullable(),
 });
 
 /** One persisted chat message without model reasoning fields. */
@@ -249,6 +243,8 @@ export const chatMessageSchema = z.strictObject({
   role: chatMessageRoleSchema,
   content: z.string().min(1).max(20_000),
   createdAt: chatTimestampSchema,
+  /** The renderer idempotency key; null for messages stored before the key existed. */
+  clientMessageId: uuidSchema.nullable(),
 });
 
 export const chatSessionListResponseSchema = z.strictObject({
@@ -266,6 +262,8 @@ export const chatSessionCreateRequestSchema = z.strictObject({
     .min(1)
     .max(200)
     .refine((title) => title.trim().length > 0, { message: "title must not be blank" }),
+  /** Renderer idempotency key: a retried create returns the stored session. */
+  clientSessionId: uuidSchema.optional(),
 });
 
 export const chatMessageAppendRequestSchema = z.strictObject({
@@ -274,6 +272,8 @@ export const chatMessageAppendRequestSchema = z.strictObject({
     .min(1)
     .max(20_000)
     .refine((content) => content.trim().length > 0, { message: "content must not be blank" }),
+  /** Stable per-attempt idempotency key; retries reuse it instead of duplicating. */
+  clientMessageId: uuidSchema,
 });
 
 /** The renderer may build paths only from server-issued session IDs. */

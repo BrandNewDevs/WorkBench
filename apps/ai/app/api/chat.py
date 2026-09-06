@@ -113,6 +113,7 @@ def build_chat_router() -> APIRouter:
                     status=WorkflowStatus.ACTIVE,
                     created_at=now,
                     updated_at=now,
+                    client_session_id=payload.client_session_id,
                 )
             )
         except SessionAlreadyExistsError:
@@ -220,6 +221,7 @@ def build_chat_router() -> APIRouter:
                 role="user",
                 content=content,
                 created_at=datetime.now(UTC),
+                client_message_id=payload.client_message_id,
             )
         )
 

@@ -49,6 +49,18 @@ export class LocalApiError extends Error {
   }
 }
 
+/**
+ * True only when FastAPI answered the request itself and refused before any
+ * write: a 4xx status means its transaction definitively rolled back with
+ * nothing stored, so an idempotency key may be released. Timeouts and lost
+ * connections prove nothing because the request may still be in flight, and
+ * neither does a 5xx: the service can fail after another request committed
+ * the same append, so the key must stay.
+ */
+export function apiFailureWasDefinitive(error: unknown): boolean {
+  return error instanceof LocalApiError && error.status !== undefined && error.status < 500;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

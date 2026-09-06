@@ -168,6 +168,9 @@ class WorkflowSession(ApiContractModel):
     status: WorkflowStatus = WorkflowStatus.ACTIVE
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
+    # Renderer-supplied idempotency key; null only for sessions stored before
+    # the key existed. A retry of the same create returns the stored session.
+    client_session_id: UUID | None = None
 
     @model_validator(mode="after")
     def require_consistent_workflow_state(self) -> "WorkflowSession":

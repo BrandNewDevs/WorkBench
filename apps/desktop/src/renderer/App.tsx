@@ -87,7 +87,11 @@ function Workspace({
   const [accountOpen, setAccountOpen] = useState(false);
   const [healthState, setHealthState] = useState<HealthState>({ kind: "loading" });
   const [now, setNow] = useState(() => Date.now());
-  const chatThreads = useChatThreads(examplesEnabled);
+  const chatThreads = useChatThreads({
+    apiBaseUrl,
+    connected: access.kind === "authenticated",
+    examplesEnabled,
+  });
   const healthRequestSequenceRef = useRef(0);
   const lastHealthFailureRef = useRef<string | undefined>(undefined);
   const handleNavigate = useCallback(
@@ -182,10 +186,12 @@ function Workspace({
         activeChatId={chatThreads.activeThread.id}
         activeView={activeView}
         chats={chatThreads.threads}
+        chatsState={chatThreads.sessionsState}
         collapsed={sidebarCollapsed}
         onCreateChat={chatThreads.createChat}
         onNavigate={handleNavigate}
         onSelectChat={chatThreads.selectChat}
+        onRetryChats={chatThreads.refreshSessions}
         onSettingsSectionChange={onSettingsSectionChange}
         onSignOut={onSignOut}
       />
@@ -228,11 +234,16 @@ function Workspace({
           />
         ) : (
           <ChatPage
+            backendConnected={access.kind === "authenticated"}
             examplesEnabled={examplesEnabled}
             key={chatThreads.activeThread.id}
             onAttachmentsChange={chatThreads.replaceAttachments}
             onDraftChange={chatThreads.updateDraft}
             onInspectionFilesChange={chatThreads.setInspectionFile}
+            onRetryMessages={chatThreads.retryThreadMessages}
+            onRetrySessions={chatThreads.refreshSessions}
+            onSend={chatThreads.sendMessage}
+            sessionsState={chatThreads.sessionsState}
             thread={chatThreads.activeThread}
           />
         )}

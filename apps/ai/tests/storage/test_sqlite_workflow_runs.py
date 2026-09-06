@@ -304,6 +304,7 @@ async def test_compare_and_set_updates_run_version_and_session_projection(
     updated = await store.compare_and_set_stage(
         session_id=session.session_id,
         workflow_run_id=run.workflow_run_id,
+        owner_user_id=session.owner_user_id,
         expected_stage=run.stage,
         expected_stage_version=run.stage_version,
         next_stage=WorkflowStage.EXTRACTING,
@@ -335,6 +336,7 @@ async def test_stale_or_missing_compare_and_set_returns_none(tmp_path: Path) -> 
         await store.compare_and_set_stage(
             session_id=uuid4(),
             workflow_run_id=run.workflow_run_id,
+            owner_user_id=session.owner_user_id,
             expected_stage=run.stage,
             expected_stage_version=run.stage_version,
             next_stage=WorkflowStage.EXTRACTING,
@@ -347,6 +349,7 @@ async def test_stale_or_missing_compare_and_set_returns_none(tmp_path: Path) -> 
         await store.compare_and_set_stage(
             session_id=session.session_id,
             workflow_run_id=uuid4(),
+            owner_user_id=session.owner_user_id,
             expected_stage=run.stage,
             expected_stage_version=run.stage_version,
             next_stage=WorkflowStage.EXTRACTING,
@@ -359,6 +362,20 @@ async def test_stale_or_missing_compare_and_set_returns_none(tmp_path: Path) -> 
         await store.compare_and_set_stage(
             session_id=session.session_id,
             workflow_run_id=run.workflow_run_id,
+            owner_user_id=uuid4(),
+            expected_stage=run.stage,
+            expected_stage_version=run.stage_version,
+            next_stage=WorkflowStage.EXTRACTING,
+            next_status=WorkflowRunStatus.ACTIVE,
+            sandbox_attempts=0,
+        )
+        is None
+    )
+    assert (
+        await store.compare_and_set_stage(
+            session_id=session.session_id,
+            workflow_run_id=run.workflow_run_id,
+            owner_user_id=session.owner_user_id,
             expected_stage=WorkflowStage.PLANNING,
             expected_stage_version=run.stage_version,
             next_stage=WorkflowStage.EXTRACTING,
@@ -371,6 +388,7 @@ async def test_stale_or_missing_compare_and_set_returns_none(tmp_path: Path) -> 
         await store.compare_and_set_stage(
             session_id=session.session_id,
             workflow_run_id=run.workflow_run_id,
+            owner_user_id=session.owner_user_id,
             expected_stage=run.stage,
             expected_stage_version=run.stage_version + 1,
             next_stage=WorkflowStage.EXTRACTING,
@@ -394,6 +412,7 @@ async def test_concurrent_compare_and_set_has_exactly_one_winner(tmp_path: Path)
             store.compare_and_set_stage(
                 session_id=session.session_id,
                 workflow_run_id=run.workflow_run_id,
+                owner_user_id=session.owner_user_id,
                 expected_stage=run.stage,
                 expected_stage_version=run.stage_version,
                 next_stage=WorkflowStage.EXTRACTING,
@@ -434,6 +453,7 @@ async def test_older_run_transition_does_not_replace_newer_session_projection(
     transitioned = await store.compare_and_set_stage(
         session_id=session.session_id,
         workflow_run_id=older.workflow_run_id,
+        owner_user_id=session.owner_user_id,
         expected_stage=older.stage,
         expected_stage_version=older.stage_version,
         next_stage=WorkflowStage.EXTRACTING,
@@ -459,6 +479,7 @@ async def test_invalid_next_state_is_rejected_without_mutation(tmp_path: Path) -
         await store.compare_and_set_stage(
             session_id=session.session_id,
             workflow_run_id=run.workflow_run_id,
+            owner_user_id=session.owner_user_id,
             expected_stage=run.stage,
             expected_stage_version=run.stage_version,
             next_stage=WorkflowStage.AWAITING_APPROVAL,
@@ -469,6 +490,7 @@ async def test_invalid_next_state_is_rejected_without_mutation(tmp_path: Path) -
         await store.compare_and_set_stage(
             session_id=session.session_id,
             workflow_run_id=run.workflow_run_id,
+            owner_user_id=session.owner_user_id,
             expected_stage=run.stage,
             expected_stage_version=run.stage_version,
             next_stage=WorkflowStage.EXTRACTING,
@@ -500,6 +522,7 @@ async def test_code_run_sandbox_attempt_rules_are_enforced(tmp_path: Path) -> No
         await store.compare_and_set_stage(
             session_id=session.session_id,
             workflow_run_id=run.workflow_run_id,
+            owner_user_id=session.owner_user_id,
             expected_stage=run.stage,
             expected_stage_version=run.stage_version,
             next_stage=WorkflowStage.SANDBOX_EXECUTING,
@@ -552,6 +575,7 @@ async def test_compare_and_set_rolls_back_when_projection_update_fails(
         await store.compare_and_set_stage(
             session_id=session.session_id,
             workflow_run_id=run.workflow_run_id,
+            owner_user_id=session.owner_user_id,
             expected_stage=run.stage,
             expected_stage_version=run.stage_version,
             next_stage=WorkflowStage.EXTRACTING,

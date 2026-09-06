@@ -30,7 +30,11 @@ Before the first packaged login, a local administrator must provision the initia
 "%LOCALAPPDATA%\\Programs\\WorkBench\\resources\\service\\workbench-provision-account\\workbench-provision-account.exe" --database-path "%APPDATA%\\WorkBench\\workbench.db"
 ```
 
-Run it from a local interactive Command Prompt. It reads the password without echoing it, creates an employee only when the database has no identities, and has no HTTP route. The installer does not provide a default account or password. The install path can differ when an administrator selected another NSIS destination; use that installation's `resources\\service\\workbench-provision-account` directory.
+Run it from a local interactive Command Prompt. It reads the password without echoing it, creates an employee only when the database has no identities, and has no HTTP route. The installer does not provide a default account or password. The install path can differ when an administrator selected another NSIS destination; use that installation's `resources\\service\\workbench-provision-account` directory. Add `--list` to the same executable to verify what is provisioned; the read-only listing never prints password material and exits 0 only when at least one account exists:
+
+```bat
+"%LOCALAPPDATA%\\Programs\\WorkBench\\resources\\service\\workbench-provision-account\\workbench-provision-account.exe" --list --database-path "%APPDATA%\\WorkBench\\workbench.db"
+```
 
 For local UI work, `WORKBENCH_SKIP_AUTH=1 pnpm --filter @workbench/desktop dev` opens the workspace without calling the employee login or session-restore endpoints. This bypass is enabled only by the development renderer, creates no FastAPI session, and grants no backend permissions. The workspace keeps a visible `Development mode: authentication disabled` notice. The flag is ignored when the development renderer is not active, including `start` and packaged builds. Leave it unset to exercise normal authentication.
 

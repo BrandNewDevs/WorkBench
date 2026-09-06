@@ -18,7 +18,7 @@ The client must stay usable when a local service is slow or unavailable. It must
 
 ## Current state
 
-FastAPI route names, JSON schemas, and approval contracts are not fixed yet. The desktop client now defines the pending frontend contract for employee login, session restoration, and sign-out, with the expected paths isolated in `src/renderer/api/localApi.ts`. No backend route was added. Until Backend 1 implements and verifies those routes, the client shows the returned unavailable or error state rather than treating sign-in as successful. It rejects expired session payloads and revalidates an accepted session at expiry. The desktop bridge intentionally has no artifact-save capability until the backend can verify approval server-side.
+Login, session restoration, sign-out, and the managed IPC chat pipe are complete. The renderer now loads chat threads from FastAPI on authentication (`GET /chat/sessions`), loads persisted messages when a thread becomes active (`GET /chat/sessions/{id}/messages`), and sending creates the backend session on first message (`POST /chat/sessions`) and appends the message (`POST .../messages`) through `src/renderer/hooks/useChatThreads.ts`. Session stage and status come only from backend responses and render through `SessionStageStrip`. The backend stores employee messages only; assistant replies and activity events arrive with the Backend 2 planner loop. Uploads remain client-side metadata until an upload route exists. Failures (network, timeout, unauthorized, closed sessions, malformed responses) are visible inline with retry actions. Development-bypass mode remains fixture-only; sending is disabled there because no authenticated local session exists.
 
 ## MVP scope
 

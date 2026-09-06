@@ -24,6 +24,7 @@ def test_workflow_store_exposes_atomic_stage_compare_and_set() -> None:
         "self",
         "session_id",
         "workflow_run_id",
+        "owner_user_id",
         "expected_stage",
         "expected_stage_version",
         "next_stage",
