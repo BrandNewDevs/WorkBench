@@ -98,6 +98,7 @@ class GoldenRunMetrics(ContractModel):
     model_invocations: int = Field(ge=0)
     prompt_tokens: int = Field(ge=0)
     generated_tokens: int = Field(ge=0)
+    model_client_elapsed_ms: float = Field(ge=0)
     model_total_duration_ms: float = Field(ge=0)
     model_load_duration_ms: float = Field(ge=0)
     generation_tokens_per_second: float | None = Field(default=None, ge=0)

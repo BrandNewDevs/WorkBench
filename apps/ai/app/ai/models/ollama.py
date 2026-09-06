@@ -267,6 +267,9 @@ class OllamaModelAdapter:
                 await self._prepare_generative_model(candidate)
             try:
                 return await operation(candidate), candidate, fallback_reason
+            except InvalidStructuredOutput as error:
+                error.attach_fallback_reason(fallback_reason)
+                raise
             except (ModelNotInstalled, ModelCapacityError) as error:
                 last_error = error
                 if capability in (Capability.TEXT, Capability.VISION):
@@ -355,25 +358,48 @@ class OllamaModelAdapter:
         self._raise_for_status(response, model=model)
         try:
             result = OllamaChatResponse.model_validate_json(response.content)
+        except ValidationError as error:
+            raise InvalidStructuredOutput(
+                "Ollama returned invalid structured chat output",
+                model=model,
+                metrics=InferenceMetrics(client_elapsed_ms=elapsed_ms),
+            ) from error
+
+        metrics = self._chat_metrics(result, elapsed_ms)
+        try:
             structured_output = _JSON_VALUE_ADAPTER.validate_python(
                 json.loads(result.message.content)
             )
         except (ValidationError, json.JSONDecodeError) as error:
             raise InvalidStructuredOutput(
-                "Ollama returned invalid structured chat output"
+                "Ollama returned invalid structured chat output",
+                model=model,
+                metrics=metrics,
             ) from error
         if result.model != model:
-            raise InvalidStructuredOutput("Ollama response model did not match the selected model")
+            raise InvalidStructuredOutput(
+                "Ollama response model did not match the selected model",
+                model=model,
+                metrics=metrics,
+            )
         if not result.done:
-            raise InvalidStructuredOutput("Ollama non-streaming chat response was incomplete")
-        validate_structured_output(output_schema, structured_output)
+            raise InvalidStructuredOutput(
+                "Ollama non-streaming chat response was incomplete",
+                model=model,
+                metrics=metrics,
+            )
+        try:
+            validate_structured_output(output_schema, structured_output)
+        except InvalidStructuredOutput as error:
+            error.attach_inference_evidence(model=model, metrics=metrics)
+            raise
 
         return TextGenerationResult(
             model=model,
             text=result.message.content,
             structured_output=structured_output,
             done_reason=result.done_reason,
-            metrics=self._chat_metrics(result, elapsed_ms),
+            metrics=metrics,
         )
 
     async def _embed(self, model: str, inputs: tuple[str, ...]) -> EmbeddingResult:
@@ -388,26 +414,47 @@ class OllamaModelAdapter:
         try:
             result = OllamaEmbedResponse.model_validate_json(response.content)
         except ValidationError as error:
-            raise InvalidStructuredOutput("Ollama returned invalid embedding output") from error
+            raise InvalidStructuredOutput(
+                "Ollama returned invalid embedding output",
+                model=model,
+                metrics=InferenceMetrics(client_elapsed_ms=elapsed_ms),
+            ) from error
+        metrics = InferenceMetrics(
+            client_elapsed_ms=elapsed_ms,
+            total_duration_ns=result.total_duration,
+            load_duration_ns=result.load_duration,
+            prompt_eval_count=result.prompt_eval_count,
+        )
         if result.model != model:
-            raise InvalidStructuredOutput("Ollama response model did not match the selected model")
+            raise InvalidStructuredOutput(
+                "Ollama response model did not match the selected model",
+                model=model,
+                metrics=metrics,
+            )
         if len(result.embeddings) != len(inputs):
-            raise InvalidStructuredOutput("Ollama returned the wrong number of embedding vectors")
+            raise InvalidStructuredOutput(
+                "Ollama returned the wrong number of embedding vectors",
+                model=model,
+                metrics=metrics,
+            )
         if any(not vector for vector in result.embeddings):
-            raise InvalidStructuredOutput("Ollama returned an empty embedding vector")
+            raise InvalidStructuredOutput(
+                "Ollama returned an empty embedding vector",
+                model=model,
+                metrics=metrics,
+            )
         dimensions = {len(vector) for vector in result.embeddings}
         if len(dimensions) != 1:
-            raise InvalidStructuredOutput("Ollama returned inconsistent embedding dimensions")
+            raise InvalidStructuredOutput(
+                "Ollama returned inconsistent embedding dimensions",
+                model=model,
+                metrics=metrics,
+            )
 
         return EmbeddingResult(
             model=model,
             vectors=result.embeddings,
-            metrics=InferenceMetrics(
-                client_elapsed_ms=elapsed_ms,
-                total_duration_ns=result.total_duration,
-                load_duration_ns=result.load_duration,
-                prompt_eval_count=result.prompt_eval_count,
-            ),
+            metrics=metrics,
         )
 
     @staticmethod

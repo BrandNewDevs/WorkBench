@@ -31,6 +31,7 @@ class ObservationSnapshot:
     model_invocations: int
     prompt_tokens: int
     generated_tokens: int
+    model_client_elapsed_ms: float
     model_total_duration_ns: int
     model_load_duration_ns: int
     generation_duration_ns: int
@@ -48,6 +49,7 @@ class ObservedModelAdapter:
         self._model_invocations = 0
         self._prompt_tokens = 0
         self._generated_tokens = 0
+        self._model_client_elapsed_ms = 0.0
         self._model_total_duration_ns = 0
         self._model_load_duration_ns = 0
         self._generation_duration_ns = 0
@@ -66,6 +68,7 @@ class ObservedModelAdapter:
             model_invocations=self._model_invocations,
             prompt_tokens=self._prompt_tokens,
             generated_tokens=self._generated_tokens,
+            model_client_elapsed_ms=self._model_client_elapsed_ms,
             model_total_duration_ns=self._model_total_duration_ns,
             model_load_duration_ns=self._model_load_duration_ns,
             generation_duration_ns=self._generation_duration_ns,
@@ -81,8 +84,8 @@ class ObservedModelAdapter:
     async def generate_text(self, request: TextGenerationRequest) -> TextGenerationResult:
         try:
             result = await self._adapter.generate_text(request)
-        except InvalidStructuredOutput:
-            self._record_schema_failure(Capability.TEXT)
+        except InvalidStructuredOutput as error:
+            self._record_invalid_output(Capability.TEXT, error)
             raise
         self._validate_result(Capability.TEXT, request.output_schema, result)
         return result
@@ -90,8 +93,8 @@ class ObservedModelAdapter:
     async def generate_vision(self, request: VisionGenerationRequest) -> TextGenerationResult:
         try:
             result = await self._adapter.generate_vision(request)
-        except InvalidStructuredOutput:
-            self._record_schema_failure(Capability.VISION)
+        except InvalidStructuredOutput as error:
+            self._record_invalid_output(Capability.VISION, error)
             raise
         self._validate_result(Capability.VISION, request.output_schema, result)
         return result
@@ -99,8 +102,8 @@ class ObservedModelAdapter:
     async def create_embeddings(self, request: EmbeddingRequest) -> EmbeddingResult:
         try:
             result = await self._adapter.create_embeddings(request)
-        except InvalidStructuredOutput:
-            self._record_schema_failure(Capability.EMBEDDING)
+        except InvalidStructuredOutput as error:
+            self._record_invalid_output(Capability.EMBEDDING, error)
             raise
         self._record_fallback(result.used_fallback)
         self._record_inference(Capability.EMBEDDING, result.model, result.metrics)
@@ -136,6 +139,19 @@ class ObservedModelAdapter:
         self._schema_failures += 1
         self._schema_failures_by_capability[capability] += 1
 
+    def _record_invalid_output(
+        self,
+        capability: Capability,
+        error: InvalidStructuredOutput,
+    ) -> None:
+        """Record a rejection plus any safe evidence retained by the adapter."""
+
+        self._record_schema_failure(capability)
+        if error.model is None or error.metrics is None:
+            return
+        self._record_fallback(error.used_fallback)
+        self._record_inference(capability, error.model, error.metrics)
+
     def _record_inference(
         self,
         capability: Capability,
@@ -147,6 +163,7 @@ class ObservedModelAdapter:
         self._model_invocations += 1
         self._prompt_tokens += metrics.prompt_eval_count or 0
         self._generated_tokens += metrics.eval_count or 0
+        self._model_client_elapsed_ms += metrics.client_elapsed_ms
         self._model_total_duration_ns += metrics.total_duration_ns or 0
         self._model_load_duration_ns += metrics.load_duration_ns or 0
         self._generation_duration_ns += metrics.eval_duration_ns or 0

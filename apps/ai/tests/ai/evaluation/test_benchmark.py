@@ -402,6 +402,7 @@ def _golden_suite(
                     model_invocations=6,
                     prompt_tokens=100,
                     generated_tokens=20,
+                    model_client_elapsed_ms=220 * duration_multiplier,
                     model_total_duration_ms=200 * duration_multiplier,
                     model_load_duration_ms=10,
                     generation_tokens_per_second=20,

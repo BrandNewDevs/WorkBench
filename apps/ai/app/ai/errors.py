@@ -1,5 +1,12 @@
 """Typed AI failures for Backend 1 to translate into workflow or HTTP errors."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.ai.schemas import InferenceMetrics
+
 
 class AIError(Exception):
     """Base class for expected AI-layer failures."""
@@ -35,6 +42,46 @@ class NoEligibleCapability(AIError):
 
 class InvalidStructuredOutput(AIError):
     """A local model response failed schema validation after allowed retries."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        model: str | None = None,
+        metrics: InferenceMetrics | None = None,
+        fallback_reason: str | None = None,
+    ) -> None:
+        """Keep optional, content-free evidence from a completed model attempt."""
+
+        if (model is None) != (metrics is None):
+            raise ValueError("model and metrics must be supplied together")
+        super().__init__(message)
+        self.model = model
+        self.metrics = metrics
+        self.fallback_reason = fallback_reason
+
+    @property
+    def used_fallback(self) -> bool:
+        """Report whether the rejected output came from a fallback candidate."""
+
+        return self.fallback_reason is not None
+
+    def attach_inference_evidence(
+        self,
+        *,
+        model: str,
+        metrics: InferenceMetrics,
+    ) -> None:
+        """Attach safe invocation facts without retaining prompt or response content."""
+
+        self.model = model
+        self.metrics = metrics
+
+    def attach_fallback_reason(self, reason: str | None) -> None:
+        """Preserve adapter fallback context while the original error propagates."""
+
+        if reason is not None:
+            self.fallback_reason = reason
 
 
 class GroundingViolation(InvalidStructuredOutput):

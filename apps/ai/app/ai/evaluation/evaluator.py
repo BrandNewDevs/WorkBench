@@ -359,6 +359,9 @@ class GoldenEvaluator:
             model_invocations=after.model_invocations - before.model_invocations,
             prompt_tokens=after.prompt_tokens - before.prompt_tokens,
             generated_tokens=after.generated_tokens - before.generated_tokens,
+            model_client_elapsed_ms=(
+                after.model_client_elapsed_ms - before.model_client_elapsed_ms
+            ),
             model_total_duration_ms=_nanoseconds_to_milliseconds(
                 after.model_total_duration_ns - before.model_total_duration_ns
             ),
