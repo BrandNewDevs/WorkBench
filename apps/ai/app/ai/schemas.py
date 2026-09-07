@@ -533,6 +533,40 @@ class ConversationMessage(ContractModel):
     content: str = Field(min_length=1)
 
 
+class ConversationRequest(ContractModel):
+    """One bounded, text-only local conversation turn supplied by Backend 1.
+
+    Backend 1 owns session persistence and chooses the ordered history.  This
+    contract deliberately rejects oversized history instead of trimming or
+    summarising confidential conversation content without the user's knowledge.
+    """
+
+    session_id: str = Field(min_length=1)
+    user_message: str = Field(min_length=1)
+    history: tuple[ConversationMessage, ...] = Field(default=(), max_length=20)
+    timeout_seconds: float | None = Field(default=None, gt=0)
+
+    @field_validator("user_message")
+    @classmethod
+    def reject_blank_user_message(cls, message: str) -> str:
+        """Reject whitespace-only messages before local inference begins."""
+
+        if not message.strip():
+            raise ValueError("conversation user message must not be blank")
+        return message
+
+    @model_validator(mode="after")
+    def require_alternating_completed_history(self) -> ConversationRequest:
+        """Keep the supplied history ordered and ready for the next user turn."""
+
+        for previous, current in zip(self.history, self.history[1:], strict=False):
+            if previous.role == current.role:
+                raise ValueError("conversation history roles must alternate")
+        if self.history and self.history[-1].role != "assistant":
+            raise ValueError("conversation history must end with an assistant message")
+        return self
+
+
 class PlanStep(ContractModel):
     """One proposed, non-executing step in a bounded task plan."""
 
@@ -631,6 +665,17 @@ class TextGenerationRequest(ContractModel):
     temperature: float = Field(default=0, ge=0, le=1)
 
 
+class ConversationGenerationRequest(ContractModel):
+    """Low-level free-text request for one local conversational model turn."""
+
+    model: str = Field(min_length=1)
+    system_prompt: str = Field(min_length=1)
+    messages: tuple[ConversationMessage, ...] = Field(min_length=1)
+    limits: GenerationLimits
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    temperature: float = Field(default=0.2, ge=0, le=1)
+
+
 class VisionGenerationRequest(ContractModel):
     """Normalized images and prompts for the low-level local model adapter."""
 
@@ -667,6 +712,28 @@ class TextGenerationResult(ContractModel):
     structured_output: JsonValue
     metrics: InferenceMetrics
     done_reason: str | None = None
+    used_fallback: bool = False
+    fallback_reason: str | None = None
+
+
+class ConversationGenerationResult(ContractModel):
+    """Validated free-text output returned by a local conversational model."""
+
+    model: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    done_reason: str | None = None
+    metrics: InferenceMetrics
+    used_fallback: bool = False
+    fallback_reason: str | None = None
+
+
+class ConversationReply(ContractModel):
+    """A completed assistant reply with non-confidential local inference facts."""
+
+    session_id: str = Field(min_length=1)
+    assistant_text: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    metrics: InferenceMetrics
     used_fallback: bool = False
     fallback_reason: str | None = None
 

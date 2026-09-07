@@ -32,6 +32,10 @@ class ModelRequestFailed(AIError):
     """The local runtime rejected a request for a non-capacity reason."""
 
 
+class ConversationContextTooLarge(AIError):
+    """A supplied conversation cannot fit the configured local context budget."""
+
+
 class OllamaPolicyViolation(AIError):
     """Configuration or an endpoint would cross the approved local-only seam."""
 

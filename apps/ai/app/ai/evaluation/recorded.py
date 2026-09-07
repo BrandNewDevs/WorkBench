@@ -4,6 +4,8 @@ import json
 
 from app.ai.evaluation.samples import sample_inference_metrics, sample_runtime_health
 from app.ai.schemas import (
+    ConversationGenerationRequest,
+    ConversationGenerationResult,
     EmbeddingRequest,
     EmbeddingResult,
     Finding,
@@ -177,6 +179,17 @@ class GoldenRecordedModelAdapter:
             uncertainties=(_UNCERTAINTY,),
         )
         return _text_result(request.model, draft)
+
+    async def generate_conversation(
+        self, request: ConversationGenerationRequest
+    ) -> ConversationGenerationResult:
+        """Satisfy the shared adapter seam without inspecting golden chat content."""
+
+        return ConversationGenerationResult(
+            model=request.model,
+            text="Recorded local conversation reply.",
+            metrics=sample_inference_metrics(),
+        )
 
     async def generate_vision(self, request: VisionGenerationRequest) -> TextGenerationResult:
         metadata = _source_metadata(request.user_prompt)

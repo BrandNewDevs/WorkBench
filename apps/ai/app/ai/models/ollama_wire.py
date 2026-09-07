@@ -14,7 +14,7 @@ class OllamaRequestModel(BaseModel):
 class OllamaChatMessage(OllamaRequestModel):
     """One text or normalized-image message sent to local Ollama."""
 
-    role: Literal["system", "user"]
+    role: Literal["system", "user", "assistant"]
     content: str
     images: tuple[str, ...] | None = None
 
@@ -35,6 +35,17 @@ class OllamaChatRequest(OllamaRequestModel):
     stream: Literal[False] = False
     think: Literal[False] = False
     format: dict[str, JsonValue]
+    keep_alive: str | int
+    options: OllamaGenerationOptions
+
+
+class OllamaConversationRequest(OllamaRequestModel):
+    """Validated non-streaming request for an ordinary local text conversation."""
+
+    model: str = Field(min_length=1)
+    messages: tuple[OllamaChatMessage, ...] = Field(min_length=1)
+    stream: Literal[False] = False
+    think: Literal[False] = False
     keep_alive: str | int
     options: OllamaGenerationOptions
 

@@ -3,6 +3,8 @@
 from typing import Protocol
 
 from app.ai.schemas import (
+    ConversationGenerationRequest,
+    ConversationGenerationResult,
     EmbeddingRequest,
     EmbeddingResult,
     InstalledModel,
@@ -31,6 +33,12 @@ class ModelAdapter(Protocol):
 
     async def generate_text(self, request: TextGenerationRequest) -> TextGenerationResult:
         """Run one bounded structured text generation request."""
+        ...
+
+    async def generate_conversation(
+        self, request: ConversationGenerationRequest
+    ) -> ConversationGenerationResult:
+        """Run one bounded free-text local conversation turn."""
         ...
 
     async def generate_vision(self, request: VisionGenerationRequest) -> TextGenerationResult:
