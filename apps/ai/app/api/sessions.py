@@ -436,7 +436,7 @@ def build_session_router() -> APIRouter:
 
         live_after_event_id = replay[-1].event_id if replay else after_event_id
         subscription = cast(
-            AsyncGenerator[ActivityEvent, None],
+            AsyncGenerator[ActivityEvent],
             events.subscribe(
                 session_id=session.session_id,
                 owner_user_id=user.user_id,

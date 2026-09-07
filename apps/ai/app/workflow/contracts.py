@@ -168,7 +168,7 @@ class _WorkflowProgressPayload(ApiContractModel):
     total_units: int = Field(ge=1)
 
     @model_validator(mode="after")
-    def require_bounded_progress(self) -> "_WorkflowProgressPayload":
+    def require_bounded_progress(self) -> _WorkflowProgressPayload:
         if self.completed_units > self.total_units:
             raise ValueError("completedUnits must not exceed totalUnits")
         return self
@@ -199,7 +199,7 @@ class _SandboxCompletedPayload(ApiContractModel):
     )
 
     @model_validator(mode="after")
-    def require_terminal_result(self) -> "_SandboxCompletedPayload":
+    def require_terminal_result(self) -> _SandboxCompletedPayload:
         if self.status is ExecutionStatus.COMPLETED:
             if self.exit_code != 0 or not self.passed or self.failure_code is not None:
                 raise ValueError("completed sandbox metadata must report a passing exit")
@@ -300,7 +300,7 @@ class WorkflowSession(ApiContractModel):
     client_session_id: UUID | None = None
 
     @model_validator(mode="after")
-    def require_consistent_workflow_state(self) -> "WorkflowSession":
+    def require_consistent_workflow_state(self) -> WorkflowSession:
         if not _stage_matches_workflow(self.workflow_type, self.stage):
             raise ValueError("workflow stage is not valid for this workflow type")
         if not _status_matches_stage(self.status, self.stage):
@@ -326,7 +326,7 @@ class WorkflowRun(ApiContractModel):
     retryable: bool = False
 
     @model_validator(mode="after")
-    def require_consistent_workflow_state(self) -> "WorkflowRun":
+    def require_consistent_workflow_state(self) -> WorkflowRun:
         if not _stage_matches_workflow(self.workflow_type, self.stage):
             raise ValueError("workflow stage is not valid for this workflow type")
         if (
@@ -438,7 +438,7 @@ class Approval(ApiContractModel):
         return normalized
 
     @model_validator(mode="after")
-    def require_consistent_resolution(self) -> "Approval":
+    def require_consistent_resolution(self) -> Approval:
         is_pending = self.status is ApprovalStatus.PENDING
         resolution_fields_present = (
             self.resolved_at is not None
@@ -491,7 +491,7 @@ class ApprovalExecutionClaim(ApiContractModel):
     execution_claim_token: UUID | None = None
 
     @model_validator(mode="after")
-    def require_token_for_new_claim(self) -> "ApprovalExecutionClaim":
+    def require_token_for_new_claim(self) -> ApprovalExecutionClaim:
         """Expose a token only to the dispatcher that won the claim."""
 
         if self.claimed_now != (self.execution_claim_token is not None):

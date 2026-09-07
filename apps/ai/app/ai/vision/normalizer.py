@@ -58,7 +58,7 @@ class VisionProcessingSettings(BaseSettings):
     max_normalized_bytes: int = Field(default=10 * _MEBIBYTE, gt=0)
 
     @model_validator(mode="after")
-    def rendered_image_fits_source_limit(self) -> "VisionProcessingSettings":
+    def rendered_image_fits_source_limit(self) -> VisionProcessingSettings:
         """Keep the final image bound no larger than the accepted source bound."""
 
         if self.max_rendered_pixels > self.max_source_pixels:

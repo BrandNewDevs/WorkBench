@@ -117,13 +117,10 @@ def _client(
 
 
 def _login(client: TestClient, *, password: str = PASSWORD) -> Response:
-    return cast(
-        Response,
-        client.post(
-            "/auth/login",
-            headers={"Origin": ORIGIN},
-            json={"username": " Engineer.One ", "password": password},
-        ),
+    return client.post(
+        "/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"username": " Engineer.One ", "password": password},
     )
 
 

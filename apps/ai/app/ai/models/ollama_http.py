@@ -118,7 +118,7 @@ class LocalOllamaHTTPClient:
 
         await self._client.aclose()
 
-    async def __aenter__(self) -> "LocalOllamaHTTPClient":
+    async def __aenter__(self) -> LocalOllamaHTTPClient:
         """Support deterministic client cleanup in composition roots and tests."""
 
         return self

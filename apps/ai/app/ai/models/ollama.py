@@ -224,7 +224,7 @@ class OllamaModelAdapter:
         finally:
             await self._client.close()
 
-    async def __aenter__(self) -> "OllamaModelAdapter":
+    async def __aenter__(self) -> OllamaModelAdapter:
         """Support FastAPI lifespan ownership and deterministic test cleanup."""
 
         return self

@@ -372,7 +372,7 @@ function localPythonExecutable(aiDirectory: string): string {
   if (existsSync(virtualEnvironmentPython)) {
     return virtualEnvironmentPython;
   }
-  return process.platform === "win32" ? "python.exe" : "python3";
+  return process.platform === "win32" ? "python.exe" : "python3.14";
 }
 
 interface LocalServiceLaunch {

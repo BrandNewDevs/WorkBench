@@ -60,7 +60,7 @@ class HardwareSnapshot(ContractModel):
     diagnostics: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def jetson_facts_are_consistent(self) -> "HardwareSnapshot":
+    def jetson_facts_are_consistent(self) -> HardwareSnapshot:
         if self.hardware_kind is HardwareKind.JETSON and self.jetson_model is None:
             raise ValueError("Jetson hardware requires its exact device model")
         if self.accelerator_uses_shared_memory and self.total_memory_bytes is None:
@@ -80,7 +80,7 @@ class ResourceObservation(ContractModel):
     diagnostics: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def measurements_are_complete_and_bounded(self) -> "ResourceObservation":
+    def measurements_are_complete_and_bounded(self) -> ResourceObservation:
         if self.sample_count == 0 and any(
             value is not None
             for value in (
@@ -123,7 +123,7 @@ class CapabilityBenchmark(ContractModel):
     average_operation_duration_ms: float = Field(ge=0)
 
     @model_validator(mode="after")
-    def preferred_runs_do_not_exceed_total(self) -> "CapabilityBenchmark":
+    def preferred_runs_do_not_exceed_total(self) -> CapabilityBenchmark:
         if self.preferred_model_runs > self.evaluated_runs:
             raise ValueError("preferred-model runs cannot exceed evaluated runs")
         return self
@@ -157,7 +157,7 @@ class BenchmarkReport(ContractModel):
         return versions
 
     @model_validator(mode="after")
-    def has_each_capability_once(self) -> "BenchmarkReport":
+    def has_each_capability_once(self) -> BenchmarkReport:
         capabilities = tuple(item.capability for item in self.capabilities)
         if set(capabilities) != set(Capability) or len(capabilities) != len(set(capabilities)):
             raise ValueError("benchmark report requires text, vision, and embedding once each")
@@ -202,7 +202,7 @@ class PromotionReport(ContractModel):
     decisions: tuple[CapabilityPromotionDecision, ...] = Field(min_length=3, max_length=3)
 
     @model_validator(mode="after")
-    def has_each_capability_once(self) -> "PromotionReport":
+    def has_each_capability_once(self) -> PromotionReport:
         capabilities = tuple(item.capability for item in self.decisions)
         if set(capabilities) != set(Capability) or len(capabilities) != len(set(capabilities)):
             raise ValueError("promotion report requires text, vision, and embedding once each")

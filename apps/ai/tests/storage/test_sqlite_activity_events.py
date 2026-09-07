@@ -569,7 +569,7 @@ async def test_subscription_drains_a_backlog_across_bounded_batches(
         batch_size=2,
     )
     subscription = cast(
-        AsyncGenerator[ActivityEvent, None],
+        AsyncGenerator[ActivityEvent],
         reader.subscribe(
             session_id=session.session_id,
             owner_user_id=session.owner_user_id,
@@ -593,7 +593,7 @@ async def test_subscription_detects_events_from_another_store_instance(
         poll_interval_seconds=0.01,
     )
     subscription = cast(
-        AsyncGenerator[ActivityEvent, None],
+        AsyncGenerator[ActivityEvent],
         reader.subscribe(
             session_id=session.session_id,
             owner_user_id=session.owner_user_id,
@@ -628,7 +628,7 @@ async def test_subscription_rejects_missing_or_foreign_session_at_startup(
         (session.session_id, uuid4()),
     ):
         subscription = cast(
-            AsyncGenerator[ActivityEvent, None],
+            AsyncGenerator[ActivityEvent],
             store.subscribe(
                 session_id=session_id,
                 owner_user_id=owner_user_id,
@@ -646,7 +646,7 @@ async def test_subscription_cancellation_releases_database_resources(
 ) -> None:
     _, _, store, session, _ = await _stores(tmp_path)
     subscription = cast(
-        AsyncGenerator[ActivityEvent, None],
+        AsyncGenerator[ActivityEvent],
         store.subscribe(
             session_id=session.session_id,
             owner_user_id=session.owner_user_id,

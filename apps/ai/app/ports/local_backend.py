@@ -213,7 +213,7 @@ class StoredArtifact(ApiContractModel):
         return value
 
     @model_validator(mode="after")
-    def require_matching_extension(self) -> "StoredArtifact":
+    def require_matching_extension(self) -> StoredArtifact:
         """Bind the visible filename extension to the validated artifact format."""
 
         if not self.file_name.lower().endswith(f".{self.format.value}"):

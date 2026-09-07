@@ -139,7 +139,7 @@ class LocalAIEngine:
             await self._dependencies.model_adapter.close()
             self._closed = True
 
-    async def __aenter__(self) -> "LocalAIEngine":
+    async def __aenter__(self) -> LocalAIEngine:
         """Support ownership by a future backend composition lifespan."""
 
         return self

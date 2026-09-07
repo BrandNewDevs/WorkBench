@@ -40,7 +40,7 @@ jobs:
           node-version: '24'
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.14'
           cache: pip
           cache-dependency-path: apps/ai/requirements.txt
       - run: npm install --global pnpm@11.24.0

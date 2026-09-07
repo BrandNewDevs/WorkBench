@@ -3243,7 +3243,7 @@ class SQLiteActivityEventStore:
 
         self._validate_after_event_id(after_event_id)
 
-        async def iterate() -> AsyncGenerator[ActivityEvent, None]:
+        async def iterate() -> AsyncGenerator[ActivityEvent]:
             cursor = after_event_id
             async with self._database.open() as connection:
                 await self._require_owned_session(

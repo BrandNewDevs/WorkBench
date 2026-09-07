@@ -24,7 +24,7 @@ class KnowledgeProcessingSettings(BaseSettings):
     max_chunk_chars: int = Field(default=2_400, ge=512, le=12_000)
 
     @model_validator(mode="after")
-    def heading_fits_inside_a_chunk(self) -> "KnowledgeProcessingSettings":
+    def heading_fits_inside_a_chunk(self) -> KnowledgeProcessingSettings:
         """Reserve useful chunk space for the rule or procedure body."""
 
         if self.max_heading_chars > self.max_chunk_chars // 2:

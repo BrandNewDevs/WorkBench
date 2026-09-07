@@ -28,7 +28,7 @@ test("an invalid explicit interpreter fails with setup instructions", () => {
     env: { ...process.env, WORKBENCH_PYTHON: `${serviceRoot}/missing-python` },
   });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Python 3\.11\+ is required/);
+  assert.match(result.stderr, /Python 3\.14\+ is required/);
   assert.match(result.stderr, /requirements\.txt/);
 });
 

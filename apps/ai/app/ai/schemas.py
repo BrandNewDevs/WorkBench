@@ -8,7 +8,7 @@ from base64 import b64decode
 from binascii import Error as Base64DecodeError
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
@@ -127,7 +127,7 @@ class ModelProfile(ContractModel):
     embedding_batch_size: int = Field(gt=0)
 
     @model_validator(mode="after")
-    def reject_duplicate_candidates(self) -> "ModelProfile":
+    def reject_duplicate_candidates(self) -> ModelProfile:
         """Keep fallback order deterministic and unambiguous."""
 
         candidate_groups = (
@@ -152,7 +152,7 @@ class ModelHealth(ContractModel):
     last_error: str | None = None
 
     @model_validator(mode="after")
-    def ready_model_is_usable(self) -> "ModelHealth":
+    def ready_model_is_usable(self) -> ModelHealth:
         """A ready result must identify a model that was loaded successfully."""
 
         if self.status is ModelStatus.READY and (
@@ -201,7 +201,7 @@ class CapabilityDecision(ContractModel):
     fallback_reason: str | None = None
 
     @model_validator(mode="after")
-    def fallback_has_reason(self) -> "CapabilityDecision":
+    def fallback_has_reason(self) -> CapabilityDecision:
         """Make fallback behavior visible to Backend 1 and audit events."""
 
         if self.used_fallback and not self.fallback_reason:
@@ -254,7 +254,7 @@ class VisualBytesInput(ContractModel):
     document_name: str = Field(min_length=1)
 
 
-VisualInput: TypeAlias = Annotated[
+type VisualInput = Annotated[
     ApprovedVisualInput | VisualBytesInput,
     Field(discriminator="input_kind"),
 ]
@@ -270,7 +270,7 @@ class SourceReference(ContractModel):
     section: str | None = None
 
     @model_validator(mode="after")
-    def has_specific_location(self) -> "SourceReference":
+    def has_specific_location(self) -> SourceReference:
         """Require a traceable page, image, or section locator."""
 
         if self.page_number is None and self.image_id is None and self.section is None:
@@ -330,7 +330,7 @@ class VisionPageResult(ContractModel):
     warnings: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def has_exactly_one_visual_locator(self) -> "VisionPageResult":
+    def has_exactly_one_visual_locator(self) -> VisionPageResult:
         """Identify a PDF page or a native image, never an ambiguous source."""
 
         locator_count = int(self.page_number is not None) + int(self.image_id is not None)
@@ -349,7 +349,7 @@ class VisionAnalysis(ContractModel):
     warnings: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def findings_reference_returned_pages(self) -> "VisionAnalysis":
+    def findings_reference_returned_pages(self) -> VisionAnalysis:
         """Reject findings whose evidence is absent from the returned page set."""
 
         page_locations = {
@@ -374,7 +374,7 @@ class GroundedClaim(ContractModel):
     evidence_source_ids: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def evidence_ids_are_unique(self) -> "GroundedClaim":
+    def evidence_ids_are_unique(self) -> GroundedClaim:
         """Avoid duplicate citation markers within one critical claim."""
 
         if len(self.evidence_source_ids) != len(set(self.evidence_source_ids)):
@@ -394,7 +394,7 @@ class GroundedDraft(ContractModel):
     uncertainties: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def evidence_ids_are_unique(self) -> "GroundedDraft":
+    def evidence_ids_are_unique(self) -> GroundedDraft:
         """Avoid ambiguous duplicate citation markers in rendered drafts."""
 
         if len(self.evidence_source_ids) != len(set(self.evidence_source_ids)):
@@ -434,7 +434,7 @@ class AgentProposal(ContractModel):
     tool_call: ProposedToolCall | None = None
 
     @model_validator(mode="after")
-    def contains_exactly_one_outcome(self) -> "AgentProposal":
+    def contains_exactly_one_outcome(self) -> AgentProposal:
         """Prevent a response from smuggling an action alongside normal text."""
 
         outcome_count = int(self.response_text is not None) + int(self.tool_call is not None)
@@ -461,7 +461,7 @@ class SourceDocument(ContractModel):
     content: bytes | None = Field(default=None, min_length=1, repr=False)
 
     @model_validator(mode="after")
-    def has_one_backend_supplied_input(self) -> "SourceDocument":
+    def has_one_backend_supplied_input(self) -> SourceDocument:
         """Accept exact approved paths or identified bytes, never arbitrary paths."""
 
         input_count = int(self.approved_path is not None) + int(self.content is not None)
@@ -550,7 +550,7 @@ class TaskPlan(ContractModel):
     uncertainties: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def next_step_is_in_unique_sequence(self) -> "TaskPlan":
+    def next_step_is_in_unique_sequence(self) -> TaskPlan:
         """Keep the next action traceable to one unambiguous plan step."""
 
         step_ids = tuple(step.step_id for step in self.steps)
@@ -568,7 +568,7 @@ class SandboxProposalContext(ContractModel):
     source_file_ids: tuple[UUID, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def source_ids_are_unique(self) -> "SandboxProposalContext":
+    def source_ids_are_unique(self) -> SandboxProposalContext:
         if len(self.source_file_ids) != len(set(self.source_file_ids)):
             raise ValueError("sandbox source file IDs must be unique")
         return self
@@ -584,7 +584,7 @@ class AgentContext(ContractModel):
     sandbox_context: SandboxProposalContext | None = None
 
     @model_validator(mode="after")
-    def tool_names_are_unique(self) -> "AgentContext":
+    def tool_names_are_unique(self) -> AgentContext:
         """Keep Backend 1's allowed registry deterministic and unambiguous."""
 
         names = tuple(tool.name for tool in self.allowed_tools)

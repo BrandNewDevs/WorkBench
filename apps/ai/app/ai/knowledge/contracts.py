@@ -2,15 +2,14 @@
 
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import TypeAlias
 
 from pydantic import Field
 
 from app.ai.schemas import ContractModel
 
-ChromaMetadataValue: TypeAlias = str | int | float | bool
-ChromaMetadata: TypeAlias = dict[str, ChromaMetadataValue]
-KnowledgeChunkIdentity: TypeAlias = tuple[str, str, str, str, int, str, str]
+type ChromaMetadataValue = str | int | float | bool
+type ChromaMetadata = dict[str, ChromaMetadataValue]
+type KnowledgeChunkIdentity = tuple[str, str, str, str, int, str, str]
 
 
 def knowledge_chunk_identity(

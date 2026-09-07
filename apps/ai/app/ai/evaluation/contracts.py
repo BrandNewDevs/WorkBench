@@ -19,7 +19,7 @@ class ExpectedFinding(ContractModel):
     image_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
-    def has_one_expected_location(self) -> "ExpectedFinding":
+    def has_one_expected_location(self) -> ExpectedFinding:
         if (self.page_number is None) == (self.image_id is None):
             raise ValueError("expected finding requires exactly one page or image locator")
         return self
@@ -56,7 +56,7 @@ class GoldenExpectedResults(ContractModel):
     forbidden_unsupported_conclusions: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def references_are_consistent(self) -> "GoldenExpectedResults":
+    def references_are_consistent(self) -> GoldenExpectedResults:
         finding_keys = tuple(item.finding_key for item in self.required_findings)
         query_ids = tuple(item.query_id for item in self.retrieval_queries)
         if len(finding_keys) != len(set(finding_keys)):

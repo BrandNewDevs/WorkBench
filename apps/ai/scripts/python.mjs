@@ -19,10 +19,10 @@ const candidates = configuredPython
     ? [localPython]
     : activePython
       ? [activePython]
-      : process.platform === "win32" ? ["python.exe"] : ["python3.11", "python3"];
+      : process.platform === "win32" ? ["python.exe"] : ["python3.14", "python3"];
 
 const python = candidates.find((candidate) => {
-  const probe = spawnSync(candidate, ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"], {
+  const probe = spawnSync(candidate, ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 14) else 1)"], {
     cwd: serviceRoot,
     shell: false,
     timeout: 5_000,
@@ -33,7 +33,7 @@ const python = candidates.find((candidate) => {
 
 if (!python) {
   process.stderr.write(
-    "Python 3.11+ is required. Create apps/ai/.venv and install apps/ai/requirements.txt, " +
+    "Python 3.14+ is required. Create apps/ai/.venv and install apps/ai/requirements.txt, " +
     "activate a Python environment, or set WORKBENCH_PYTHON to its executable. " +
     `Tried: ${candidates.join(", ")}\n`,
   );

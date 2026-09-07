@@ -100,7 +100,7 @@ class _EventStore:
 
     async def subscribe(
         self, *, session_id: UUID, owner_user_id: UUID, after_event_id: int
-    ) -> AsyncGenerator[ActivityEvent, None]:
+    ) -> AsyncGenerator[ActivityEvent]:
         del session_id, owner_user_id, after_event_id
         while True:
             await asyncio.sleep(3600)

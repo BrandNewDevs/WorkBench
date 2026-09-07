@@ -37,7 +37,7 @@ class DocumentExportArguments(ApiContractModel):
     formats: tuple[ArtifactFormat, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def require_unique_formats(self) -> "DocumentExportArguments":
+    def require_unique_formats(self) -> DocumentExportArguments:
         if len(self.formats) != len(set(self.formats)):
             raise ValueError("export formats must be unique")
         return self
@@ -65,7 +65,7 @@ class ValidatedToolCall(ApiContractModel):
     arguments: ToolArguments
 
     @model_validator(mode="after")
-    def require_matching_arguments(self) -> "ValidatedToolCall":
+    def require_matching_arguments(self) -> ValidatedToolCall:
         expected_type = (
             DocumentExportArguments
             if self.tool_name is ToolName.REQUEST_DOCUMENT_EXPORT
@@ -113,7 +113,7 @@ class DocumentExportResult(ApiContractModel):
     failure_code: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
-    def require_consistent_execution_result(self) -> "DocumentExportResult":
+    def require_consistent_execution_result(self) -> DocumentExportResult:
         if self.status is ExecutionStatus.COMPLETED:
             if not self.artifacts or self.failure_code is not None:
                 raise ValueError("completed document export requires artifacts and no failure code")
@@ -141,7 +141,7 @@ class SandboxExecutionResult(ApiContractModel):
     duration_ms: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
-    def require_consistent_execution_result(self) -> "SandboxExecutionResult":
+    def require_consistent_execution_result(self) -> SandboxExecutionResult:
         if self.status is ExecutionStatus.COMPLETED:
             if self.exit_code != 0 or self.passed is not True or self.failure_code is not None:
                 raise ValueError("completed sandbox execution requires exit code 0 and passed=true")
@@ -166,7 +166,7 @@ class ToolExecutionDispatch(ApiContractModel):
     result: ToolExecutionResult | None = None
 
     @model_validator(mode="after")
-    def require_result_for_new_dispatch(self) -> "ToolExecutionDispatch":
+    def require_result_for_new_dispatch(self) -> ToolExecutionDispatch:
         if self.dispatched_now and self.result is None:
             raise ValueError("a new dispatch must include its executor result")
         return self

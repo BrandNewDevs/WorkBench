@@ -18,7 +18,7 @@ Install these before the steps below. Install development dependencies before go
 
 - **Node.js 22.18+**
 - **pnpm**: the version pinned in `package.json` (currently 11.24.0); `corepack enable` provides it. On Windows, run the corepack/PowerShell steps in a terminal with administrator rights only if package activation is blocked.
-- **Python 3.11** (tested baseline)
+- **Python 3.14**
 - **Ollama** with approved models preloaded, only for the optional live-model tests; day-to-day development and unit tests do not need it.
 
 ### Step 1 — Install workspace dependencies
@@ -45,7 +45,7 @@ macOS / Linux:
 
 ```sh
 # Create the virtualenv that all Python workspace commands will pick up
-python3.11 -m venv apps/ai/.venv
+python3.14 -m venv apps/ai/.venv
 
 # Install the service dependencies into that virtualenv
 apps/ai/.venv/bin/python -m pip install -r apps/ai/requirements.txt
@@ -55,8 +55,8 @@ Windows (PowerShell):
 
 ```powershell
 # Create the virtualenv that all Python workspace commands will pick up
-# ("py" is the Windows Python launcher; use an activated Conda env if 3.11 is not on it)
-py -3.11 -m venv apps/ai/.venv
+# ("py" is the Windows Python launcher; use an activated environment if 3.14 is not on it)
+py -3.14 -m venv apps/ai/.venv
 
 # Install the service dependencies into that virtualenv
 apps/ai/.venv/Scripts/python.exe -m pip install -r apps/ai/requirements.txt

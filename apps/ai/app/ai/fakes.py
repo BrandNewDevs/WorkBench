@@ -1,7 +1,7 @@
 """Deterministic in-memory fakes for AI and backend unit tests."""
 
 from dataclasses import dataclass, field
-from typing import Literal, TypeAlias
+from typing import Literal
 
 from app.ai.engine import AIEngineDependencies
 from app.ai.errors import AIError, InvalidStructuredOutput, InvalidToolProposal
@@ -43,7 +43,7 @@ from app.ai.schemas import (
     VisualAnalysisRequest,
 )
 
-FakeEngineOperation: TypeAlias = Literal[
+type FakeEngineOperation = Literal[
     "health",
     "choose_capability",
     "plan_task",

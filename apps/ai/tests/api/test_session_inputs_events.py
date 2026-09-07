@@ -113,7 +113,7 @@ class _FiniteEventStore:
 
     async def subscribe(
         self, *, session_id: UUID, owner_user_id: UUID, after_event_id: int
-    ) -> AsyncGenerator[ActivityEvent, None]:
+    ) -> AsyncGenerator[ActivityEvent]:
         del owner_user_id
         for event in self.events:
             if event.session_id == session_id and event.event_id > after_event_id:
@@ -395,7 +395,7 @@ def test_activity_store_delivers_a_live_record_after_subscribe(tmp_path: Path) -
             )
         )
         subscription = cast(
-            AsyncGenerator[ActivityEvent, None],
+            AsyncGenerator[ActivityEvent],
             store.subscribe(
                 session_id=session_id,
                 owner_user_id=owner_user_id,
