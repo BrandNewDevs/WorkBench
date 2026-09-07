@@ -241,7 +241,8 @@ def build_chat_router() -> APIRouter:
             WorkflowStore | None, getattr(request.app.state, "workflow_store", None)
         )
         files = _session_files(request)
-        if workflow_store is None or files is None:
+        runner = cast(WorkflowRunner | None, getattr(request.app.state, "workflow_runner", None))
+        if workflow_store is None or files is None or runner is None:
             return _error(*_UNAVAILABLE, 503)
         snapshots: list[SelectedUploadSnapshot] = []
         for upload_id in payload.selected_upload_ids:
@@ -281,8 +282,7 @@ def build_chat_router() -> APIRouter:
             )
         except WorkflowAdmissionConflictError:
             return _error("workflow_conflict", "This session already has active work.", 409)
-        runner = cast(WorkflowRunner | None, getattr(request.app.state, "workflow_runner", None))
-        if admission.status is WorkflowAdmissionStatus.CREATED and runner is not None:
+        if admission.status is WorkflowAdmissionStatus.CREATED:
             await runner.run(admission)
         return admission.message
 

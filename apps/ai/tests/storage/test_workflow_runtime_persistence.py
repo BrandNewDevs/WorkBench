@@ -372,10 +372,10 @@ async def test_startup_recovers_expired_active_runs(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_startup_recovery_claim_then_fail_frees_nonterminal_slot(
+async def test_startup_recovery_claim_then_fail_persists_terminal_session_state(
     tmp_path: Path,
 ) -> None:
-    """Regression: interrupted runs must not permanently block new admissions."""
+    """Regression: an unrecoverable run must persist a valid terminal projection."""
 
     database = LocalSQLiteDatabase(tmp_path / "workbench.db")
     await database.initialize()
@@ -418,17 +418,21 @@ async def test_startup_recovery_claim_then_fail_frees_nonterminal_slot(
     assert claimed.retryable is False
     assert claimed.interrupted_at is None
 
-    async with fresh.open() as connection:
-        await connection.execute(
-            "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
-            "WHERE workflow_run_id = ? AND status = 'active'",
-            (now.isoformat(), str(claimed.workflow_run_id)),
-        )
-
-    new_admission = admission(item, uuid4(), "New analysis")
-    result = await fresh_store.admit_run(new_admission)
-    assert result.status == WorkflowAdmissionStatus.CREATED
-
+    failed = await fresh_store.compare_and_set_stage(
+        session_id=claimed.session_id,
+        workflow_run_id=claimed.workflow_run_id,
+        owner_user_id=claimed.owner_user_id,
+        expected_stage=claimed.stage,
+        expected_stage_version=claimed.stage_version,
+        next_stage=WorkflowStage.FAILED,
+        next_status=WorkflowRunStatus.FAILED,
+        sandbox_attempts=claimed.sandbox_attempts,
+    )
+    assert failed is not None
+    assert failed.stage is WorkflowStage.FAILED
+    assert failed.status is WorkflowRunStatus.FAILED
+    recovered_session = await fresh_store.get_session(item.session_id, item.owner_user_id)
+    assert recovered_session.status.value == "failed"
 
 @pytest.mark.asyncio
 async def test_queued_admission_reloads_original_message_for_recovery(tmp_path: Path) -> None:

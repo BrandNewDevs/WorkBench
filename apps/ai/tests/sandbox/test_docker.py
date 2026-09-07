@@ -1,10 +1,13 @@
 """Offline tests for the fixed Docker sandbox policy."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 from app.config import ApplicationSettings
-from app.sandbox import DockerSandboxExecutor
+from app.sandbox.docker import DockerSandboxExecutor, _read_bounded
 from app.storage import LocalSQLiteDatabase
 
 
@@ -34,4 +37,17 @@ def test_command_has_fixed_network_resource_and_privilege_policy(tmp_path: Path)
     assert "--publish" not in command and " -p " not in f" {rendered} "
     assert "docker.sock" not in rendered
     assert "--network host" not in rendered
+    assert "dst=/workspace,readonly" in rendered
     assert command[-3:] == ["python", "-I", "/workspace/main.py"]
+
+
+@pytest.mark.asyncio
+async def test_stream_capture_discards_output_after_the_configured_limit() -> None:
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"abcdefgh")
+    stream.feed_eof()
+
+    output, truncated = await _read_bounded(stream, 4)
+
+    assert output == "abcd"
+    assert truncated is True

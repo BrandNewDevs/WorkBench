@@ -279,6 +279,7 @@ async def test_chat_requires_capability_and_an_authenticated_employee(tmp_path: 
 
 async def test_create_list_and_append_chat_messages(tmp_path: Path) -> None:
     app, cookie, _ = await _build_app_with_two_employees(tmp_path)
+    app.state.workflow_runner = RecordingWorkflowRunner()
     async with app.router.lifespan_context(app):
         created_frame = json.loads(
             await _dispatch(
@@ -402,6 +403,7 @@ async def test_session_detail_rejects_unknown_sessions(tmp_path: Path) -> None:
 
 async def test_concurrent_retries_of_one_append_replay_the_stored_message(tmp_path: Path) -> None:
     app, cookie, _ = await _build_app_with_two_employees(tmp_path)
+    app.state.workflow_runner = RecordingWorkflowRunner()
     async with app.router.lifespan_context(app):
         session_id = await _create_session(app, cookie)
         retry_key = str(uuid4())
@@ -435,6 +437,34 @@ async def test_concurrent_retries_of_one_append_replay_the_stored_message(tmp_pa
     messages = _payload(listed)["messages"]
     assert isinstance(messages, list) and len(messages) == 1
     assert messages[0]["clientMessageId"] == retry_key
+
+
+async def test_message_admission_requires_a_configured_workflow_runner(tmp_path: Path) -> None:
+    app, cookie, _ = await _build_app_with_two_employees(tmp_path)
+    async with app.router.lifespan_context(app):
+        session_id = await _create_session(app, cookie)
+        response = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "unavailable-runner",
+                    "POST",
+                    f"/chat/sessions/{session_id}/messages",
+                    cookie=cookie,
+                    body={"content": "Do not accept inert work", "clientMessageId": str(uuid4())},
+                ),
+            )
+        )
+        listed = json.loads(
+            await _dispatch(
+                app,
+                _frame("messages", "GET", f"/chat/sessions/{session_id}/messages", cookie=cookie),
+            )
+    )
+
+    assert response["status"] == 503
+    assert _payload(response)["code"] == "chat_store_unavailable"
+    assert _payload(listed)["messages"] == []
 
 
 async def test_message_validation_rejects_blank_and_overlong_content(tmp_path: Path) -> None:

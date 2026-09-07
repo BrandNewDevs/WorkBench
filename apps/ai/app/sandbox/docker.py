@@ -1,6 +1,7 @@
 """Approval-bound Python execution in a network-disabled local container."""
 
 import asyncio
+import os
 import shutil
 import subprocess
 import tempfile
@@ -23,9 +24,22 @@ from app.tools.contracts import (
 from app.workflow.contracts import ExecutionStatus
 
 
-def _bounded(data: bytes, maximum: int) -> tuple[str, bool]:
-    truncated = len(data) > maximum
-    return data[:maximum].decode("utf-8", errors="replace"), truncated
+async def _read_bounded(stream: asyncio.StreamReader, maximum: int) -> tuple[str, bool]:
+    """Drain a process stream while retaining only its bounded user-visible output."""
+
+    chunks: list[bytes] = []
+    captured = 0
+    truncated = False
+    while chunk := await stream.read(8 * 1024):
+        remaining = maximum - captured
+        if remaining <= 0:
+            truncated = True
+            continue
+        retained = chunk[:remaining]
+        chunks.append(retained)
+        captured += len(retained)
+        truncated = truncated or len(retained) != len(chunk)
+    return b"".join(chunks).decode("utf-8", errors="replace"), truncated
 
 
 class DockerSandboxExecutor:
@@ -59,65 +73,67 @@ class DockerSandboxExecutor:
         try:
             local_source = temporary / "main.py"
             await asyncio.to_thread(shutil.copyfile, source.path, local_source)
+            await asyncio.to_thread(os.chmod, temporary, 0o755)
+            await asyncio.to_thread(os.chmod, local_source, 0o644)
             command = self.command(container, temporary)
             try:
-                completed = await asyncio.to_thread(
-                    subprocess.run,
-                    command,
-                    shell=False,
-                    capture_output=True,
-                    timeout=self._settings.sandbox_timeout_seconds,
-                    check=False,
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
             except FileNotFoundError:
                 return self._failure("docker_unavailable", started)
-            except subprocess.TimeoutExpired as error:
-                stdout, stdout_truncated = _bounded(
-                    error.stdout or b"", self._settings.sandbox_stdout_max_bytes
+            except OSError:
+                return self._failure("sandbox_infrastructure_error", started)
+            assert process.stdout is not None and process.stderr is not None
+            stdout_task = asyncio.create_task(
+                _read_bounded(process.stdout, self._settings.sandbox_stdout_max_bytes)
+            )
+            stderr_task = asyncio.create_task(
+                _read_bounded(process.stderr, self._settings.sandbox_stderr_max_bytes)
+            )
+            try:
+                await asyncio.wait_for(
+                    process.wait(), timeout=self._settings.sandbox_timeout_seconds
                 )
-                stderr, stderr_truncated = _bounded(
-                    error.stderr or b"", self._settings.sandbox_stderr_max_bytes
-                )
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+                stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
                 return self._failure(
                     "sandbox_timeout",
                     started,
-                    stdout,
-                    stderr,
-                    stdout_truncated,
-                    stderr_truncated,
+                    stdout=stdout[0],
+                    stderr=stderr[0],
+                    stdout_truncated=stdout[1],
+                    stderr_truncated=stderr[1],
                     timed_out=True,
                 )
-            except OSError:
-                return self._failure("sandbox_infrastructure_error", started)
-            stdout, stdout_truncated = _bounded(
-                completed.stdout, self._settings.sandbox_stdout_max_bytes
-            )
-            stderr, stderr_truncated = _bounded(
-                completed.stderr, self._settings.sandbox_stderr_max_bytes
-            )
-            if completed.returncode == 125 and "pull access denied" in stderr.lower():
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+            if process.returncode == 125 and "pull access denied" in stderr[0].lower():
                 code = "sandbox_image_unavailable"
-            elif completed.returncode != 0:
+            elif process.returncode != 0:
                 code = "program_exit_nonzero"
             else:
                 return SandboxExecutionResult(
                     status=ExecutionStatus.COMPLETED,
                     exit_code=0,
                     passed=True,
-                    stdout=stdout,
-                    stderr=stderr,
-                    stdout_truncated=stdout_truncated,
-                    stderr_truncated=stderr_truncated,
+                    stdout=stdout[0],
+                    stderr=stderr[0],
+                    stdout_truncated=stdout[1],
+                    stderr_truncated=stderr[1],
                     duration_ms=int((time.monotonic() - started) * 1000),
                 )
             return self._failure(
                 code,
                 started,
-                stdout,
-                stderr,
-                stdout_truncated,
-                stderr_truncated,
-                exit_code=completed.returncode,
+                stdout=stdout[0],
+                stderr=stderr[0],
+                stdout_truncated=stdout[1],
+                stderr_truncated=stderr[1],
+                exit_code=process.returncode,
             )
         finally:
             await asyncio.to_thread(self._remove_container, container)
@@ -149,7 +165,7 @@ class DockerSandboxExecutor:
             "--user",
             self._settings.sandbox_user,
             "--mount",
-            f"type=bind,src={directory},dst=/workspace",
+            f"type=bind,src={directory},dst=/workspace,readonly",
             "--workdir",
             "/workspace",
             self._settings.sandbox_image,

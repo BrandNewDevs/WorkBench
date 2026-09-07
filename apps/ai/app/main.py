@@ -48,7 +48,13 @@ from app.storage import (
     SQLiteWorkflowStore,
 )
 from app.tools.registry import ToolRegistry
-from app.workflow.contracts import ActivityEvent, ActivityEventType, WorkflowRunStatus
+from app.workflow.contracts import (
+    ActivityEvent,
+    ActivityEventType,
+    WorkflowRun,
+    WorkflowRunStatus,
+    WorkflowStage,
+)
 from app.workflow.runner import CheckpointAwareWorkflowRunner, InspectionWorkflowInputPolicy
 
 
@@ -148,6 +154,31 @@ def compose_runtime_dependencies(
         else None
     )
 
+    async def fail_recovery_run(run: WorkflowRun) -> None:
+        """Terminally fail one unrecoverable run through the typed store boundary."""
+
+        current = await workflow_store.get_run(
+            workflow_run_id=run.workflow_run_id,
+            session_id=run.session_id,
+            owner_user_id=run.owner_user_id,
+        )
+        if current is None or current.status in {
+            WorkflowRunStatus.COMPLETED,
+            WorkflowRunStatus.FAILED,
+            WorkflowRunStatus.APPROVAL_REJECTED,
+        }:
+            return
+        await workflow_store.compare_and_set_stage(
+            session_id=current.session_id,
+            workflow_run_id=current.workflow_run_id,
+            owner_user_id=current.owner_user_id,
+            expected_stage=current.stage,
+            expected_stage_version=current.stage_version,
+            next_stage=WorkflowStage.FAILED,
+            next_status=WorkflowRunStatus.FAILED,
+            sandbox_attempts=current.sandbox_attempts,
+        )
+
     async def _startup_with_recovery() -> None:
         await database.initialize()
         now = datetime.now(UTC)
@@ -158,59 +189,55 @@ def compose_runtime_dependencies(
         for queued_run in await workflow_store.list_unfinished_runs():
             if queued_run.status is not WorkflowRunStatus.QUEUED or workflow_runner is None:
                 continue
-            admission = await workflow_store.get_admission(
-                workflow_run_id=queued_run.workflow_run_id
-            )
-            if admission is not None:
+            try:
+                admission = await workflow_store.get_admission(
+                    workflow_run_id=queued_run.workflow_run_id
+                )
+                if admission is None:
+                    await fail_recovery_run(queued_run)
+                    continue
                 await workflow_runner.run(admission)
+            except Exception:
+                await fail_recovery_run(queued_run)
         for stale_run in interrupted:
             claimed = await workflow_store.claim_retry(
                 workflow_run_id=stale_run.workflow_run_id,
                 expected_stage_version=stale_run.stage_version,
                 lease_expires_at=now + timedelta(seconds=settings.workflow_lease_seconds),
             )
-            if claimed is None or workflow_runner is None:
-                if claimed is not None:
-                    async with database.open() as connection:
-                        await connection.execute(
-                            "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
-                            "WHERE workflow_run_id = ? AND status = 'active'",
-                            (now.isoformat(), str(claimed.workflow_run_id)),
-                        )
+            if claimed is None:
                 continue
-            selected_uploads = await workflow_store.get_run_inputs(
-                workflow_run_id=claimed.workflow_run_id,
-            )
-            synthetic_message = WorkflowMessage(
-                message_id=uuid4(),
-                session_id=claimed.session_id,
-                author_user_id=claimed.owner_user_id,
-                role="user",
-                content="[startup recovery]",
-                created_at=now,
-            )
-            admission = WorkflowRunAdmission(
-                status=WorkflowAdmissionStatus.CREATED,
-                run=claimed,
-                message=synthetic_message,
-                selected_uploads=selected_uploads,
-                accepted_event=ActivityEvent(
-                    event_id=0,
-                    session_id=claimed.session_id,
-                    workflow_run_id=claimed.workflow_run_id,
-                    event_type=ActivityEventType.MESSAGE_ACCEPTED,
-                    occurred_at=now,
-                ),
-            )
+            if workflow_runner is None:
+                await fail_recovery_run(claimed)
+                continue
             try:
+                selected_uploads = await workflow_store.get_run_inputs(
+                    workflow_run_id=claimed.workflow_run_id,
+                )
+                synthetic_message = WorkflowMessage(
+                    message_id=uuid4(),
+                    session_id=claimed.session_id,
+                    author_user_id=claimed.owner_user_id,
+                    role="user",
+                    content="[startup recovery]",
+                    created_at=now,
+                )
+                admission = WorkflowRunAdmission(
+                    status=WorkflowAdmissionStatus.CREATED,
+                    run=claimed,
+                    message=synthetic_message,
+                    selected_uploads=selected_uploads,
+                    accepted_event=ActivityEvent(
+                        event_id=0,
+                        session_id=claimed.session_id,
+                        workflow_run_id=claimed.workflow_run_id,
+                        event_type=ActivityEventType.MESSAGE_ACCEPTED,
+                        occurred_at=now,
+                    ),
+                )
                 await workflow_runner.run(admission)
             except Exception:
-                async with database.open() as connection:
-                    await connection.execute(
-                        "UPDATE workflow_runs SET status = 'failed', updated_at = ? "
-                        "WHERE workflow_run_id = ? AND status = 'active'",
-                        (now.isoformat(), str(claimed.workflow_run_id)),
-                    )
+                await fail_recovery_run(claimed)
 
     return ApplicationDependencies(
         ai_engine=ai_engine,

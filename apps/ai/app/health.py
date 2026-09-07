@@ -134,7 +134,12 @@ def _ai_is_ready(report: AIHealthReport) -> bool:
 def _system_is_ready(report: SystemHealthReport) -> bool:
     """Require every local Backend 2 dependency and its outbound-network control."""
 
-    return report.storage.ready and report.audit.ready and report.outbound_network_blocked
+    return (
+        report.storage.ready
+        and report.sandbox.ready
+        and report.audit.ready
+        and report.outbound_network_blocked
+    )
 
 
 def _auth_dependencies_are_ready(dependencies: ApplicationDependencies) -> bool:
