@@ -5,8 +5,10 @@ import { LocalApiError, apiFailureWasDefinitive, localApi } from "../api/localAp
 import { chatSessionTitleFromDraft } from "../lib/chatThreads.ts";
 import {
   conversationFailureMessage,
+  loadQwenSessionIds,
   oversizedMessageText,
   pendingUserMessage,
+  rememberQwenSessionId,
   turnWasStored,
   type QwenConversationStatus,
 } from "../lib/qwenChat.ts";
@@ -56,7 +58,7 @@ export const initialQwenChatState: QwenChatState = {
 type QwenChatAction =
   | { type: "draftChanged"; draft: string }
   | { type: "pickerLoading" }
-  | { type: "pickerLoaded"; sessions: readonly ChatSession[] }
+  | { type: "pickerLoaded"; sessions: readonly ChatSession[]; qwenSessionIds: ReadonlySet<string> }
   | { type: "pickerFailed" }
   | { type: "sessionSelected"; sessionId: string; title: string }
   | { type: "newConversation" }
@@ -78,8 +80,11 @@ export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): Q
     case "pickerLoading":
       return state.pickerState === "loading" ? state : { ...state, pickerState: "loading" };
     case "pickerLoaded": {
+      // Only active sessions created by this mode are eligible conversation
+      // targets; a workflow session would mix plain turns into its shared
+      // history and break the strict user/assistant pair contract.
       const pickerSessions = action.sessions
-        .filter((session) => session.status === "active")
+        .filter((session) => session.status === "active" && action.qwenSessionIds.has(session.sessionId))
         .map((session) => ({ sessionId: session.sessionId, title: session.title }));
       return { ...state, pickerState: "ready", pickerSessions };
     }
@@ -139,13 +144,19 @@ export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): Q
         : { ...state, messages: [...state.messages, action.message] };
     case "sessionCreating":
       return { ...state, creatingSession: true };
-    case "sessionCreated":
+    case "sessionCreated": {
+      const entry = { sessionId: action.session.sessionId, title: action.session.title };
+      const pickerSessions = state.pickerSessions.some((candidate) => candidate.sessionId === entry.sessionId)
+        ? state.pickerSessions
+        : [...state.pickerSessions, entry];
       return {
         ...state,
         creatingSession: false,
         sessionId: action.session.sessionId,
         sessionTitle: action.session.title,
+        pickerSessions,
       };
+    }
     case "turnCompleted":
       return {
         ...state,
@@ -217,6 +228,10 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
   // gate is authoritative against duplicate sends within one tick.
   const sendInFlightRef = useRef(false);
   const loadSequenceRef = useRef(0);
+  // Sessions created by this mode, persisted locally; the picker offers only
+  // these so workflow sessions never receive plain conversation turns.
+  const qwenSessionIdsRef = useRef<ReadonlySet<string> | undefined>(undefined);
+  qwenSessionIdsRef.current ??= loadQwenSessionIds();
 
   const loadMessages = useCallback(
     (sessionId: string) => {
@@ -241,7 +256,8 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
   const refreshSessions = useCallback(() => {
     dispatch({ type: "pickerLoading" });
     void localApi.listChatSessions(apiBaseUrl).then(
-      (response) => dispatch({ type: "pickerLoaded", sessions: response.sessions }),
+      (response) =>
+        dispatch({ type: "pickerLoaded", sessions: response.sessions, qwenSessionIds: qwenSessionIdsRef.current! }),
       () => dispatch({ type: "pickerFailed" }),
     );
   }, [apiBaseUrl]);
@@ -317,6 +333,8 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
             { workflowType: "inspectionAnalysis", title: chatSessionTitleFromDraft(content), clientSessionId },
             apiBaseUrl,
           );
+          rememberQwenSessionId(created.sessionId);
+          qwenSessionIdsRef.current = new Set(qwenSessionIdsRef.current).add(created.sessionId);
           dispatch({ type: "sessionCreated", session: created });
           sessionId = created.sessionId;
         }

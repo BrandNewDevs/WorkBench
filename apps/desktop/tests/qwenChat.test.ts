@@ -5,8 +5,10 @@ import { conversationMessageMaxLength } from "../src/shared/contracts.ts";
 import { LocalApiError } from "../src/renderer/api/localApi.ts";
 import {
   conversationFailureMessage,
+  loadQwenSessionIds,
   oversizedMessageText,
   pendingUserMessage,
+  rememberQwenSessionId,
   statusLine,
   turnWasStored,
 } from "../src/renderer/lib/qwenChat.ts";
@@ -39,9 +41,9 @@ function qwenState(overrides: Partial<QwenChatState> = {}): QwenChatState {
   return { ...initialQwenChatState, ...overrides };
 }
 
-function pickerSession(status: ChatSession["status"], title = "Local Qwen chat"): ChatSession {
+function pickerSession(status: ChatSession["status"], title = "Local Qwen chat", sessionId = "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"): ChatSession {
   return {
-    sessionId: "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    sessionId,
     ownerUserId: "6a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
     workflowType: "inspectionAnalysis",
     title,
@@ -51,6 +53,24 @@ function pickerSession(status: ChatSession["status"], title = "Local Qwen chat")
     updatedAt: "2026-09-07T09:05:00Z",
     clientSessionId: null,
   };
+}
+
+function fakeStorage(initial: Record<string, string> = {}): Storage {
+  const entries = new Map(Object.entries(initial));
+  return {
+    get length() {
+      return entries.size;
+    },
+    clear: () => entries.clear(),
+    getItem: (key: string) => (entries.has(key) ? entries.get(key)! : null),
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      entries.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      entries.set(key, value);
+    },
+  } as Storage;
 }
 
 test("status labels name the selected local model and only real fallbacks", () => {
@@ -141,17 +161,81 @@ test("a retried turn never renders a duplicate optimistic message", () => {
   assert.equal(twice.messages.length, 1);
 });
 
-test("session picker keeps only active sessions with their titles", () => {
+test("the picker offers only active sessions created by this mode", () => {
+  const qwenId = "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+  const workflowId = "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+  const closedQwenId = "8a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
   const result = qwenChatReducer(qwenState({ pickerState: "loading" }), {
     type: "pickerLoaded",
     sessions: [
-      pickerSession("active", "Pump seal question"),
-      pickerSession("completed", "Closed review"),
-      pickerSession("failed", "Failed run"),
+      pickerSession("active", "Pump seal question", qwenId),
+      pickerSession("active", "Inspection workflow review", workflowId),
+      pickerSession("completed", "Closed qwen chat", closedQwenId),
+      pickerSession("failed", "Failed qwen chat", "9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
     ],
+    qwenSessionIds: new Set([qwenId, closedQwenId, "9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"]),
   });
   assert.equal(result.pickerState, "ready");
-  assert.deepEqual(result.pickerSessions, [{ sessionId: "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", title: "Pump seal question" }]);
+  // A workflow session with the same active status must never become a
+  // plain-chat target; inactive sessions stay hidden even when registered.
+  assert.deepEqual(result.pickerSessions, [{ sessionId: qwenId, title: "Pump seal question" }]);
+});
+
+test("a created conversation joins the picker exactly once so it can be resumed", () => {
+  const bound = qwenState({
+    creatingSession: true,
+    pickerSessions: [{ sessionId: "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", title: "Earlier conversation" }],
+  });
+  const created = qwenChatReducer(bound, {
+    type: "sessionCreated",
+    session: pickerSession("active", "Pump seal question", "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
+  });
+  assert.equal(created.creatingSession, false);
+  assert.equal(created.sessionId, "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d");
+  assert.deepEqual(created.pickerSessions, [
+    { sessionId: "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", title: "Earlier conversation" },
+    { sessionId: "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", title: "Pump seal question" },
+  ]);
+
+  const replayed = qwenChatReducer(created, {
+    type: "sessionCreated",
+    session: pickerSession("active", "Pump seal question", "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
+  });
+  assert.equal(replayed.pickerSessions.length, 2);
+});
+
+test("the local registry persists only valid session IDs", () => {
+  const registryKey = "workbench.qwenChat.sessionIds";
+  const empty = loadQwenSessionIds(fakeStorage());
+  assert.equal(empty.size, 0);
+
+  const storage = fakeStorage();
+  rememberQwenSessionId("5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", storage);
+  rememberQwenSessionId("7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", storage);
+  rememberQwenSessionId("not-a-uuid", storage);
+  rememberQwenSessionId("", storage);
+  assert.deepEqual([...loadQwenSessionIds(storage)].sort(), [
+    "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  ]);
+  assert.deepEqual(JSON.parse(storage.getItem(registryKey)!), [
+    "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  ]);
+
+  // Entries written by anything else are validated on read.
+  const hostile = fakeStorage({
+    [registryKey]: JSON.stringify(["8a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", 42, null, "../../etc/passwd"]),
+  });
+  assert.deepEqual([...loadQwenSessionIds(hostile)], ["8a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"]);
+});
+
+test("a corrupted registry reads as empty instead of failing the picker", () => {
+  const storage = fakeStorage({ "workbench.qwenChat.sessionIds": "not-json" });
+  assert.equal(loadQwenSessionIds(storage).size, 0);
+  // Remembering still recovers and persists a valid registry.
+  rememberQwenSessionId("5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", storage);
+  assert.deepEqual([...loadQwenSessionIds(storage)], ["5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"]);
 });
 
 test("a definitive send failure removes the optimistic message and clears pending keys", () => {
