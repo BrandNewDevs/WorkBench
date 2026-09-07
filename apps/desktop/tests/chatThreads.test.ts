@@ -675,3 +675,17 @@ test("workflow events drive queued, processing, approval, and failure states wit
   assert.equal(failed.threads[0]?.status, "failed");
   assert.equal(failed.threads[0]?.activityEvents.length, 4);
 });
+
+test("a reconnected activity stream clears its transient disconnect error", () => {
+  const active = thread("active", 30);
+  const failed = chatThreadReducer(stateOf([active], active.id), {
+    type: "streamFailed",
+    threadId: active.id,
+    message: "Workflow activity disconnected. Reconnecting…",
+  });
+  assert.equal(failed.threads[0]?.streamError, "Workflow activity disconnected. Reconnecting…");
+
+  const connected = chatThreadReducer(failed, { type: "streamConnected", threadId: active.id });
+  assert.equal(connected.threads[0]?.streamError, undefined);
+  assert.equal(chatThreadReducer(connected, { type: "streamConnected", threadId: active.id }), connected);
+});

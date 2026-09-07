@@ -33,7 +33,14 @@ test("main-process service traffic uses the child-owned pipe", () => {
   assert.match(main, /stdio: \["pipe", "pipe", "pipe"\]/);
   assert.match(main, /sendLocalServiceRequest\("\/internal\/ready", "GET", \{ "X-Workbench-Readiness-Nonce": nonce \}\)/);
   assert.doesNotMatch(main, /managedServiceUrl|allocateLocalServicePort|process\.kill\(localService\.pid, 0\)/);
-  assert.match(main, /path = `\/sessions\/\$\{request\.sessionId\}\/messages`/);
+  assert.match(
+    main,
+    /request\.operation === "chatListMessages"\) \{\s+path = `\/chat\/sessions\/\$\{request\.sessionId\}\/messages`;\s+init = \{ method: "GET" \}/,
+  );
+  assert.match(
+    main,
+    /chatMessageAppendRequestSchema[\s\S]*?path = `\/sessions\/\$\{request\.sessionId\}\/messages`;\s+init = \{ method: "POST"/,
+  );
   assert.match(main, /path: `\/sessions\/\$\{sessionId\}\/events`/);
   assert.match(main, /localServiceStartAttempts = 3/);
 });
@@ -58,6 +65,17 @@ test("packaged renderer retains its loopback origin while credentials stay off T
   assert.match(main, /cookies\.get\(\{ url: managedServiceCookieUrl \}\)/);
   assert.match(main, /replacement local listener has no path to it/);
   assert.match(main, /clearManagedLocalService\(child\)/);
+});
+
+test("terminal activity streams are released and reconnect from the last durable event", () => {
+  const hook = readFileSync(new URL("../src/renderer/hooks/useChatThreads.ts", import.meta.url), "utf8");
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+
+  assert.match(hook, /update\.type === "error" \|\| update\.type === "closed"/);
+  assert.match(hook, /eventSubscriptionsRef\.current\.delete\(sessionId\)/);
+  assert.match(hook, /setSubscriptionVersion\(\(version\) => version \+ 1\)/);
+  assert.match(hook, /Math\.max\(latest, event\.eventId\)/);
+  assert.match(main, /"Last-Event-ID": String\(afterEventId\)/);
 });
 
 test("startup storage cleanup is covered by the restart guard reset", () => {

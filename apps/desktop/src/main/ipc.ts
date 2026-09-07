@@ -35,7 +35,7 @@ interface DesktopIpcDependencies {
   getDesktopStatus: () => DesktopStatus;
   isTrustedSender: (event: IpcMainInvokeEvent | IpcMainEvent) => boolean;
   requestLocalService: (request: LocalServiceRequest) => Promise<LocalServiceResponse>;
-  startSessionEvents: (subscriptionId: string, sessionId: string, event: IpcMainEvent) => void;
+  startSessionEvents: (subscriptionId: string, sessionId: string, afterEventId: number, event: IpcMainEvent) => void;
   stopSessionEvents: (subscriptionId: string, event: IpcMainEvent) => void;
 }
 
@@ -253,10 +253,16 @@ export function registerDesktopIpc(dependencies: DesktopIpcDependencies): void {
     }
     return selectChatAttachments(workflowType);
   });
-  ipcMain.on(IPC_CHANNELS.startSessionEvents, (event, request: { subscriptionId?: unknown; sessionId?: unknown }) => {
+  ipcMain.on(IPC_CHANNELS.startSessionEvents, (event, request: { subscriptionId?: unknown; sessionId?: unknown; afterEventId?: unknown }) => {
     assertTrustedEventSender(event, dependencies);
-    if (typeof request?.subscriptionId !== "string" || typeof request.sessionId !== "string") return;
-    dependencies.startSessionEvents(request.subscriptionId, request.sessionId, event);
+    if (
+      typeof request?.subscriptionId !== "string" ||
+      typeof request.sessionId !== "string" ||
+      typeof request.afterEventId !== "number" ||
+      !Number.isSafeInteger(request.afterEventId) ||
+      request.afterEventId < 0
+    ) return;
+    dependencies.startSessionEvents(request.subscriptionId, request.sessionId, request.afterEventId, event);
   });
   ipcMain.on(IPC_CHANNELS.stopSessionEvents, (event, request: { subscriptionId?: unknown }) => {
     assertTrustedEventSender(event, dependencies);

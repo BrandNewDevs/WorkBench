@@ -542,12 +542,16 @@ async function sendLocalServiceRequest(
   });
 }
 
-async function startSessionEvents(subscriptionId: string, sessionId: string, event: IpcMainEvent): Promise<void> {
+async function startSessionEvents(subscriptionId: string, sessionId: string, afterEventId: number, event: IpcMainEvent): Promise<void> {
   if (!chatSessionIdSchema.safeParse(sessionId).success || !chatSessionIdSchema.safeParse(subscriptionId).success) return;
-  if (!localServiceCapability || !managedLocalServiceIsRunning()) return;
+  sessionEventSubscriptions.set(subscriptionId, { sender: event.sender, sessionId, sseBuffer: "", errorBody: "" });
+  if (!localServiceCapability || !managedLocalServiceIsRunning()) {
+    emitSessionEvent(subscriptionId, { type: "error", message: "The local workflow activity stream is temporarily unavailable." });
+    sessionEventSubscriptions.delete(subscriptionId);
+    return;
+  }
   const cookies = await getManagedServiceSession().cookies.get({ url: managedServiceCookieUrl });
   const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
-  sessionEventSubscriptions.set(subscriptionId, { sender: event.sender, sessionId, sseBuffer: "", errorBody: "" });
   const frame = JSON.stringify({
     id: subscriptionId,
     path: `/sessions/${sessionId}/events`,
@@ -557,6 +561,7 @@ async function startSessionEvents(subscriptionId: string, sessionId: string, eve
       Accept: "text/event-stream",
       Origin: rendererOrigin(),
       "X-Workbench-Capability": localServiceCapability,
+      ...(afterEventId > 0 ? { "Last-Event-ID": String(afterEventId) } : {}),
       ...(cookieHeader ? { Cookie: cookieHeader } : {}),
     },
     body: "",
@@ -757,13 +762,13 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
         path = `/chat/sessions/${request.sessionId}`;
         init = { method: "GET" };
       } else if (request.operation === "chatListMessages") {
-        path = `/sessions/${request.sessionId}/messages`;
+        path = `/chat/sessions/${request.sessionId}/messages`;
         init = { method: "GET" };
       } else {
         if (!chatMessageAppendRequestSchema.safeParse(request.request).success) {
           throw new Error("The local service request is not allowed.");
         }
-        path = `/chat/sessions/${request.sessionId}/messages`;
+        path = `/sessions/${request.sessionId}/messages`;
         init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
       }
       break;
@@ -894,8 +899,8 @@ async function startApplication(): Promise<void> {
     getDesktopStatus,
     isTrustedSender: isTrustedIpcSender,
     requestLocalService,
-    startSessionEvents: (subscriptionId, sessionId, event) => {
-      void startSessionEvents(subscriptionId, sessionId, event).catch(() => {
+    startSessionEvents: (subscriptionId, sessionId, afterEventId, event) => {
+      void startSessionEvents(subscriptionId, sessionId, afterEventId, event).catch(() => {
         emitSessionEvent(subscriptionId, { type: "error", message: "The local workflow activity stream could not start." });
         sessionEventSubscriptions.delete(subscriptionId);
       });

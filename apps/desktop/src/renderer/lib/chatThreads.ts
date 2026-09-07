@@ -82,6 +82,7 @@ export type ChatThreadAction =
   | { type: "uploadRegistered"; threadId: ChatThreadId; uploadToken: string; uploadId: string }
   | { type: "workflowQueued"; threadId: ChatThreadId }
   | { type: "workflowEvent"; threadId: ChatThreadId; event: SessionActivityEvent }
+  | { type: "streamConnected"; threadId: ChatThreadId }
   | { type: "streamFailed"; threadId: ChatThreadId; message: string }
   | { type: "sessionSynced"; threadId: ChatThreadId; session: ChatSession }
   | { type: "sendStarted"; threadId: ChatThreadId; clientMessageId: string; clientSessionId?: string; draft: string }
@@ -430,6 +431,10 @@ export function chatThreadReducer(state: ChatThreadState, action: ChatThreadActi
       });
     case "streamFailed":
       return updateThread(state, action.threadId, (thread) => ({ ...thread, streamError: action.message }));
+    case "streamConnected":
+      return updateThread(state, action.threadId, (thread) =>
+        thread.streamError === undefined ? thread : { ...thread, streamError: undefined },
+      );
     case "sessionSynced":
       return updateThread(state, action.threadId, (thread) => ({
         ...thread,

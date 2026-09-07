@@ -26,6 +26,7 @@ const bridge: DesktopBridge = {
     invoke(IPC_CHANNELS.selectChatAttachments, workflowType),
   subscribeSessionEvents: (
     sessionId: string,
+    afterEventId: number,
     onUpdate: (update: SessionEventStreamUpdate) => void,
   ): (() => void) => {
     const subscriptionId = globalThis.crypto.randomUUID();
@@ -33,7 +34,7 @@ const bridge: DesktopBridge = {
       if (update.subscriptionId === subscriptionId) onUpdate(update);
     };
     ipcRenderer.on(IPC_CHANNELS.sessionEvent, listener);
-    ipcRenderer.send(IPC_CHANNELS.startSessionEvents, { subscriptionId, sessionId });
+    ipcRenderer.send(IPC_CHANNELS.startSessionEvents, { subscriptionId, sessionId, afterEventId });
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.sessionEvent, listener);
       ipcRenderer.send(IPC_CHANNELS.stopSessionEvents, { subscriptionId });

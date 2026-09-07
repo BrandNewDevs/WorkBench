@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { SelectedChatAttachment, SelectedUploadFile, UploadKind } from "../../shared/contracts";
 
 import { LocalApiError, apiFailureWasDefinitive, localApi } from "../api/localApi";
@@ -13,6 +13,8 @@ import {
   type ChatThreadState,
 } from "../lib/chatThreads";
 export type { ChatThread, ChatThreadId } from "../lib/chatThreads";
+
+const eventReconnectDelayMs = 1_000;
 
 export interface ChatThreadsOptions {
   apiBaseUrl: string;
@@ -61,6 +63,8 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
   // synchronous gate is authoritative for one send body per thread.
   const inFlightSendThreadsRef = useRef(new Set<ChatThreadId>());
   const eventSubscriptionsRef = useRef(new Map<string, () => void>());
+  const eventReconnectTimersRef = useRef(new Map<string, number>());
+  const [subscriptionVersion, setSubscriptionVersion] = useState(0);
 
   const loadSessions = useCallback(() => {
     const requestSequence = ++sessionsSequenceRef.current;
@@ -119,6 +123,8 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
     if (!connected) {
       for (const unsubscribe of eventSubscriptionsRef.current.values()) unsubscribe();
       eventSubscriptionsRef.current.clear();
+      for (const timer of eventReconnectTimersRef.current.values()) window.clearTimeout(timer);
+      eventReconnectTimersRef.current.clear();
       return;
     }
     const bound = new Map(
@@ -130,9 +136,20 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
         eventSubscriptionsRef.current.delete(sessionId);
       }
     }
+    for (const [sessionId, timer] of eventReconnectTimersRef.current) {
+      if (!bound.has(sessionId)) {
+        window.clearTimeout(timer);
+        eventReconnectTimersRef.current.delete(sessionId);
+      }
+    }
     for (const [sessionId, threadId] of bound) {
       if (eventSubscriptionsRef.current.has(sessionId)) continue;
-      const unsubscribe = window.workbench.subscribeSessionEvents(sessionId, (update) => {
+      const thread = state.threads.find((candidate) => candidate.id === threadId);
+      const afterEventId = thread?.activityEvents.reduce(
+        (latest, event) => Math.max(latest, event.eventId),
+        0,
+      ) ?? 0;
+      const unsubscribe = window.workbench.subscribeSessionEvents(sessionId, afterEventId, (update) => {
         if (update.type === "event") {
           dispatch({ type: "workflowEvent", threadId, event: update.event });
           if (update.event.eventType === "message.completed" || update.event.eventType === "workflow.failed") {
@@ -145,17 +162,40 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
               () => undefined,
             );
           }
-        } else if (update.type === "error") {
-          dispatch({ type: "streamFailed", threadId, message: update.message });
+        } else if (update.type === "connected") {
+          dispatch({ type: "streamConnected", threadId });
+        } else if (update.type === "error" || update.type === "closed") {
+          const currentUnsubscribe = eventSubscriptionsRef.current.get(sessionId);
+          if (currentUnsubscribe === unsubscribe) {
+            currentUnsubscribe();
+            eventSubscriptionsRef.current.delete(sessionId);
+          }
+          dispatch({
+            type: "streamFailed",
+            threadId,
+            message: update.type === "error" ? update.message : "Workflow activity disconnected. Reconnecting…",
+          });
+          if (!eventReconnectTimersRef.current.has(sessionId)) {
+            const timer = window.setTimeout(() => {
+              eventReconnectTimersRef.current.delete(sessionId);
+              const current = stateRef.current.threads.find((candidate) => candidate.id === threadId);
+              if (current?.sessionId === sessionId && current.status === "active") {
+                setSubscriptionVersion((version) => version + 1);
+              }
+            }, eventReconnectDelayMs);
+            eventReconnectTimersRef.current.set(sessionId, timer);
+          }
         }
       });
       eventSubscriptionsRef.current.set(sessionId, unsubscribe);
     }
-  }, [apiBaseUrl, connected, state.threads]);
+  }, [apiBaseUrl, connected, state.threads, subscriptionVersion]);
 
   useEffect(() => () => {
     for (const unsubscribe of eventSubscriptionsRef.current.values()) unsubscribe();
     eventSubscriptionsRef.current.clear();
+    for (const timer of eventReconnectTimersRef.current.values()) window.clearTimeout(timer);
+    eventReconnectTimersRef.current.clear();
   }, []);
 
   const selectChat = useCallback(

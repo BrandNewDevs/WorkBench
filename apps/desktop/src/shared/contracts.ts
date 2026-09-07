@@ -115,6 +115,7 @@ export interface DesktopBridge {
   selectChatAttachments(workflowType: ChatWorkflowType): Promise<ChatAttachmentSelectionResult>;
   subscribeSessionEvents(
     sessionId: string,
+    afterEventId: number,
     onUpdate: (update: SessionEventStreamUpdate) => void,
   ): () => void;
 }
