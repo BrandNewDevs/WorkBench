@@ -93,11 +93,13 @@ export default function Team() {
         {teamMembers.map((m, index) => {
           const active = activeIndex === index;
           return (
-            <div
+            <a
               key={m.github}
+              href={m.github}
+              target="_blank"
+              rel="noreferrer"
               className="team-member"
-              tabIndex={0}
-              aria-label={`${m.name}, ${m.role}`}
+              aria-label={`${m.name}, ${m.role}, GitHub profile`}
               onMouseEnter={() => activate(index)}
               onMouseLeave={deactivate}
               onFocus={() => activate(index)}
@@ -121,7 +123,7 @@ export default function Team() {
                   </div>
                 </div>
               )}
-            </div>
+            </a>
           );
         })}
       </div>
