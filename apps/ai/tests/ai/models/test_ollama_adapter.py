@@ -1,5 +1,6 @@
 """Contract tests for local Ollama model operations and fallback behavior."""
 
+import asyncio
 import json
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -328,6 +329,40 @@ async def test_conversation_fallback_uses_only_the_remaining_caller_deadline(
 
     assert result.model == "qwen3:1.7b"
     assert inference_timeouts == [30, 20]
+
+
+async def test_conversation_deadline_includes_waiting_for_the_inference_lock() -> None:
+    """Reject a queued request at its deadline before it can start model inference."""
+
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=tags_response("qwen3:4b"))
+
+    profile = load_model_profile()
+    adapter = adapter_for(handler)
+    await adapter._inference_lock.acquire()
+    task = asyncio.create_task(
+        adapter.generate_conversation(
+            ConversationGenerationRequest(
+                model="qwen3:4b",
+                system_prompt="Respond locally.",
+                messages=(ConversationMessage(role="user", content="Hello."),),
+                limits=profile.text_limits,
+                timeout_seconds=0.01,
+            )
+        )
+    )
+    try:
+        await asyncio.sleep(0.05)
+        with pytest.raises(ModelRequestTimeout):
+            await task
+    finally:
+        adapter._inference_lock.release()
+        await adapter.close()
+
+    assert requests == []
 
 
 async def test_conversation_generation_rejects_invalid_assistant_output() -> None:

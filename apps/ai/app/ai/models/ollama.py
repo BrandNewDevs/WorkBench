@@ -143,12 +143,13 @@ class OllamaModelAdapter:
         """Run non-streaming structured text generation with one approved fallback."""
 
         validate_output_schema(request.output_schema)
-        async with self._inference_lock:
-            result, selected_model, fallback_reason = await self._with_fallback(
+        result, selected_model, fallback_reason = await self._run_with_deadline(
+            request.limits.timeout_seconds,
+            lambda started: self._with_fallback(
                 Capability.TEXT,
                 request.model,
                 request.limits.timeout_seconds,
-                lambda model, timeout_seconds: self._chat(
+                operation=lambda model, timeout_seconds: self._chat(
                     model=model,
                     system_prompt=request.system_prompt,
                     user_prompt=request.user_prompt,
@@ -159,7 +160,9 @@ class OllamaModelAdapter:
                     timeout_seconds=timeout_seconds,
                     temperature=request.temperature,
                 ),
-            )
+                started=started,
+            ),
+        )
         return result.model_copy(
             update={
                 "model": selected_model,
@@ -177,12 +180,13 @@ class OllamaModelAdapter:
             request.timeout_seconds or request.limits.timeout_seconds,
             request.limits.timeout_seconds,
         )
-        async with self._inference_lock:
-            result, selected_model, fallback_reason = await self._with_fallback(
+        result, selected_model, fallback_reason = await self._run_with_deadline(
+            timeout_seconds,
+            lambda started: self._with_fallback(
                 Capability.TEXT,
                 request.model,
                 timeout_seconds,
-                lambda model, remaining_timeout_seconds: self._conversation(
+                operation=lambda model, remaining_timeout_seconds: self._conversation(
                     model=model,
                     system_prompt=request.system_prompt,
                     messages=request.messages,
@@ -191,7 +195,9 @@ class OllamaModelAdapter:
                     timeout_seconds=remaining_timeout_seconds,
                     temperature=request.temperature,
                 ),
-            )
+                started=started,
+            ),
+        )
         return result.model_copy(
             update={
                 "model": selected_model,
@@ -204,12 +210,13 @@ class OllamaModelAdapter:
         """Run structured vision generation over caller-normalized base64 images."""
 
         validate_output_schema(request.output_schema)
-        async with self._inference_lock:
-            result, selected_model, fallback_reason = await self._with_fallback(
+        result, selected_model, fallback_reason = await self._run_with_deadline(
+            request.limits.timeout_seconds,
+            lambda started: self._with_fallback(
                 Capability.VISION,
                 request.model,
                 request.limits.timeout_seconds,
-                lambda model, timeout_seconds: self._chat(
+                operation=lambda model, timeout_seconds: self._chat(
                     model=model,
                     system_prompt=request.system_prompt,
                     user_prompt=request.user_prompt,
@@ -220,7 +227,9 @@ class OllamaModelAdapter:
                     timeout_seconds=timeout_seconds,
                     temperature=request.temperature,
                 ),
-            )
+                started=started,
+            ),
+        )
         return result.model_copy(
             update={
                 "model": selected_model,
@@ -232,17 +241,20 @@ class OllamaModelAdapter:
     async def create_embeddings(self, request: EmbeddingRequest) -> EmbeddingResult:
         """Generate local embeddings with one approved fallback candidate."""
 
-        async with self._inference_lock:
-            result, selected_model, fallback_reason = await self._with_fallback(
+        result, selected_model, fallback_reason = await self._run_with_deadline(
+            self._settings.request_timeout_seconds,
+            lambda started: self._with_fallback(
                 Capability.EMBEDDING,
                 request.model,
                 self._settings.request_timeout_seconds,
-                lambda model, timeout_seconds: self._embed(
+                operation=lambda model, timeout_seconds: self._embed(
                     model,
                     request.inputs,
                     timeout_seconds=timeout_seconds,
                 ),
-            )
+                started=started,
+            ),
+        )
         return result.model_copy(
             update={
                 "model": selected_model,
@@ -284,16 +296,32 @@ class OllamaModelAdapter:
         del exc_type, exc_value, traceback
         await self.close()
 
+    async def _run_with_deadline(
+        self,
+        timeout_seconds: float,
+        operation: Callable[[float], Awaitable[ResultT]],
+    ) -> ResultT:
+        """Apply one caller deadline to lock wait, model switching, and inference."""
+
+        started = perf_counter()
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async with self._inference_lock:
+                    return await operation(started)
+        except TimeoutError as error:
+            raise ModelRequestTimeout("local Ollama request timed out") from error
+
     async def _with_fallback(
         self,
         capability: Capability,
         requested_model: str,
         timeout_seconds: float,
         operation: Callable[[str, float], Awaitable[ResultT]],
+        *,
+        started: float,
     ) -> tuple[ResultT, str, str | None]:
         """Try at most one fallback without extending the caller's total deadline."""
 
-        started = perf_counter()
         candidates = self._candidate_chain(capability, requested_model)
         installed_names = {model.name for model in await self.list_models()}
         fallback_reason: str | None = None
