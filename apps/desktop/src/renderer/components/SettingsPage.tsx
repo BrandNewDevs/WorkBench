@@ -169,7 +169,11 @@ function SecuritySection({ healthState, now }: { healthState: HealthState; now: 
       <GroupedSettingsRow description="Whether the latest fresh response identifies this as a local-only deployment." title="Local-only mode">{securityValue(health ? "Enabled" : undefined)}</GroupedSettingsRow>
       <GroupedSettingsRow description="Readiness of the local model runtime." title="Local inference">{securityValue(localInference)}</GroupedSettingsRow>
       <GroupedSettingsRow description="Readiness of every required local model capability." title="Required models">
-        {health ? <span className="flex flex-col gap-1">{health.ai.models.map((model) => <span key={model.capability}>{modelReadinessValue(model)}</span>)}</span> : "Unknown"}
+        {health ? (
+          health.ai.models.length > 0 ? (
+            <span className="flex flex-col gap-1">{health.ai.models.map((model) => <span key={model.capability}>{modelReadinessValue(model)}</span>)}</span>
+          ) : "Unavailable"
+        ) : "Unknown"}
       </GroupedSettingsRow>
       <GroupedSettingsRow description="Readiness of the local knowledge index." title="Knowledge index">{securityValue(knowledge)}</GroupedSettingsRow>
       <GroupedSettingsRow description="Readiness of local application storage." title="Storage">{securityValue(readinessValue(health?.storage))}</GroupedSettingsRow>
