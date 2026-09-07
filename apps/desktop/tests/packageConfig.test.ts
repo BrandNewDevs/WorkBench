@@ -39,7 +39,7 @@ test("main-process service traffic uses the child-owned pipe", () => {
   );
   assert.match(
     main,
-    /chatMessageAppendRequestSchema[\s\S]*?path = `\/sessions\/\$\{request\.sessionId\}\/messages`;\s+init = \{ method: "POST"/,
+    /chatMessageAppendRequestSchema[\s\S]*?path = `\/chat\/sessions\/\$\{request\.sessionId\}\/messages`;\s+init = \{ method: "POST"/,
   );
   assert.match(main, /path: `\/sessions\/\$\{sessionId\}\/events`/);
   assert.match(main, /localServiceStartAttempts = 3/);

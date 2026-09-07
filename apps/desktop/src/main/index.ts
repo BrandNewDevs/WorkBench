@@ -768,7 +768,7 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
         if (!chatMessageAppendRequestSchema.safeParse(request.request).success) {
           throw new Error("The local service request is not allowed.");
         }
-        path = `/sessions/${request.sessionId}/messages`;
+        path = `/chat/sessions/${request.sessionId}/messages`;
         init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
       }
       break;

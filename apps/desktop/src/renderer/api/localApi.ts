@@ -12,16 +12,15 @@ import type {
   EmployeeSessionRestoreResponse,
   HealthResponse,
   LocalServiceRequest,
-  WorkflowMessageAccepted,
   WorkflowUploadResponse,
 } from "../../shared/contracts";
 import {
   chatErrorCodeSchema,
   chatMessageListResponseSchema,
+  chatMessageSchema,
   chatSessionListResponseSchema,
   chatSessionSchema,
   healthResponseSchema,
-  workflowMessageAcceptedSchema,
   workflowUploadResponseSchema,
 } from "../../shared/contracts.ts";
 import type { ZodType } from "zod";
@@ -272,12 +271,12 @@ export class LocalApiClient {
     sessionId: string,
     request: ChatMessageAppendRequest,
     apiBaseUrl?: string,
-  ): Promise<WorkflowMessageAccepted> {
+  ): Promise<ChatMessage> {
     void apiBaseUrl;
     return parseChat(
-      workflowMessageAcceptedSchema,
+      chatMessageSchema,
       await this.requestJson({ operation: "chatAppendMessage", sessionId, request }, "chat message"),
-      "workflow message acknowledgement",
+      "chat message",
     );
   }
 

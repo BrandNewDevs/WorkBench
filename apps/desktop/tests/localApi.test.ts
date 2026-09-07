@@ -78,7 +78,8 @@ const messagePayload = {
   clientMessageId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
 };
 
-const acceptedPayload = {
+/** The Phase 4 workflow-admission acknowledgement is not the chat append response. */
+const queuedWorkAckPayload = {
   messageId: messagePayload.messageId,
   workflowRunId: "3ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e92",
   status: "queued",
@@ -260,6 +261,18 @@ test("malformed chat payloads are rejected instead of trusted", async () => {
   }
 });
 
+test("append responses are validated as stored chat messages, not queued-work acks", async () => {
+  installBridge({ requestLocalService: async () => ok(queuedWorkAckPayload) });
+  await assert.rejects(
+    localApi.appendChatMessage(sessionPayload.sessionId, {
+      content: "Find the corrosion findings.",
+      clientMessageId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      selectedUploadIds: [],
+    }),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "invalidResponse",
+  );
+});
+
 test("chat resource 404s are distinguished from missing endpoints", async () => {
   installBridge({
     requestLocalService: async () => ({
@@ -307,7 +320,7 @@ test("create and append round-trip the request bodies to the local service", asy
       if (request.operation === "chatCreateSession") {
         return ok(sessionPayload);
       }
-      return ok(acceptedPayload);
+      return ok(messagePayload);
     },
   });
 
@@ -323,6 +336,8 @@ test("create and append round-trip the request bodies to the local service", asy
   });
   assert.equal(created.sessionId, sessionPayload.sessionId);
   assert.equal(appended.messageId, messagePayload.messageId);
+  assert.equal(appended.role, "user");
+  assert.equal(appended.clientMessageId, messagePayload.clientMessageId);
   assert.deepEqual(requests[0], {
     operation: "chatCreateSession",
     request: {

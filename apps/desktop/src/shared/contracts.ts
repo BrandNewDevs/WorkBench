@@ -343,13 +343,6 @@ export const chatMessageAppendRequestSchema = z.strictObject({
   }),
 });
 
-export const workflowMessageAcceptedSchema = z.strictObject({
-  messageId: uuidSchema,
-  workflowRunId: uuidSchema,
-  status: z.literal("queued"),
-  eventsUrl: z.string().regex(/^\/sessions\/[0-9a-f-]{36}\/events$/),
-});
-
 export const workflowUploadResponseSchema = z.strictObject({
   uploadId: uuidSchema,
   sessionId: uuidSchema,
@@ -414,6 +407,5 @@ export type ChatMessageListResponse = z.infer<typeof chatMessageListResponseSche
 export type ChatSessionCreateRequest = z.infer<typeof chatSessionCreateRequestSchema>;
 
 export type ChatMessageAppendRequest = z.infer<typeof chatMessageAppendRequestSchema>;
-export type WorkflowMessageAccepted = z.infer<typeof workflowMessageAcceptedSchema>;
 export type WorkflowUploadResponse = z.infer<typeof workflowUploadResponseSchema>;
 export type SessionActivityEvent = z.infer<typeof sessionActivityEventSchema>;

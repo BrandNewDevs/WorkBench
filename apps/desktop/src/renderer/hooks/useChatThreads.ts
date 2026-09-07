@@ -287,26 +287,13 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
             uploadedIdsByToken[file.uploadToken] = uploaded.uploadId;
             dispatch({ type: "uploadRegistered", threadId, uploadToken: file.uploadToken, uploadId: uploaded.uploadId });
           }
-          const accepted = await localApi.appendChatMessage(
+          const message = await localApi.appendChatMessage(
             sessionId,
             { content, clientMessageId, selectedUploadIds: selectedFiles.map((file) => uploadedIdsByToken[file.uploadToken]!) },
             apiBaseUrl,
           );
           if (sendSequencesRef.current.get(threadId) !== requestSequence) return;
-          dispatch({
-            type: "messageAppended",
-            threadId,
-            message: {
-              messageId: accepted.messageId,
-              sessionId,
-              authorUserId: null,
-              role: "user",
-              content,
-              createdAt: new Date().toISOString(),
-              clientMessageId,
-            },
-            now: Date.now(),
-          });
+          dispatch({ type: "messageAppended", threadId, message, now: Date.now() });
           dispatch({ type: "workflowQueued", threadId });
           dispatch({ type: "draftClearedIfUnchanged", threadId, draft: submittedDraft, now: Date.now() });
         } catch (error) {
