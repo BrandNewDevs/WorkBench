@@ -23,6 +23,8 @@ from app.ai.schemas import (
     AgentContext,
     AgentProposal,
     ApprovedKnowledgeRoot,
+    Capability,
+    CapabilityDecision,
     CodeRepairContent,
     CodeRepairRequest,
     ConversationGenerationRequest,
@@ -322,6 +324,40 @@ async def test_local_engine_reports_knowledge_health_without_exposing_failures()
     assert health.runtime_ready is True
     assert health.knowledge_ready is False
     assert health.knowledge_error == "KnowledgeIndexUnavailable"
+
+
+async def test_local_conversation_preserves_router_fallback_metadata() -> None:
+    """Keep a health-selected text fallback visible when adapter generation succeeds."""
+
+    model = RecordingModelAdapter({})
+    engine = LocalAIEngine(
+        AIEngineDependencies(
+            model_adapter=model,
+            knowledge_adapter=FakeKnowledgeAdapter(ready=False),
+            router=FakeCapabilityRouter(
+                decision=CapabilityDecision(
+                    capability=Capability.TEXT,
+                    selected_model="qwen3:1.7b",
+                    reason="The chat task requires local text reasoning.",
+                    used_fallback=True,
+                    fallback_reason="qwen3:4b is not installed.",
+                )
+            ),
+            model_profile=sample_model_profile(),
+        ),
+        visual_normalizer=FixedVisualNormalizer(),
+    )
+
+    reply = await engine.reply_to_conversation(
+        ConversationRequest(
+            session_id="session-fallback",
+            user_message="Confirm the local fallback.",
+        )
+    )
+
+    assert reply.model == "qwen3:1.7b"
+    assert reply.used_fallback is True
+    assert reply.fallback_reason == "qwen3:4b is not installed."
 
 
 async def test_local_engine_factory_does_not_require_running_ollama(tmp_path: Path) -> None:

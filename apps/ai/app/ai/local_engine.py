@@ -114,7 +114,15 @@ class LocalAIEngine:
                 modalities=(InputModality.TEXT,),
             )
         )
-        return await self._conversation.reply(request, model=decision.selected_model)
+        reply = await self._conversation.reply(request, model=decision.selected_model)
+        if not decision.used_fallback:
+            return reply
+        return reply.model_copy(
+            update={
+                "used_fallback": True,
+                "fallback_reason": reply.fallback_reason or decision.fallback_reason,
+            }
+        )
 
     async def plan_task(self, request: AgentContext) -> TaskPlan:
         """Return a typed plan without advancing any backend workflow stage."""
