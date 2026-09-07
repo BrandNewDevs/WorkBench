@@ -737,7 +737,8 @@ class LocalSQLiteDatabase:
 
         nonterminal = "('queued', 'active', 'waitingForApproval')"
         await connection.execute(
-            f"""UPDATE workflow_runs SET status = 'failed', updated_at = ?
+            f"""UPDATE workflow_runs SET status = 'failed', stage = 'failed',
+                stage_version = stage_version + 1, updated_at = ?
             WHERE workflow_run_id IN (
                 SELECT r.workflow_run_id FROM workflow_runs r
                 JOIN (
