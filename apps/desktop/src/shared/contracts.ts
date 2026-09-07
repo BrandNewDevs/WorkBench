@@ -137,18 +137,62 @@ export interface EmployeeLogoutResponse {
   revoked: boolean;
 }
 
-export type HealthStatus = "healthy" | "degraded";
-export type OutboundStatus = "blocked" | "clear" | "unknown";
+const utcTimestampSchema = z.iso.datetime({ offset: true });
 
-export interface HealthResponse {
-  status: HealthStatus;
-  service: "fastapi";
-  localInference: boolean;
-  currentModel: string | null;
-  externalApis: number;
-  outboundStatus: OutboundStatus;
-  checkedAt: string;
-}
+export const modelHealthSchema = z.strictObject({
+  capability: z.enum(["text", "vision", "embedding"]),
+  status: z.enum(["ready", "missing", "unavailable", "error"]),
+  installed: z.boolean(),
+  loadable: z.boolean().nullable(),
+  selectedModel: z.string().nullable(),
+  fallbackReason: z.string().nullable(),
+  lastError: z.string().nullable(),
+});
+
+export const subsystemReadinessSchema = z.strictObject({
+  ready: z.boolean(),
+  detail: z.string().max(500).nullable(),
+});
+
+export const localDeploymentProofSchema = z.strictObject({
+  storageBackend: z.string(),
+  persistentStorageLocal: z.boolean(),
+  knowledgeStorageLocal: z.boolean(),
+  artifactStorageLocal: z.boolean(),
+  modelEndpointClassification: z.string(),
+  sandboxNetworkPolicy: z.string(),
+  sandboxPullPolicy: z.string(),
+  pdfConverterMode: z.string(),
+  pdfConverterAvailable: z.boolean(),
+  dockerAvailable: z.boolean(),
+  externalTelemetryConfigured: z.boolean(),
+});
+
+/** Canonical camelCase wire contract returned by FastAPI for both 200 and 503 health responses. */
+export const healthResponseSchema = z.strictObject({
+  status: z.enum(["ready", "degraded"]),
+  service: z.literal("workbench-ai"),
+  apiVersion: z.literal("v1"),
+  localOnly: z.literal(true),
+  externalApiCount: z.literal(0),
+  ai: z.strictObject({
+    runtimeReady: z.boolean(),
+    runtimeError: z.string().nullable(),
+    models: z.array(modelHealthSchema),
+    knowledgeReady: z.boolean(),
+    knowledgeError: z.string().nullable(),
+  }),
+  storage: subsystemReadinessSchema,
+  sandbox: subsystemReadinessSchema,
+  audit: subsystemReadinessSchema,
+  outboundNetworkBlocked: z.boolean(),
+  deploymentProof: localDeploymentProofSchema.nullable(),
+  checkedAt: utcTimestampSchema,
+});
+
+export type ModelHealth = z.infer<typeof modelHealthSchema>;
+export type SubsystemReadiness = z.infer<typeof subsystemReadinessSchema>;
+export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
 /** Pending FastAPI workflow response contracts. Do not treat fixture data as these results. */
 export type WorkflowStageName = "upload" | "extraction" | "retrieval" | "drafting" | "validation";
@@ -217,7 +261,7 @@ export const chatSessionStatusSchema = z.enum(["active", "completed", "failed", 
 export const chatMessageRoleSchema = z.enum(["user", "assistant"]);
 
 /** Backend timestamps are timezone-aware UTC ISO 8601. */
-export const chatTimestampSchema = z.iso.datetime({ offset: true });
+export const chatTimestampSchema = utcTimestampSchema;
 
 const uuidSchema = z.uuid();
 

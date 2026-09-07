@@ -19,6 +19,43 @@ function ok(body: unknown): Promise<LocalServiceResponse> {
   return Promise.resolve({ status: 200, body: JSON.stringify(body) });
 }
 
+const healthPayload = {
+  status: "ready",
+  service: "workbench-ai",
+  apiVersion: "v1",
+  localOnly: true,
+  externalApiCount: 0,
+  ai: {
+    runtimeReady: true,
+    runtimeError: null,
+    models: [
+      { capability: "text", status: "ready", installed: true, loadable: true, selectedModel: "qwen3:4b", fallbackReason: null, lastError: null },
+      { capability: "vision", status: "ready", installed: true, loadable: true, selectedModel: "qwen3-vl:4b", fallbackReason: null, lastError: null },
+      { capability: "embedding", status: "ready", installed: true, loadable: true, selectedModel: "qwen3-embedding:4b", fallbackReason: null, lastError: null },
+    ],
+    knowledgeReady: true,
+    knowledgeError: null,
+  },
+  storage: { ready: true, detail: "Ready" },
+  sandbox: { ready: true, detail: null },
+  audit: { ready: true, detail: null },
+  outboundNetworkBlocked: true,
+  deploymentProof: {
+    storageBackend: "sqlite",
+    persistentStorageLocal: true,
+    knowledgeStorageLocal: true,
+    artifactStorageLocal: true,
+    modelEndpointClassification: "loopback",
+    sandboxNetworkPolicy: "none",
+    sandboxPullPolicy: "never",
+    pdfConverterMode: "local",
+    pdfConverterAvailable: true,
+    dockerAvailable: true,
+    externalTelemetryConfigured: false,
+  },
+  checkedAt: "2026-09-07T09:30:00Z",
+} as const;
+
 const sessionPayload = {
   sessionId: "1ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e9f",
   ownerUserId: "0ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e90",
@@ -40,6 +77,115 @@ const messagePayload = {
   createdAt: "2026-09-06T01:21:00Z",
   clientMessageId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
 };
+
+test("current FastAPI ready health responses parse into the canonical contract", async () => {
+  installBridge({ requestLocalService: async () => ok(healthPayload) });
+
+  const health = await localApi.getHealth();
+
+  assert.equal(health.status, "ready");
+  assert.equal(health.service, "workbench-ai");
+  assert.equal(health.ai.models[0]?.selectedModel, "qwen3:4b");
+  assert.equal(health.storage.ready, true);
+  assert.equal(health.externalApiCount, 0);
+  assert.equal(health.outboundNetworkBlocked, true);
+});
+
+test("valid FastAPI 503 health responses remain actionable degraded health", async () => {
+  const degraded = {
+    ...healthPayload,
+    status: "degraded",
+    ai: {
+      ...healthPayload.ai,
+      models: healthPayload.ai.models.map((model) =>
+        model.capability === "vision"
+          ? {
+              ...model,
+              status: "missing",
+              installed: false,
+              loadable: null,
+              selectedModel: null,
+              lastError: "Required model is not installed",
+            }
+          : model,
+      ),
+    },
+  };
+  installBridge({
+    requestLocalService: async () => ({ status: 503, body: JSON.stringify(degraded) }),
+  });
+
+  const health = await localApi.getHealth();
+
+  assert.equal(health.status, "degraded");
+  assert.deepEqual(health.ai.models.find((model) => model.capability === "vision"), {
+    capability: "vision",
+    status: "missing",
+    installed: false,
+    loadable: null,
+    selectedModel: null,
+    fallbackReason: null,
+    lastError: "Required model is not installed",
+  });
+});
+
+test("health transport, HTTP, malformed JSON, and invalid contracts remain distinct failures", async () => {
+  installBridge({ requestLocalService: async () => ({ status: 503, body: "not-json" }) });
+  await assert.rejects(
+    localApi.getHealth(),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "malformedJson" && error.status === 503,
+  );
+
+  installBridge({
+    requestLocalService: async () => ({
+      status: 200,
+      body: JSON.stringify({ ...healthPayload, externalApiCount: 1 }),
+    }),
+  });
+  await assert.rejects(
+    localApi.getHealth(),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "invalidResponse" && error.status === 200,
+  );
+
+  installBridge({
+    requestLocalService: async () => ({
+      status: 503,
+      body: JSON.stringify({ ...healthPayload, status: "ready" }),
+    }),
+  });
+  await assert.rejects(
+    localApi.getHealth(),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "invalidResponse" && error.status === 503,
+  );
+
+  installBridge({
+    requestLocalService: async () => ({ status: 500, body: JSON.stringify(healthPayload) }),
+  });
+  await assert.rejects(
+    localApi.getHealth(),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "http" && error.status === 500,
+  );
+
+  installBridge({
+    requestLocalService: async () => ({ status: 401, body: JSON.stringify({ detail: "Unauthorized" }) }),
+  });
+  await assert.rejects(
+    localApi.getHealth(),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "unauthorized" && error.status === 401,
+  );
+
+  installBridge({ requestLocalService: async () => ({ status: 404, body: "Not Found" }) });
+  await assert.rejects(
+    localApi.getHealth(),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "endpointUnavailable" && error.status === 404,
+  );
+
+  installBridge({ requestLocalService: async () => Promise.reject(new Error("pipe closed")) });
+  await assert.rejects(
+    localApi.getHealth(),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "network",
+  );
+});
 
 test("chat session and message responses parse into strict camelCase contracts", async () => {
   installBridge({
