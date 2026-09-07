@@ -92,8 +92,16 @@ function attachmentSelectionErrorMessage(result: Extract<ChatAttachmentSelection
 }
 
 function attachmentKey(file: SelectedChatAttachment): string {
-  return `${file.name.toLowerCase()}\u0000${file.mimeType}\u0000${file.sizeBytes}`;
+  return file.uploadToken;
 }
+
+const workflowStateLabels = {
+  queued: "Queued",
+  processing: "Processing",
+  completed: "Completed",
+  failed: "Failed",
+  awaitingApproval: "Approval required",
+} as const;
 
 type ChatComposerProps = {
   canSend: boolean;
@@ -272,7 +280,7 @@ export function ChatPage({
     setSelectionMessage(undefined);
     setSelecting(true);
     try {
-      const result = await window.workbench.selectChatAttachments();
+      const result = await window.workbench.selectChatAttachments(thread.workflowType);
       if (result.kind === "selected") {
         const existingKeys = new Set(attachments.map(attachmentKey));
         const newAttachments = result.files.filter((file) => {
@@ -292,7 +300,7 @@ export function ChatPage({
     } finally {
       setSelecting(false);
     }
-  }, [attachments, onAttachmentsChange, selecting, threadId]);
+  }, [attachments, onAttachmentsChange, selecting, thread.workflowType, threadId]);
 
   const removeInspectionFile = useCallback((kind: UploadKind) => {
     onInspectionFilesChange(threadId, kind);
@@ -345,8 +353,8 @@ export function ChatPage({
               </h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 {hasFiles
-                  ? "These are user-selected inputs for a future upload step. They stay in this open client session, and their contents have not been analyzed or verified."
-                  : "Select an inspection report and site photograph, or attach supporting files. This preview records file metadata only and stays in this open client session."}
+                  ? "These files will be uploaded to this local workflow session when you send your message."
+                  : "Select an inspection report and site photograph, or attach supporting files for local analysis."}
               </p>
               {hasFiles && (
                 <ul aria-label="Selected files" className="mt-5 divide-y divide-border overflow-hidden rounded-lg border border-border bg-muted/30">
@@ -379,6 +387,12 @@ export function ChatPage({
             <SessionStageStrip stage={thread.stage} status={thread.status} workflowType={thread.workflowType} />
           </div>
         )}
+        {thread.workflowState && (
+          <p className={`mb-2 text-xs font-medium ${thread.workflowState === "failed" ? "text-destructive" : "text-muted-foreground"}`} role="status">
+            Workflow: {workflowStateLabels[thread.workflowState]}
+            {thread.workflowState === "awaitingApproval" ? " — Approve/Reject actions will be available in Phase 5." : ""}
+          </p>
+        )}
         <ChatComposer
           canSend={canSend}
           disabledReason={sendDisabledReason}
@@ -391,6 +405,9 @@ export function ChatPage({
         />
         {thread.sendState === "error" && thread.sendError !== undefined && (
           <p aria-live="assertive" className="mt-2 text-sm text-destructive" role="status">{thread.sendError}</p>
+        )}
+        {thread.streamError && (
+          <p aria-live="polite" className="mt-2 text-sm text-destructive" role="status">{thread.streamError}</p>
         )}
       </div>
     </section>

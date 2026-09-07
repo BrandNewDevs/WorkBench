@@ -17,7 +17,7 @@ function thread(id: string, updatedAt: number, createdAt = 0): ChatThread {
   return {
     id: id as ChatThreadId, title: id, source: "local", workflowType: "inspectionAnalysis",
     draft: "", attachments: [], inspectionFiles: {},
-    messages: [], messagesState: "idle", sendState: "idle",
+    messages: [], messagesState: "idle", sendState: "idle", activityEvents: [], uploadedIdsByToken: {},
     createdAt, updatedAt,
   };
 }
@@ -87,7 +87,7 @@ test("new chat reuses an empty draft without replacing another chat's files", ()
   assert.equal(reused.activeThreadId, "new");
   const withFile = chatThreadReducer(reused, {
     type: "setInspectionFile", threadId: first.id, kind: "inspectionReport", now: 60,
-    file: { name: "report.pdf", kind: "inspectionReport", mimeType: "application/pdf", sizeBytes: 42 },
+    file: { uploadToken: "10000000-0000-4000-8000-000000000000", name: "report.pdf", kind: "inspectionReport", mimeType: "application/pdf", sizeBytes: 42 },
   });
   assert.equal(withFile.threads[0]?.inspectionFiles.inspectionReport?.name, "report.pdf");
   assert.deepEqual(withFile.threads[1]?.inspectionFiles, {});
@@ -289,8 +289,8 @@ test("unsent-content detection drives preservation", () => {
   assert.equal(threadHasUnsentContent({ ...thread("draft", 10), draft: " note " }), true);
   assert.equal(threadHasUnsentContent({ ...thread("pending", 10), pendingDraft: "Unresolved append" }), true);
   assert.equal(threadHasUnsentContent({ ...thread("creating", 10), pendingClientSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }), true);
-  assert.equal(threadHasUnsentContent({ ...thread("attached", 10), attachments: [{ name: "a.pdf", mimeType: "application/pdf", sizeBytes: 1 }] }), true);
-  assert.equal(threadHasUnsentContent({ ...thread("report", 10), inspectionFiles: { inspectionReport: { name: "r.pdf", kind: "inspectionReport", mimeType: "application/pdf", sizeBytes: 1 } } }), true);
+  assert.equal(threadHasUnsentContent({ ...thread("attached", 10), attachments: [{ uploadToken: "20000000-0000-4000-8000-000000000000", name: "a.pdf", mimeType: "application/pdf", sizeBytes: 1 }] }), true);
+  assert.equal(threadHasUnsentContent({ ...thread("report", 10), inspectionFiles: { inspectionReport: { uploadToken: "30000000-0000-4000-8000-000000000000", name: "r.pdf", kind: "inspectionReport", mimeType: "application/pdf", sizeBytes: 1 } } }), true);
 });
 
 test("chatThreadFromSession maps the wire contract onto a thread", () => {
@@ -310,7 +310,7 @@ test("session refresh merges into bound threads without discarding local state",
     sessionId: "44444444-4444-4444-8444-444444444444",
     title: "Pump 4 seal review",
     draft: "Unsent follow-up",
-    attachments: [{ name: "photo.png", mimeType: "image/png", sizeBytes: 9 }],
+    attachments: [{ uploadToken: "40000000-0000-4000-8000-000000000000", name: "photo.png", mimeType: "image/png", sizeBytes: 9 }],
     messages: [message("Earlier message")],
     messagesState: "ready",
     sendState: "sending",
@@ -638,4 +638,40 @@ test("stage pipelines reflect active, failed, and terminal states", () => {
     { stage: "awaitingApproval", state: "queued" },
     { stage: "exporting", state: "queued" },
   ]);
+});
+
+test("workflow events drive queued, processing, approval, and failure states without duplicates", () => {
+  const bound = { ...thread("bound", 30), sessionId: "33333333-3333-4333-8333-333333333333", status: "active" as const, stage: "collectingInputs" as const };
+  const baseEvent = {
+    eventId: 1,
+    sessionId: bound.sessionId,
+    workflowRunId: "55555555-5555-4555-8555-555555555555",
+    eventType: "message.accepted" as const,
+    occurredAt: "2026-09-01T10:07:00Z",
+    payload: { messageId: "11111111-1111-4111-8111-111111111111" },
+  };
+  const queued = chatThreadReducer(stateOf([bound], bound.id), { type: "workflowEvent", threadId: bound.id, event: baseEvent });
+  assert.equal(queued.threads[0]?.workflowState, "queued");
+  assert.equal(chatThreadReducer(queued, { type: "workflowEvent", threadId: bound.id, event: baseEvent }), queued);
+
+  const processing = chatThreadReducer(queued, {
+    type: "workflowEvent", threadId: bound.id,
+    event: { ...baseEvent, eventId: 2, eventType: "workflow.stageChanged", payload: { previousStage: "collectingInputs", stage: "extracting", stageVersion: 1, status: "active" } },
+  });
+  assert.equal(processing.threads[0]?.workflowState, "processing");
+  assert.equal(processing.threads[0]?.stage, "extracting");
+
+  const approval = chatThreadReducer(processing, {
+    type: "workflowEvent", threadId: bound.id,
+    event: { ...baseEvent, eventId: 3, eventType: "approval.required", payload: { approvalId: "66666666-6666-4666-8666-666666666666" } },
+  });
+  assert.equal(approval.threads[0]?.workflowState, "awaitingApproval");
+
+  const failed = chatThreadReducer(approval, {
+    type: "workflowEvent", threadId: bound.id,
+    event: { ...baseEvent, eventId: 4, eventType: "workflow.failed", payload: { stage: "validating", failureCode: "validation_failed" } },
+  });
+  assert.equal(failed.threads[0]?.workflowState, "failed");
+  assert.equal(failed.threads[0]?.status, "failed");
+  assert.equal(failed.threads[0]?.activityEvents.length, 4);
 });

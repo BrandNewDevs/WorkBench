@@ -3,11 +3,13 @@ import {
   IPC_CHANNELS,
   type DesktopBridge,
   type ChatAttachmentSelectionResult,
+  type ChatWorkflowType,
   type DesktopStatus,
   type LocalServiceRequest,
   type LocalServiceResponse,
   type UploadKind,
   type UploadSelectionResult,
+  type SessionEventStreamUpdate,
 } from "../shared/contracts";
 
 function invoke<T>(channel: string, ...args: readonly unknown[]): Promise<T> {
@@ -20,8 +22,23 @@ const bridge: DesktopBridge = {
     invoke(IPC_CHANNELS.requestLocalService, request),
   selectUploadFiles: (requestedKind: UploadKind): Promise<UploadSelectionResult> =>
     invoke(IPC_CHANNELS.selectUploadFiles, requestedKind),
-  selectChatAttachments: (): Promise<ChatAttachmentSelectionResult> =>
-    invoke(IPC_CHANNELS.selectChatAttachments),
+  selectChatAttachments: (workflowType: ChatWorkflowType): Promise<ChatAttachmentSelectionResult> =>
+    invoke(IPC_CHANNELS.selectChatAttachments, workflowType),
+  subscribeSessionEvents: (
+    sessionId: string,
+    onUpdate: (update: SessionEventStreamUpdate) => void,
+  ): (() => void) => {
+    const subscriptionId = globalThis.crypto.randomUUID();
+    const listener = (_event: Electron.IpcRendererEvent, update: SessionEventStreamUpdate) => {
+      if (update.subscriptionId === subscriptionId) onUpdate(update);
+    };
+    ipcRenderer.on(IPC_CHANNELS.sessionEvent, listener);
+    ipcRenderer.send(IPC_CHANNELS.startSessionEvents, { subscriptionId, sessionId });
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.sessionEvent, listener);
+      ipcRenderer.send(IPC_CHANNELS.stopSessionEvents, { subscriptionId });
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("workbench", bridge);

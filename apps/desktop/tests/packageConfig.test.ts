@@ -33,6 +33,8 @@ test("main-process service traffic uses the child-owned pipe", () => {
   assert.match(main, /stdio: \["pipe", "pipe", "pipe"\]/);
   assert.match(main, /sendLocalServiceRequest\("\/internal\/ready", "GET", \{ "X-Workbench-Readiness-Nonce": nonce \}\)/);
   assert.doesNotMatch(main, /managedServiceUrl|allocateLocalServicePort|process\.kill\(localService\.pid, 0\)/);
+  assert.match(main, /path = `\/sessions\/\$\{request\.sessionId\}\/messages`/);
+  assert.match(main, /path: `\/sessions\/\$\{sessionId\}\/events`/);
   assert.match(main, /localServiceStartAttempts = 3/);
 });
 
@@ -40,7 +42,8 @@ test("child-pipe requests time out and restart the managed service", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
 
   assert.match(main, /const localServiceRequestTimeoutMs = 5_000/);
-  assert.match(main, /const timeout = setTimeout\(\(\) => timeoutLocalServiceRequest\(id, child\), localServiceRequestTimeoutMs\)/);
+  assert.match(main, /const timeout = setTimeout\(\(\) => timeoutLocalServiceRequest\(id, child\), timeoutMs\)/);
+  assert.match(main, /timeoutMs = localServiceRequestTimeoutMs/);
   assert.match(
     main,
     /localServiceRequests\.delete\(id\);[\s\S]*?request\.reject\(new Error\("The managed local service request timed out\."\)\)[\s\S]*?child\.kill\(\)[\s\S]*?clearManagedLocalService\(child\)[\s\S]*?scheduleLocalServiceRestart\(\)/,

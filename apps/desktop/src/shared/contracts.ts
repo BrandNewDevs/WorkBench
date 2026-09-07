@@ -5,6 +5,9 @@ export const IPC_CHANNELS = {
   selectUploadFiles: "desktop:select-upload-files",
   selectChatAttachments: "desktop:select-chat-attachments",
   requestLocalService: "desktop:request-local-service",
+  startSessionEvents: "desktop:start-session-events",
+  stopSessionEvents: "desktop:stop-session-events",
+  sessionEvent: "desktop:session-event",
 } as const;
 
 /** The only FastAPI origin the desktop client may contact. */
@@ -27,10 +30,19 @@ export type DesktopStatus =
   | (DesktopStatusBase & { authMode: "developmentBypass"; examplesEnabled: true });
 
 export type UploadKind = "inspectionReport" | "sitePhotograph";
-export type UploadMimeType = "application/pdf" | "image/jpeg" | "image/png" | "image/webp";
+export type UploadMimeType =
+  | "application/pdf"
+  | "image/jpeg"
+  | "image/png"
+  | "text/x-python"
+  | "text/csv"
+  | "application/json"
+  | "text/plain";
 
 /** Metadata for a user-selected input. Its contents have not been inspected or verified. */
 export interface SelectedUploadFile {
+  /** Opaque Electron-owned handle; never a local filesystem path. */
+  uploadToken: string;
   name: string;
   kind: UploadKind;
   mimeType: UploadMimeType;
@@ -53,6 +65,8 @@ export type UploadSelectionResult =
 
 /** Metadata for a generic chat attachment. It does not identify the source path or expose file contents. */
 export interface SelectedChatAttachment {
+  /** Opaque Electron-owned handle; never a local filesystem path. */
+  uploadToken: string;
   name: string;
   mimeType: UploadMimeType;
   sizeBytes: number;
@@ -86,7 +100,8 @@ export type LocalServiceRequest =
   | { operation: "chatCreateSession"; request: ChatSessionCreateRequest }
   | { operation: "chatGetSession"; sessionId: string }
   | { operation: "chatListMessages"; sessionId: string }
-  | { operation: "chatAppendMessage"; sessionId: string; request: ChatMessageAppendRequest };
+  | { operation: "chatAppendMessage"; sessionId: string; request: ChatMessageAppendRequest }
+  | { operation: "workflowUpload"; sessionId: string; uploadToken: string };
 
 export interface LocalServiceResponse {
   status: number;
@@ -97,7 +112,11 @@ export interface DesktopBridge {
   getDesktopStatus(): Promise<DesktopStatus>;
   requestLocalService(request: LocalServiceRequest): Promise<LocalServiceResponse>;
   selectUploadFiles(requestedKind: UploadKind): Promise<UploadSelectionResult>;
-  selectChatAttachments(): Promise<ChatAttachmentSelectionResult>;
+  selectChatAttachments(workflowType: ChatWorkflowType): Promise<ChatAttachmentSelectionResult>;
+  subscribeSessionEvents(
+    sessionId: string,
+    onUpdate: (update: SessionEventStreamUpdate) => void,
+  ): () => void;
 }
 
 export interface EmployeeLoginRequest {
@@ -274,7 +293,57 @@ export const chatMessageAppendRequestSchema = z.strictObject({
     .refine((content) => content.trim().length > 0, { message: "content must not be blank" }),
   /** Stable per-attempt idempotency key; retries reuse it instead of duplicating. */
   clientMessageId: uuidSchema,
+  selectedUploadIds: z.array(uuidSchema).refine((ids) => ids.length === new Set(ids).size, {
+    message: "selectedUploadIds must be unique",
+  }),
 });
+
+export const workflowMessageAcceptedSchema = z.strictObject({
+  messageId: uuidSchema,
+  workflowRunId: uuidSchema,
+  status: z.literal("queued"),
+  eventsUrl: z.string().regex(/^\/sessions\/[0-9a-f-]{36}\/events$/),
+});
+
+export const workflowUploadResponseSchema = z.strictObject({
+  uploadId: uuidSchema,
+  sessionId: uuidSchema,
+  fileName: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(255),
+  sizeBytes: z.number().int().positive(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  sourceId: uuidSchema,
+  createdAt: chatTimestampSchema,
+});
+
+export const activityEventTypeSchema = z.enum([
+  "session.created",
+  "upload.accepted",
+  "message.accepted",
+  "workflow.stageChanged",
+  "workflow.progress",
+  "message.completed",
+  "approval.required",
+  "approval.resolved",
+  "artifact.created",
+  "sandbox.completed",
+  "workflow.failed",
+]);
+
+export const sessionActivityEventSchema = z.strictObject({
+  eventId: z.number().int().nonnegative(),
+  sessionId: uuidSchema,
+  workflowRunId: uuidSchema.nullable(),
+  eventType: activityEventTypeSchema,
+  occurredAt: chatTimestampSchema,
+  payload: z.record(z.string(), z.unknown()),
+});
+
+export type SessionEventStreamUpdate =
+  | { subscriptionId: string; type: "connected" }
+  | { subscriptionId: string; type: "event"; event: SessionActivityEvent }
+  | { subscriptionId: string; type: "error"; message: string }
+  | { subscriptionId: string; type: "closed" };
 
 /** The renderer may build paths only from server-issued session IDs. */
 export const chatSessionIdSchema = uuidSchema;
@@ -300,3 +369,6 @@ export type ChatMessageListResponse = z.infer<typeof chatMessageListResponseSche
 export type ChatSessionCreateRequest = z.infer<typeof chatSessionCreateRequestSchema>;
 
 export type ChatMessageAppendRequest = z.infer<typeof chatMessageAppendRequestSchema>;
+export type WorkflowMessageAccepted = z.infer<typeof workflowMessageAcceptedSchema>;
+export type WorkflowUploadResponse = z.infer<typeof workflowUploadResponseSchema>;
+export type SessionActivityEvent = z.infer<typeof sessionActivityEventSchema>;

@@ -41,6 +41,13 @@ const messagePayload = {
   clientMessageId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
 };
 
+const acceptedPayload = {
+  messageId: messagePayload.messageId,
+  workflowRunId: "3ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e92",
+  status: "queued",
+  eventsUrl: `/sessions/${sessionPayload.sessionId}/events`,
+};
+
 test("chat session and message responses parse into strict camelCase contracts", async () => {
   installBridge({
     requestLocalService: async (request) => {
@@ -154,7 +161,7 @@ test("create and append round-trip the request bodies to the local service", asy
       if (request.operation === "chatCreateSession") {
         return ok(sessionPayload);
       }
-      return ok(messagePayload);
+      return ok(acceptedPayload);
     },
   });
 
@@ -166,6 +173,7 @@ test("create and append round-trip the request bodies to the local service", asy
   const appended = await localApi.appendChatMessage(sessionPayload.sessionId, {
     content: "Find the corrosion findings.",
     clientMessageId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    selectedUploadIds: ["5ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e93"],
   });
   assert.equal(created.sessionId, sessionPayload.sessionId);
   assert.equal(appended.messageId, messagePayload.messageId);
@@ -180,6 +188,30 @@ test("create and append round-trip the request bodies to the local service", asy
   assert.deepEqual(requests[1], {
     operation: "chatAppendMessage",
     sessionId: sessionPayload.sessionId,
-    request: { content: "Find the corrosion findings.", clientMessageId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d" },
+    request: { content: "Find the corrosion findings.", clientMessageId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", selectedUploadIds: ["5ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e93"] },
   });
+});
+
+test("workflow uploads use only Electron-issued opaque selection tokens", async () => {
+  const uploadToken = "6ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e94";
+  let observed: LocalServiceRequest | undefined;
+  installBridge({
+    requestLocalService: async (request) => {
+      observed = request;
+      return ok({
+        uploadId: "7ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e95",
+        sessionId: sessionPayload.sessionId,
+        fileName: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        sha256: "a".repeat(64),
+        sourceId: "8ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e96",
+        createdAt: "2026-09-06T01:21:00Z",
+      });
+    },
+  });
+
+  const uploaded = await localApi.uploadWorkflowFile(sessionPayload.sessionId, uploadToken);
+  assert.equal(uploaded.fileName, "report.pdf");
+  assert.deepEqual(observed, { operation: "workflowUpload", sessionId: sessionPayload.sessionId, uploadToken });
 });

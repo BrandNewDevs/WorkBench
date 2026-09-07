@@ -3,19 +3,21 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { app, BrowserWindow, dialog, session, type IpcMainInvokeEvent, type Session } from "electron";
+import { app, BrowserWindow, dialog, session, type IpcMainEvent, type IpcMainInvokeEvent, type Session, type WebContents } from "electron";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { registerDesktopIpc } from "./ipc";
+import { registerDesktopIpc, resolveSelectedUploadPath } from "./ipc";
 import type {
   DesktopStatus,
   LocalServiceRequest,
   LocalServiceResponse,
 } from "../shared/contracts";
 import {
+  IPC_CHANNELS,
   chatMessageAppendRequestSchema,
   chatSessionCreateRequestSchema,
   chatSessionIdSchema,
+  sessionActivityEventSchema,
 } from "../shared/contracts";
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
@@ -52,6 +54,14 @@ interface PendingLocalServiceRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 const localServiceRequests = new Map<string, PendingLocalServiceRequest>();
+interface SessionEventSubscription {
+  sender: WebContents;
+  sessionId: string;
+  sseBuffer: string;
+  errorBody: string;
+  status?: number;
+}
+const sessionEventSubscriptions = new Map<string, SessionEventSubscription>();
 let startupLogQueue = Promise.resolve();
 
 class BoundedDiagnostic {
@@ -208,6 +218,16 @@ function clearManagedLocalService(child?: ChildProcess): void {
     request.reject(new Error("The managed local service pipe closed."));
   }
   localServiceRequests.clear();
+  for (const [subscriptionId, subscription] of sessionEventSubscriptions) {
+    if (!subscription.sender.isDestroyed()) {
+      subscription.sender.send(IPC_CHANNELS.sessionEvent, {
+        subscriptionId,
+        type: "error",
+        message: "The local workflow activity stream closed.",
+      });
+    }
+  }
+  sessionEventSubscriptions.clear();
   localServiceResponseBuffer = "";
   localService = undefined;
   localServiceVerified = false;
@@ -384,9 +404,43 @@ function localServiceLaunch(): LocalServiceLaunch {
 
 interface LocalServiceFrame {
   id: string;
-  status: number;
-  headers: readonly [string, string][];
-  body: string;
+  kind?: "response" | "streamStart" | "streamData" | "streamEnd";
+  status?: number;
+  headers?: readonly [string, string][];
+  body?: string;
+}
+
+function emitSessionEvent(subscriptionId: string, update: Record<string, unknown>): void {
+  const subscription = sessionEventSubscriptions.get(subscriptionId);
+  if (!subscription || subscription.sender.isDestroyed()) return;
+  subscription.sender.send(IPC_CHANNELS.sessionEvent, { subscriptionId, ...update });
+}
+
+function consumeSse(subscriptionId: string, chunk: string): void {
+  const subscription = sessionEventSubscriptions.get(subscriptionId);
+  if (!subscription) return;
+  subscription.sseBuffer += chunk.replaceAll("\r\n", "\n");
+  let boundary = subscription.sseBuffer.indexOf("\n\n");
+  while (boundary >= 0) {
+    const record = subscription.sseBuffer.slice(0, boundary);
+    subscription.sseBuffer = subscription.sseBuffer.slice(boundary + 2);
+    const data = record
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (data) {
+      try {
+        const parsed = sessionActivityEventSchema.safeParse(JSON.parse(data));
+        if (parsed.success && parsed.data.sessionId === subscription.sessionId) {
+          emitSessionEvent(subscriptionId, { type: "event", event: parsed.data });
+        }
+      } catch {
+        // Ignore malformed records; only strict backend activity reaches the renderer.
+      }
+    }
+    boundary = subscription.sseBuffer.indexOf("\n\n");
+  }
 }
 
 function receiveLocalServiceFrame(value: string): void {
@@ -396,14 +450,38 @@ function receiveLocalServiceFrame(value: string): void {
   } catch {
     return;
   }
-  if (!frame || typeof frame.id !== "string" || !Number.isInteger(frame.status) ||
-    !Array.isArray(frame.headers) || typeof frame.body !== "string") return;
+  if (!frame || typeof frame.id !== "string") return;
+  const subscription = sessionEventSubscriptions.get(frame.id);
+  if (subscription && frame.kind?.startsWith("stream")) {
+    if (frame.kind === "streamStart" && Number.isInteger(frame.status)) {
+      subscription.status = frame.status;
+      if ((frame.status as number) >= 200 && (frame.status as number) < 300) {
+        emitSessionEvent(frame.id, { type: "connected" });
+      }
+    } else if (frame.kind === "streamData" && typeof frame.body === "string") {
+      const chunk = Buffer.from(frame.body, "base64").toString("utf8");
+      if (subscription.status !== undefined && subscription.status >= 200 && subscription.status < 300) {
+        consumeSse(frame.id, chunk);
+      } else {
+        subscription.errorBody += chunk;
+      }
+    } else if (frame.kind === "streamEnd") {
+      if (subscription.status === undefined || subscription.status < 200 || subscription.status >= 300) {
+        emitSessionEvent(frame.id, { type: "error", message: `FastAPI activity stream returned HTTP ${subscription.status ?? "unknown"}.` });
+      } else {
+        emitSessionEvent(frame.id, { type: "closed" });
+      }
+      sessionEventSubscriptions.delete(frame.id);
+    }
+    return;
+  }
+  if (!Number.isInteger(frame.status) || !Array.isArray(frame.headers) || typeof frame.body !== "string") return;
   const request = localServiceRequests.get(frame.id);
   if (!request) return;
   localServiceRequests.delete(frame.id);
   clearTimeout(request.timeout);
   try {
-    request.resolve({ status: frame.status, headers: frame.headers, body: Buffer.from(frame.body, "base64").toString("utf8") });
+    request.resolve({ status: frame.status as number, headers: frame.headers, body: Buffer.from(frame.body, "base64").toString("utf8") });
   } catch {
     request.reject(new Error("The managed local service sent an invalid response."));
   }
@@ -442,14 +520,16 @@ async function sendLocalServiceRequest(
   method: "GET" | "POST",
   headers: Record<string, string>,
   body?: string,
+  filePath?: string,
+  timeoutMs = localServiceRequestTimeoutMs,
 ): Promise<LocalServiceResponse & { headers: readonly [string, string][] }> {
   const child = localService;
   if (!child || !managedLocalServiceIsRunning()) throw new Error("The managed local service is no longer running.");
   const id = randomUUID();
-  const frame = JSON.stringify({ id, path, method, headers, body: Buffer.from(body ?? "").toString("base64") });
+  const frame = JSON.stringify({ id, path, method, headers, body: Buffer.from(body ?? "").toString("base64"), ...(filePath ? { filePath } : {}) });
   if (Buffer.byteLength(frame) > localServiceFrameLimitBytes) throw new Error("The local service request is too large.");
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => timeoutLocalServiceRequest(id, child), localServiceRequestTimeoutMs);
+    const timeout = setTimeout(() => timeoutLocalServiceRequest(id, child), timeoutMs);
     localServiceRequests.set(id, { resolve, reject, timeout });
     child.stdin?.write(`${frame}\n`, (error) => {
       if (!error) return;
@@ -460,6 +540,35 @@ async function sendLocalServiceRequest(
       reject(error);
     });
   });
+}
+
+async function startSessionEvents(subscriptionId: string, sessionId: string, event: IpcMainEvent): Promise<void> {
+  if (!chatSessionIdSchema.safeParse(sessionId).success || !chatSessionIdSchema.safeParse(subscriptionId).success) return;
+  if (!localServiceCapability || !managedLocalServiceIsRunning()) return;
+  const cookies = await getManagedServiceSession().cookies.get({ url: managedServiceCookieUrl });
+  const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+  sessionEventSubscriptions.set(subscriptionId, { sender: event.sender, sessionId, sseBuffer: "", errorBody: "" });
+  const frame = JSON.stringify({
+    id: subscriptionId,
+    path: `/sessions/${sessionId}/events`,
+    method: "GET",
+    stream: true,
+    headers: {
+      Accept: "text/event-stream",
+      Origin: rendererOrigin(),
+      "X-Workbench-Capability": localServiceCapability,
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    },
+    body: "",
+  });
+  localService?.stdin?.write(`${frame}\n`);
+}
+
+function stopSessionEvents(subscriptionId: string, event: IpcMainEvent): void {
+  const subscription = sessionEventSubscriptions.get(subscriptionId);
+  if (!subscription || subscription.sender !== event.sender) return;
+  sessionEventSubscriptions.delete(subscriptionId);
+  localService?.stdin?.write(`${JSON.stringify({ cancel: subscriptionId })}\n`);
 }
 
 async function verifyLocalService(child: ChildProcess): Promise<void> {
@@ -599,6 +708,7 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
   }
   let path: string;
   let init: RequestInit;
+  let filePath: string | undefined;
   switch (request.operation) {
     case "health":
       path = "/health";
@@ -627,6 +737,16 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
       path = "/chat/sessions";
       init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
       break;
+    case "workflowUpload": {
+      if (!chatSessionIdSchema.safeParse(request.sessionId).success || !chatSessionIdSchema.safeParse(request.uploadToken).success) {
+        throw new Error("The local service request is not allowed.");
+      }
+      filePath = resolveSelectedUploadPath(request.uploadToken);
+      if (!filePath) throw new Error("The selected local file is no longer available.");
+      path = `/sessions/${request.sessionId}/uploads`;
+      init = { method: "POST" };
+      break;
+    }
     case "chatGetSession":
     case "chatListMessages":
     case "chatAppendMessage": {
@@ -637,7 +757,7 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
         path = `/chat/sessions/${request.sessionId}`;
         init = { method: "GET" };
       } else if (request.operation === "chatListMessages") {
-        path = `/chat/sessions/${request.sessionId}/messages`;
+        path = `/sessions/${request.sessionId}/messages`;
         init = { method: "GET" };
       } else {
         if (!chatMessageAppendRequestSchema.safeParse(request.request).success) {
@@ -661,7 +781,7 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
     "X-Workbench-Capability": localServiceCapability,
     ...(cookieHeader ? { Cookie: cookieHeader } : {}),
     ...(init.headers as Record<string, string> | undefined),
-  }, typeof init.body === "string" ? init.body : undefined);
+  }, typeof init.body === "string" ? init.body : undefined, filePath, filePath ? 120_000 : localServiceRequestTimeoutMs);
   for (const [name, value] of response.headers) {
     if (name.toLowerCase() !== "set-cookie") continue;
     const [pair, ...attributes] = value.split(";").map((part) => part.trim());
@@ -698,7 +818,7 @@ function getDesktopStatus(): DesktopStatus {
     : { ...baseStatus, authMode: "backend", examplesEnabled: false };
 }
 
-function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
+function isTrustedIpcSender(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
   return (
     event.sender === mainWindow?.webContents &&
     event.senderFrame === event.sender.mainFrame &&
@@ -770,7 +890,18 @@ async function startApplication(): Promise<void> {
   });
   await startBuiltRendererServer();
   const signingSecret = await provisionSigningSecret();
-  registerDesktopIpc({ getDesktopStatus, isTrustedSender: isTrustedIpcSender, requestLocalService });
+  registerDesktopIpc({
+    getDesktopStatus,
+    isTrustedSender: isTrustedIpcSender,
+    requestLocalService,
+    startSessionEvents: (subscriptionId, sessionId, event) => {
+      void startSessionEvents(subscriptionId, sessionId, event).catch(() => {
+        emitSessionEvent(subscriptionId, { type: "error", message: "The local workflow activity stream could not start." });
+        sessionEventSubscriptions.delete(subscriptionId);
+      });
+    },
+    stopSessionEvents,
+  });
   await startLocalService(signingSecret);
   await createMainWindow();
   await writeStartupLog("WorkBench startup complete");

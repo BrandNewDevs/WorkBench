@@ -6,14 +6,17 @@ import type {
   ChatWorkflowType,
   SelectedChatAttachment,
   SelectedUploadFile,
+  SessionActivityEvent,
   UploadKind,
 } from "../../shared/contracts";
+import { chatStageSchema } from "../../shared/contracts.ts";
 
 export type ChatThreadId = string & { readonly __chatThreadId: unique symbol };
 export type ChatThreadSource = "example" | "local";
 export type ChatSessionsState = "idle" | "loading" | "ready" | "error";
 export type ChatMessagesState = "idle" | "loading" | "ready" | "error";
 export type ChatSendState = "idle" | "sending" | "error";
+export type ChatWorkflowState = "queued" | "processing" | "completed" | "failed" | "awaitingApproval";
 
 interface ChatThreadFields {
   id: ChatThreadId;
@@ -32,6 +35,10 @@ interface ChatThreadFields {
   messagesState: ChatMessagesState;
   sendState: ChatSendState;
   sendError?: string;
+  workflowState?: ChatWorkflowState;
+  activityEvents: readonly SessionActivityEvent[];
+  uploadedIdsByToken: Readonly<Record<string, string>>;
+  streamError?: string;
   /** Client idempotency key of an unresolved append; retries reuse it. */
   pendingClientMessageId?: string;
   /** Client idempotency key of an unresolved session create; retries reuse it. */
@@ -72,6 +79,10 @@ export type ChatThreadAction =
   | { type: "messagesFailed"; threadId: ChatThreadId }
   | { type: "sessionBound"; threadId: ChatThreadId; session: ChatSession }
   | { type: "messageAppended"; threadId: ChatThreadId; message: ChatMessage; now: number }
+  | { type: "uploadRegistered"; threadId: ChatThreadId; uploadToken: string; uploadId: string }
+  | { type: "workflowQueued"; threadId: ChatThreadId }
+  | { type: "workflowEvent"; threadId: ChatThreadId; event: SessionActivityEvent }
+  | { type: "streamFailed"; threadId: ChatThreadId; message: string }
   | { type: "sessionSynced"; threadId: ChatThreadId; session: ChatSession }
   | { type: "sendStarted"; threadId: ChatThreadId; clientMessageId: string; clientSessionId?: string; draft: string }
   | { type: "sendFailed"; threadId: ChatThreadId; message: string; definitive: boolean }
@@ -106,6 +117,8 @@ export function chatThreadFromSession(session: ChatSession): LocalChatThread {
     messages: [],
     messagesState: "idle",
     sendState: "idle",
+    activityEvents: [],
+    uploadedIdsByToken: {},
     seenInSessions: true,
     createdAt: Date.parse(session.createdAt),
     updatedAt: Date.parse(session.updatedAt),
@@ -194,6 +207,10 @@ export function mergeBackendThread(existing: ChatThread, backend: LocalChatThrea
     messagesState: existing.messagesState,
     sendState: existing.sendState,
     sendError: existing.sendError,
+    workflowState: existing.workflowState,
+    activityEvents: existing.activityEvents,
+    uploadedIdsByToken: existing.uploadedIdsByToken,
+    streamError: existing.streamError,
     pendingClientMessageId: existing.pendingClientMessageId,
     pendingClientSessionId: existing.pendingClientSessionId,
     pendingDraft: existing.pendingDraft,
@@ -366,6 +383,53 @@ export function chatThreadReducer(state: ChatThreadState, action: ChatThreadActi
         pendingDraft: undefined,
         updatedAt: action.now,
       }));
+    case "uploadRegistered":
+      return updateThread(state, action.threadId, (thread) => ({
+        ...thread,
+        uploadedIdsByToken: { ...thread.uploadedIdsByToken, [action.uploadToken]: action.uploadId },
+      }));
+    case "workflowQueued":
+      return updateThread(state, action.threadId, (thread) => ({
+        ...thread,
+        workflowState: "queued",
+        streamError: undefined,
+      }));
+    case "workflowEvent":
+      return updateThread(state, action.threadId, (thread) => {
+        if (thread.activityEvents.some((event) => event.eventId === action.event.eventId)) return thread;
+        let workflowState = thread.workflowState;
+        let stage = thread.stage;
+        let status = thread.status;
+        if (action.event.eventType === "message.accepted") workflowState = "queued";
+        if (action.event.eventType === "workflow.progress") workflowState = "processing";
+        if (action.event.eventType === "message.completed") workflowState = "completed";
+        if (action.event.eventType === "approval.required") workflowState = "awaitingApproval";
+        if (action.event.eventType === "workflow.failed") {
+          workflowState = "failed";
+          stage = "failed";
+          status = "failed";
+        }
+        if (action.event.eventType === "workflow.stageChanged") {
+          const parsedStage = chatStageSchema.safeParse(action.event.payload.stage);
+          if (parsedStage.success) stage = parsedStage.data;
+          const runStatus = action.event.payload.status;
+          workflowState = runStatus === "queued" ? "queued" : runStatus === "waitingForApproval" ? "awaitingApproval" : runStatus === "completed" ? "completed" : runStatus === "failed" ? "failed" : "processing";
+          if (runStatus === "completed") status = "completed";
+          if (runStatus === "failed") status = "failed";
+          if (runStatus === "approvalRejected") status = "approvalRejected";
+        }
+        return {
+          ...thread,
+          activityEvents: [...thread.activityEvents, action.event],
+          workflowState,
+          stage,
+          status,
+          streamError: undefined,
+          updatedAt: Date.parse(action.event.occurredAt),
+        };
+      });
+    case "streamFailed":
+      return updateThread(state, action.threadId, (thread) => ({ ...thread, streamError: action.message }));
     case "sessionSynced":
       return updateThread(state, action.threadId, (thread) => ({
         ...thread,
@@ -440,6 +504,8 @@ function createLocalChatThread(threadId: ChatThreadId, now: number): LocalChatTh
     messages: [],
     messagesState: "idle",
     sendState: "idle",
+    activityEvents: [],
+    uploadedIdsByToken: {},
     createdAt: now,
     updatedAt: now,
   };
@@ -457,6 +523,8 @@ function createExampleChatThread(now: number): ExampleChatThread {
     messages: [],
     messagesState: "idle",
     sendState: "idle",
+    activityEvents: [],
+    uploadedIdsByToken: {},
     createdAt: now,
     updatedAt: now,
   };

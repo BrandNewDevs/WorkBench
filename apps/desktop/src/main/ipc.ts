@@ -1,9 +1,11 @@
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, extname } from "node:path";
-import { dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogReturnValue } from "electron";
+import { dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type OpenDialogReturnValue } from "electron";
 import {
   IPC_CHANNELS,
   type ChatAttachmentSelectionResult,
+  type ChatWorkflowType,
   type DesktopStatus,
   type LocalServiceRequest,
   type LocalServiceResponse,
@@ -17,11 +19,24 @@ const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_CHAT_ATTACHMENT_COUNT = 10;
 const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 250 * 1024 * 1024;
 let uploadDialogActive = false;
+const selectedUploadPaths = new Map<string, string>();
+
+export function resolveSelectedUploadPath(uploadToken: string): string | undefined {
+  return selectedUploadPaths.get(uploadToken);
+}
+
+function registerSelectedPath(filePath: string): string {
+  const uploadToken = randomUUID();
+  selectedUploadPaths.set(uploadToken, filePath);
+  return uploadToken;
+}
 
 interface DesktopIpcDependencies {
   getDesktopStatus: () => DesktopStatus;
-  isTrustedSender: (event: IpcMainInvokeEvent) => boolean;
+  isTrustedSender: (event: IpcMainInvokeEvent | IpcMainEvent) => boolean;
   requestLocalService: (request: LocalServiceRequest) => Promise<LocalServiceResponse>;
+  startSessionEvents: (subscriptionId: string, sessionId: string, event: IpcMainEvent) => void;
+  stopSessionEvents: (subscriptionId: string, event: IpcMainEvent) => void;
 }
 
 interface UploadDialogConfig {
@@ -41,26 +56,36 @@ const uploadDialogConfigs: Readonly<Record<UploadKind, UploadDialogConfig>> = {
   sitePhotograph: {
     title: "Select site photograph",
     filterName: "Site photographs",
-    extensions: ["jpg", "jpeg", "png", "webp"],
+    extensions: ["jpg", "jpeg", "png"],
     mimeTypes: {
       ".jpg": "image/jpeg",
       ".jpeg": "image/jpeg",
       ".png": "image/png",
-      ".webp": "image/webp",
     },
   },
 };
 
-const chatAttachmentConfig: UploadDialogConfig = {
+const inspectionAttachmentConfig: UploadDialogConfig = {
   title: "Attach files",
   filterName: "PDF documents and inspection images",
-  extensions: ["pdf", "jpg", "jpeg", "png", "webp"],
+  extensions: ["pdf", "jpg", "jpeg", "png"],
   mimeTypes: {
     ".pdf": "application/pdf",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
-    ".webp": "image/webp",
+  },
+};
+
+const codeAttachmentConfig: UploadDialogConfig = {
+  title: "Attach source files",
+  filterName: "Python, CSV, JSON, and text files",
+  extensions: ["py", "csv", "json", "txt"],
+  mimeTypes: {
+    ".py": "text/x-python",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".txt": "text/plain",
   },
 };
 
@@ -122,14 +147,14 @@ async function selectUploadFile(requestedKind: unknown): Promise<UploadSelection
 
     return {
       kind: "selected",
-      file: { name: basename(filePath), kind: requestedKind, mimeType, sizeBytes: stats.size },
+      file: { uploadToken: registerSelectedPath(filePath), name: basename(filePath), kind: requestedKind, mimeType, sizeBytes: stats.size },
     };
   } finally {
     uploadDialogActive = false;
   }
 }
 
-async function selectChatAttachments(): Promise<ChatAttachmentSelectionResult> {
+async function selectChatAttachments(workflowType: ChatWorkflowType): Promise<ChatAttachmentSelectionResult> {
   if (uploadDialogActive) {
     return { kind: "error", code: "dialogInProgress" };
   }
@@ -138,10 +163,11 @@ async function selectChatAttachments(): Promise<ChatAttachmentSelectionResult> {
   try {
     let result: OpenDialogReturnValue;
     try {
+      const config = workflowType === "codeRepair" ? codeAttachmentConfig : inspectionAttachmentConfig;
       result = await dialog.showOpenDialog({
-        title: chatAttachmentConfig.title,
+        title: config.title,
         properties: ["openFile", "multiSelections"],
-        filters: [{ name: chatAttachmentConfig.filterName, extensions: [...chatAttachmentConfig.extensions] }],
+        filters: [{ name: config.filterName, extensions: [...config.extensions] }],
       });
     } catch {
       return { kind: "error", code: "dialogFailed" };
@@ -157,8 +183,9 @@ async function selectChatAttachments(): Promise<ChatAttachmentSelectionResult> {
     const selectedPaths = new Set<string>();
     const files: SelectedChatAttachment[] = [];
     let totalBytes = 0;
+    const config = workflowType === "codeRepair" ? codeAttachmentConfig : inspectionAttachmentConfig;
     for (const filePath of result.filePaths) {
-      const mimeType = mimeTypeFor(filePath, chatAttachmentConfig);
+      const mimeType = mimeTypeFor(filePath, config);
       if (!mimeType) {
         return { kind: "error", code: "invalidFileType" };
       }
@@ -185,7 +212,7 @@ async function selectChatAttachments(): Promise<ChatAttachmentSelectionResult> {
 
       selectedPaths.add(resolvedPath);
       totalBytes += stats.size;
-      files.push({ name: basename(filePath), mimeType, sizeBytes: stats.size });
+      files.push({ uploadToken: registerSelectedPath(resolvedPath), name: basename(filePath), mimeType, sizeBytes: stats.size });
     }
 
     return files.length > 0 ? { kind: "selected", files } : { kind: "cancelled" };
@@ -195,6 +222,12 @@ async function selectChatAttachments(): Promise<ChatAttachmentSelectionResult> {
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent, dependencies: DesktopIpcDependencies): void {
+  if (!dependencies.isTrustedSender(event)) {
+    throw new Error("This IPC request did not come from the WorkBench window");
+  }
+}
+
+function assertTrustedEventSender(event: IpcMainEvent, dependencies: DesktopIpcDependencies): void {
   if (!dependencies.isTrustedSender(event)) {
     throw new Error("This IPC request did not come from the WorkBench window");
   }
@@ -213,8 +246,21 @@ export function registerDesktopIpc(dependencies: DesktopIpcDependencies): void {
     assertTrustedSender(event, dependencies);
     return selectUploadFile(requestedKind);
   });
-  ipcMain.handle(IPC_CHANNELS.selectChatAttachments, (event) => {
+  ipcMain.handle(IPC_CHANNELS.selectChatAttachments, (event, workflowType: ChatWorkflowType) => {
     assertTrustedSender(event, dependencies);
-    return selectChatAttachments();
+    if (workflowType !== "inspectionAnalysis" && workflowType !== "codeRepair") {
+      return { kind: "error", code: "invalidFileType" } satisfies ChatAttachmentSelectionResult;
+    }
+    return selectChatAttachments(workflowType);
+  });
+  ipcMain.on(IPC_CHANNELS.startSessionEvents, (event, request: { subscriptionId?: unknown; sessionId?: unknown }) => {
+    assertTrustedEventSender(event, dependencies);
+    if (typeof request?.subscriptionId !== "string" || typeof request.sessionId !== "string") return;
+    dependencies.startSessionEvents(request.subscriptionId, request.sessionId, event);
+  });
+  ipcMain.on(IPC_CHANNELS.stopSessionEvents, (event, request: { subscriptionId?: unknown }) => {
+    assertTrustedEventSender(event, dependencies);
+    if (typeof request?.subscriptionId !== "string") return;
+    dependencies.stopSessionEvents(request.subscriptionId, event);
   });
 }

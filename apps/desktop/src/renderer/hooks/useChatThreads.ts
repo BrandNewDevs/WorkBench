@@ -60,6 +60,7 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
   // two invocations in the same tick from minting two idempotency keys. This
   // synchronous gate is authoritative for one send body per thread.
   const inFlightSendThreadsRef = useRef(new Set<ChatThreadId>());
+  const eventSubscriptionsRef = useRef(new Map<string, () => void>());
 
   const loadSessions = useCallback(() => {
     const requestSequence = ++sessionsSequenceRef.current;
@@ -113,6 +114,49 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
       loadThreadMessages(activeThread.id);
     }
   }, [activeThread, connected, loadThreadMessages]);
+
+  useEffect(() => {
+    if (!connected) {
+      for (const unsubscribe of eventSubscriptionsRef.current.values()) unsubscribe();
+      eventSubscriptionsRef.current.clear();
+      return;
+    }
+    const bound = new Map(
+      state.threads.flatMap((thread) => thread.source === "local" && thread.sessionId && thread.status === "active" ? [[thread.sessionId, thread.id] as const] : []),
+    );
+    for (const [sessionId, unsubscribe] of eventSubscriptionsRef.current) {
+      if (!bound.has(sessionId)) {
+        unsubscribe();
+        eventSubscriptionsRef.current.delete(sessionId);
+      }
+    }
+    for (const [sessionId, threadId] of bound) {
+      if (eventSubscriptionsRef.current.has(sessionId)) continue;
+      const unsubscribe = window.workbench.subscribeSessionEvents(sessionId, (update) => {
+        if (update.type === "event") {
+          dispatch({ type: "workflowEvent", threadId, event: update.event });
+          if (update.event.eventType === "message.completed" || update.event.eventType === "workflow.failed") {
+            void localApi.listChatMessages(sessionId, apiBaseUrl).then(
+              (response) => dispatch({ type: "messagesLoaded", threadId, messages: response.messages }),
+              () => undefined,
+            );
+            void localApi.getChatSession(sessionId, apiBaseUrl).then(
+              (session) => dispatch({ type: "sessionSynced", threadId, session }),
+              () => undefined,
+            );
+          }
+        } else if (update.type === "error") {
+          dispatch({ type: "streamFailed", threadId, message: update.message });
+        }
+      });
+      eventSubscriptionsRef.current.set(sessionId, unsubscribe);
+    }
+  }, [apiBaseUrl, connected, state.threads]);
+
+  useEffect(() => () => {
+    for (const unsubscribe of eventSubscriptionsRef.current.values()) unsubscribe();
+    eventSubscriptionsRef.current.clear();
+  }, []);
 
   const selectChat = useCallback(
     (threadId: ChatThreadId) => {
@@ -192,21 +236,39 @@ export function useChatThreads({ apiBaseUrl, connected, examplesEnabled }: ChatT
             dispatch({ type: "sessionBound", threadId, session: created });
             sessionId = created.sessionId;
           }
-          const message = await localApi.appendChatMessage(
+          const selectedFiles = [
+            ...Object.values(thread.inspectionFiles).filter((file): file is SelectedUploadFile => file !== undefined),
+            ...thread.attachments,
+          ];
+          const uploadedIdsByToken = { ...thread.uploadedIdsByToken };
+          for (const file of selectedFiles) {
+            if (uploadedIdsByToken[file.uploadToken]) continue;
+            const uploaded = await localApi.uploadWorkflowFile(sessionId, file.uploadToken);
+            uploadedIdsByToken[file.uploadToken] = uploaded.uploadId;
+            dispatch({ type: "uploadRegistered", threadId, uploadToken: file.uploadToken, uploadId: uploaded.uploadId });
+          }
+          const accepted = await localApi.appendChatMessage(
             sessionId,
-            { content, clientMessageId },
+            { content, clientMessageId, selectedUploadIds: selectedFiles.map((file) => uploadedIdsByToken[file.uploadToken]!) },
             apiBaseUrl,
           );
           if (sendSequencesRef.current.get(threadId) !== requestSequence) return;
-          dispatch({ type: "messageAppended", threadId, message, now: Date.now() });
+          dispatch({
+            type: "messageAppended",
+            threadId,
+            message: {
+              messageId: accepted.messageId,
+              sessionId,
+              authorUserId: null,
+              role: "user",
+              content,
+              createdAt: new Date().toISOString(),
+              clientMessageId,
+            },
+            now: Date.now(),
+          });
+          dispatch({ type: "workflowQueued", threadId });
           dispatch({ type: "draftClearedIfUnchanged", threadId, draft: submittedDraft, now: Date.now() });
-          try {
-            const refreshed = await localApi.getChatSession(sessionId, apiBaseUrl);
-            if (sendSequencesRef.current.get(threadId) !== requestSequence) return;
-            dispatch({ type: "sessionSynced", threadId, session: refreshed });
-          } catch {
-            // The message is stored; a failed stage refresh is visible state lag, not a lost message.
-          }
         } catch (error) {
           if (sendSequencesRef.current.get(threadId) !== requestSequence) return;
           // Release the keys only when the outcome is certain: FastAPI

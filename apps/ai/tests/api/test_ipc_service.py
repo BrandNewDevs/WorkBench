@@ -12,7 +12,7 @@ import pytest
 
 from app.auth.provisioning import provision_initial_employee
 from app.config import ApplicationSettings
-from app.ipc_service import _dispatch
+from app.ipc_service import _dispatch, _dispatch_stream
 from app.main import create_app
 
 
@@ -123,3 +123,54 @@ async def test_service_exit_cannot_be_rebound_into_the_inherited_pipe(tmp_path: 
             await child.stdin.drain()
     finally:
         rebound.close()
+
+
+async def test_stream_dispatch_emits_incremental_frames_and_cancels() -> None:
+    emitted: list[dict[str, object]] = []
+    disconnected = asyncio.Event()
+
+    async def application(scope: dict[str, object], receive: object, send: object) -> None:
+        del scope
+        receive_call = receive  # Keep the small ASGI fixture explicit and typed locally.
+        send_call = send
+        assert callable(receive_call) and callable(send_call)
+        await receive_call()
+        await send_call({"type": "http.response.start", "status": 200, "headers": []})
+        await send_call(
+            {
+                "type": "http.response.body",
+                "body": b'id: 1\nevent: session.created\ndata: {"eventId":1}\n\n',
+                "more_body": True,
+            }
+        )
+        await receive_call()
+
+    async def emit(frame: dict[str, object]) -> None:
+        emitted.append(frame)
+
+    task = asyncio.create_task(
+        _dispatch_stream(
+            application,
+            {
+                "id": "stream-1",
+                "method": "GET",
+                "path": "/sessions/00000000-0000-4000-8000-000000000000/events",
+                "headers": {},
+                "body": "",
+            },
+            emit,
+            disconnected,
+        )
+    )
+    for _ in range(20):
+        if len(emitted) == 2:
+            break
+        await asyncio.sleep(0)
+
+    assert emitted[0] == {"id": "stream-1", "kind": "streamStart", "status": 200}
+    assert emitted[1]["kind"] == "streamData"
+    assert base64.b64decode(str(emitted[1]["body"])).startswith(b"id: 1\n")
+    assert not task.done()
+
+    disconnected.set()
+    await asyncio.wait_for(task, timeout=1)

@@ -1,5 +1,4 @@
 import type {
-  ChatMessage,
   ChatMessageAppendRequest,
   ChatMessageListResponse,
   ChatSession,
@@ -13,13 +12,16 @@ import type {
   HealthResponse,
   OutboundStatus,
   LocalServiceRequest,
+  WorkflowMessageAccepted,
+  WorkflowUploadResponse,
 } from "../../shared/contracts";
 import {
   chatErrorCodeSchema,
   chatMessageListResponseSchema,
-  chatMessageSchema,
   chatSessionListResponseSchema,
   chatSessionSchema,
+  workflowMessageAcceptedSchema,
+  workflowUploadResponseSchema,
 } from "../../shared/contracts.ts";
 import type { ZodType } from "zod";
 
@@ -170,14 +172,14 @@ function parseHealthResponse(value: unknown): HealthResponse {
 }
 
 export class LocalApiClient {
-  private async requestJson(request: LocalServiceRequest, operation: string): Promise<unknown> {
+  private async requestJson(request: LocalServiceRequest, operation: string, timeoutMs = requestTimeoutMs): Promise<unknown> {
     let timeout: number | undefined;
     try {
       const pending = window.workbench.requestLocalService(request);
       const response = await Promise.race([
         pending,
         new Promise<never>((_, reject) => {
-          timeout = window.setTimeout(() => reject(new LocalApiError(`FastAPI ${operation} timed out.`, "timeout")), requestTimeoutMs);
+          timeout = window.setTimeout(() => reject(new LocalApiError(`FastAPI ${operation} timed out.`, "timeout")), timeoutMs);
         }),
       ]);
       if (response.status === 401 || response.status === 403) throw new LocalApiError(`The local employee ${operation} was not authorized.`, "unauthorized", response.status);
@@ -260,12 +262,20 @@ export class LocalApiClient {
     sessionId: string,
     request: ChatMessageAppendRequest,
     apiBaseUrl?: string,
-  ): Promise<ChatMessage> {
+  ): Promise<WorkflowMessageAccepted> {
     void apiBaseUrl;
     return parseChat(
-      chatMessageSchema,
+      workflowMessageAcceptedSchema,
       await this.requestJson({ operation: "chatAppendMessage", sessionId, request }, "chat message"),
-      "chat message",
+      "workflow message acknowledgement",
+    );
+  }
+
+  async uploadWorkflowFile(sessionId: string, uploadToken: string): Promise<WorkflowUploadResponse> {
+    return parseChat(
+      workflowUploadResponseSchema,
+      await this.requestJson({ operation: "workflowUpload", sessionId, uploadToken }, "workflow upload", 120_000),
+      "workflow upload",
     );
   }
 }
