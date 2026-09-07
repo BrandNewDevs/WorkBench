@@ -2,9 +2,7 @@ import BackToHome from "../components/layout/BackToHome";
 import AboutHero from "../components/about/AboutHero";
 import VisionMission from "../components/about/VisionMission";
 import CorePrinciples from "../components/about/CorePrinciples";
-import TechStack from "../components/about/TechStack";
-import ComparisonPanel from "../components/about/ComparisonPanel";
-import TeamGrid from "../components/about/TeamGrid";
+import Team from "../components/about/Team";
 
 export default function About() {
   return (
@@ -14,9 +12,7 @@ export default function About() {
         <AboutHero />
         <VisionMission />
         <CorePrinciples />
-        <TeamGrid />
-        <ComparisonPanel />
-        <TechStack />
+        <Team />
       </div>
     </section>
   );

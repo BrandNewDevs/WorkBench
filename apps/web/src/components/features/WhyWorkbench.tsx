@@ -1,5 +1,4 @@
 import { Check, X } from "lucide-react";
-import AboutSection from "./AboutSection";
 
 const good = [
   "100% on-premise data",
@@ -23,9 +22,13 @@ const bad = [
   "Partial external audit",
 ];
 
-export default function ComparisonPanel() {
+export default function WhyWorkbench() {
   return (
-    <AboutSection title="Why WorkBench?">
+    <div className="why-workbench">
+      <div className="why-workbench-header">
+        <h2 className="section-title why-workbench-title">Why WorkBench?</h2>
+        <p className="why-workbench-desc">The difference comes down to where your data lives and who can see it.</p>
+      </div>
       <div className="comparison-grid">
         <div className="comparison-col comparison-col--good">
           <span className="comparison-col-header">WorkBench</span>
@@ -50,6 +53,6 @@ export default function ComparisonPanel() {
           </ul>
         </div>
       </div>
-    </AboutSection>
+    </div>
   );
 }

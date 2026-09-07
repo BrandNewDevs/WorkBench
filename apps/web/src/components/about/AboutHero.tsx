@@ -1,10 +1,26 @@
-import { Zap } from "lucide-react";
+import { ShieldCheck, Lock, FileSearch, ClipboardCheck } from "lucide-react";
 
-const stats = [
-  { num: "0", label: "External API Calls" },
-  { num: "100%", label: "On-Premise" },
-  { num: "1", label: "Workstation" },
-  { num: "<2s", label: "Local Inference" },
+const takeaways = [
+  {
+    icon: ShieldCheck,
+    title: "Sovereign by design",
+    desc: "Zero external calls, no telemetry.",
+  },
+  {
+    icon: Lock,
+    title: "Confidential by default",
+    desc: "Your data never leaves the machine.",
+  },
+  {
+    icon: FileSearch,
+    title: "Answers you can verify",
+    desc: "Every answer cites its local source.",
+  },
+  {
+    icon: ClipboardCheck,
+    title: "Asks before it acts",
+    desc: "Prompts before it runs, saves, or exports.",
+  },
 ];
 
 export default function AboutHero() {
@@ -14,18 +30,23 @@ export default function AboutHero() {
       <p className="about-hero-desc">
         A sovereign, local-first AI workbench for confidential industrial and government work.
       </p>
-      <div className="about-stats">
-        <div className="about-stats-header">
-          <Zap size={14} aria-hidden="true" />
+      <div className="takeaways">
+        <div className="takeaways-header">
+          <ShieldCheck size={14} aria-hidden="true" />
           <span>Key Takeaways</span>
         </div>
-        <div className="about-stats-row">
-          {stats.map(({ num, label }, i) => (
-            <div key={label} className="about-stat-group">
-              {i > 0 && <span className="about-stat-divider" aria-hidden="true" />}
-              <div className="about-stat">
-                <span className="about-stat-num">{num}</span>
-                <span className="about-stat-label">{label}</span>
+        <div className="takeaways-row">
+          {takeaways.map(({ icon: Icon, title, desc }, i) => (
+            <div key={title} className="takeaway-group">
+              {i > 0 && <span className="takeaway-divider" aria-hidden="true" />}
+              <div className="takeaway">
+                <div className="takeaway-icon" aria-hidden="true">
+                  <Icon size={16} />
+                </div>
+                <div className="takeaway-body">
+                  <span className="takeaway-title">{title}</span>
+                  <p className="takeaway-desc">{desc}</p>
+                </div>
               </div>
             </div>
           ))}
