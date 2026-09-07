@@ -1685,6 +1685,29 @@ class SQLiteWorkflowStore:
                 "session already has different nonterminal work"
             ) from error
 
+    async def get_admission(
+        self, *, workflow_run_id: UUID
+    ) -> WorkflowRunAdmission | None:
+        """Restore one committed admission with its original user message."""
+
+        async with self._database.open() as connection:
+            row = await (
+                await connection.execute(
+                    """SELECT session_id, client_message_id, semantic_hash
+                    FROM workflow_run_admissions WHERE workflow_run_id = ?""",
+                    (str(workflow_run_id),),
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            return await self._load_admission(
+                connection,
+                session_id=UUID(row["session_id"]),
+                client_message_id=UUID(row["client_message_id"]),
+                semantic_hash=row["semantic_hash"],
+                status=WorkflowAdmissionStatus.CREATED,
+            )
+
     @staticmethod
     def _validate_admission_request(request: WorkflowRunAdmissionRequest) -> None:
         run, message = request.run, request.message
@@ -2750,40 +2773,6 @@ class SQLiteWorkflowStore:
                   AND execution_lease_expires_at <= ?
                 RETURNING workflow_run_id""",
                 (interrupted_at.isoformat(), stale_before.isoformat()),
-            )
-            identifiers = [row["workflow_run_id"] for row in await changed.fetchall()]
-            if not identifiers:
-                return []
-            placeholders = ",".join("?" for _ in identifiers)
-            rows = await (
-                await connection.execute(
-                    f"""SELECT {_WORKFLOW_RUN_COLUMNS} FROM workflow_runs
-                    WHERE workflow_run_id IN ({placeholders}) ORDER BY sequence""",
-                    identifiers,
-                )
-            ).fetchall()
-        return [self._workflow_run_from_row(row) for row in rows]
-
-    async def fail_orphaned_queued_runs(
-        self, *, failed_at: UtcTimestamp
-    ) -> list[WorkflowRun]:
-        """Fail queued runs that were never advanced by the runner.
-
-        In the single-process architecture every queued run on startup is
-        necessarily orphaned: the runner advances queued runs to ``active``
-        synchronously before returning to the event loop.  Failing them
-        clears the one-nonterminal-per-session unique index so subsequent
-        admissions are no longer blocked.
-        """
-
-        async with self._database.open() as connection:
-            await connection.execute("BEGIN IMMEDIATE")
-            changed = await connection.execute(
-                """UPDATE workflow_runs
-                SET status = 'failed', stage = 'failed', updated_at = ?
-                WHERE status = 'queued'
-                RETURNING workflow_run_id""",
-                (failed_at.isoformat(),),
             )
             identifiers = [row["workflow_run_id"] for row in await changed.fetchall()]
             if not identifiers:

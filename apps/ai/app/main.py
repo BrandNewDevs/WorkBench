@@ -48,7 +48,7 @@ from app.storage import (
     SQLiteWorkflowStore,
 )
 from app.tools.registry import ToolRegistry
-from app.workflow.contracts import ActivityEvent, ActivityEventType
+from app.workflow.contracts import ActivityEvent, ActivityEventType, WorkflowRunStatus
 from app.workflow.runner import CheckpointAwareWorkflowRunner, InspectionWorkflowInputPolicy
 
 
@@ -155,7 +155,14 @@ def compose_runtime_dependencies(
             stale_before=now - timedelta(seconds=settings.workflow_lease_seconds),
             interrupted_at=now,
         )
-        await workflow_store.fail_orphaned_queued_runs(failed_at=now)
+        for queued_run in await workflow_store.list_unfinished_runs():
+            if queued_run.status is not WorkflowRunStatus.QUEUED or workflow_runner is None:
+                continue
+            admission = await workflow_store.get_admission(
+                workflow_run_id=queued_run.workflow_run_id
+            )
+            if admission is not None:
+                await workflow_runner.run(admission)
         for stale_run in interrupted:
             claimed = await workflow_store.claim_retry(
                 workflow_run_id=stale_run.workflow_run_id,

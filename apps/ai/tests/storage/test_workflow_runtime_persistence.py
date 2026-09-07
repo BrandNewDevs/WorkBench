@@ -431,13 +431,8 @@ async def test_startup_recovery_claim_then_fail_frees_nonterminal_slot(
 
 
 @pytest.mark.asyncio
-async def test_startup_recovery_fails_orphaned_queued_runs(tmp_path: Path) -> None:
-    """Regression: queued runs committed before a crash must not block the session.
-
-    Crash window: admit_run persists a queued run, process dies before the
-    runner advances it to active.  On restart the queued run is orphaned and
-    must be failed so subsequent admissions can proceed.
-    """
+async def test_queued_admission_reloads_original_message_for_recovery(tmp_path: Path) -> None:
+    """A crash after admission preserves the exact work for the runner to resume."""
 
     database = LocalSQLiteDatabase(tmp_path / "workbench.db")
     await database.initialize()
@@ -446,135 +441,16 @@ async def test_startup_recovery_fails_orphaned_queued_runs(tmp_path: Path) -> No
     item = session()
     await store.create_session(item)
 
-    queued_run = WorkflowRun(
-        workflow_run_id=uuid4(),
-        session_id=item.session_id,
-        owner_user_id=item.owner_user_id,
-        workflow_type=item.workflow_type,
-        stage=WorkflowStage.COLLECTING_INPUTS,
-        stage_version=0,
-        status=WorkflowRunStatus.QUEUED,
-        sandbox_attempts=0,
-        created_at=NOW,
-        updated_at=NOW,
-    )
-    await store.create_run(queued_run)
+    original = admission(item, uuid4(), "Preserve this request after restart")
+    created = await store.admit_run(original)
 
     fresh = LocalSQLiteDatabase(tmp_path / "workbench.db")
     await fresh.initialize()
     fresh_store = SQLiteWorkflowStore(fresh)
 
-    now = NOW + timedelta(seconds=5)
-    failed = await fresh_store.fail_orphaned_queued_runs(failed_at=now)
-    assert len(failed) == 1
-    assert failed[0].workflow_run_id == queued_run.workflow_run_id
-    assert failed[0].status is WorkflowRunStatus.FAILED
+    restored = await fresh_store.get_admission(workflow_run_id=created.run.workflow_run_id)
 
-    second = await fresh_store.fail_orphaned_queued_runs(failed_at=now)
-    assert second == []
-
-    new_admission = admission(item, uuid4(), "New analysis")
-    result = await fresh_store.admit_run(new_admission)
-    assert result.status == WorkflowAdmissionStatus.CREATED
-
-
-@pytest.mark.asyncio
-async def test_startup_recovery_does_not_touch_waiting_for_approval(
-    tmp_path: Path,
-) -> None:
-    """fail_orphaned_queued_runs must not modify waitingForApproval runs.
-
-    A waitingForApproval run is intentionally paused for human approval and
-    must remain nonterminal.
-    """
-
-    database = LocalSQLiteDatabase(tmp_path / "workbench.db")
-    await database.initialize()
-    store = SQLiteWorkflowStore(database)
-
-    item = session()
-    await store.create_session(item)
-
-    waiting_run = WorkflowRun(
-        workflow_run_id=uuid4(),
-        session_id=item.session_id,
-        owner_user_id=item.owner_user_id,
-        workflow_type=item.workflow_type,
-        stage=WorkflowStage.AWAITING_APPROVAL,
-        stage_version=2,
-        status=WorkflowRunStatus.WAITING_FOR_APPROVAL,
-        sandbox_attempts=0,
-        created_at=NOW,
-        updated_at=NOW,
-    )
-    await store.create_run(waiting_run)
-
-    failed = await store.fail_orphaned_queued_runs(failed_at=NOW)
-    assert failed == []
-
-    runs = await store.list_unfinished_runs()
-    assert len(runs) == 1
-    assert runs[0].status is WorkflowRunStatus.WAITING_FOR_APPROVAL
-    assert runs[0].workflow_run_id == waiting_run.workflow_run_id
-
-
-@pytest.mark.asyncio
-async def test_startup_recovery_queued_and_stale_active_independent(
-    tmp_path: Path,
-) -> None:
-    """Queued and stale active runs are recovered by separate startup steps."""
-
-    database = LocalSQLiteDatabase(tmp_path / "workbench.db")
-    await database.initialize()
-    store = SQLiteWorkflowStore(database)
-
-    queued_session = session()
-    active_session = session()
-    await store.create_session(queued_session)
-    await store.create_session(active_session)
-
-    queued_run = WorkflowRun(
-        workflow_run_id=uuid4(),
-        session_id=queued_session.session_id,
-        owner_user_id=queued_session.owner_user_id,
-        workflow_type=queued_session.workflow_type,
-        stage=WorkflowStage.COLLECTING_INPUTS,
-        stage_version=0,
-        status=WorkflowRunStatus.QUEUED,
-        sandbox_attempts=0,
-        created_at=NOW,
-        updated_at=NOW,
-    )
-    active_run = WorkflowRun(
-        workflow_run_id=uuid4(),
-        session_id=active_session.session_id,
-        owner_user_id=active_session.owner_user_id,
-        workflow_type=active_session.workflow_type,
-        stage=WorkflowStage.EXTRACTING,
-        stage_version=1,
-        status=WorkflowRunStatus.ACTIVE,
-        sandbox_attempts=0,
-        created_at=NOW,
-        updated_at=NOW,
-        execution_lease_expires_at=NOW - timedelta(seconds=10),
-    )
-    await store.create_run(queued_run)
-    await store.create_run(active_run)
-
-    fresh = LocalSQLiteDatabase(tmp_path / "workbench.db")
-    await fresh.initialize()
-    fresh_store = SQLiteWorkflowStore(fresh)
-
-    now = NOW + timedelta(seconds=5)
-    interrupted = await fresh_store.mark_stale_runs_interrupted(
-        stale_before=now, interrupted_at=now,
-    )
-    failed_queued = await fresh_store.fail_orphaned_queued_runs(failed_at=now)
-
-    assert len(interrupted) == 1
-    assert interrupted[0].retryable is True
-    assert interrupted[0].workflow_run_id == active_run.workflow_run_id
-
-    assert len(failed_queued) == 1
-    assert failed_queued[0].status is WorkflowRunStatus.FAILED
-    assert failed_queued[0].workflow_run_id == queued_run.workflow_run_id
+    assert restored is not None
+    assert restored.run == created.run
+    assert restored.message == created.message
+    assert restored.selected_uploads == created.selected_uploads
