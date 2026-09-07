@@ -293,6 +293,43 @@ async def test_conversation_generation_uses_the_text_fallback_once() -> None:
     assert "not installed" in (result.fallback_reason or "")
 
 
+async def test_conversation_fallback_uses_only_the_remaining_caller_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not reset a 30-second caller deadline when the preferred model exhausts time."""
+
+    inference_timeouts: list[float] = []
+    timestamps = iter((0.0, 0.0, 0.0, 10.0, 10.0, 10.0, 11.0))
+    monkeypatch.setattr("app.ai.models.ollama.perf_counter", lambda: next(timestamps))
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json=tags_response("qwen3:4b", "qwen3:1.7b"))
+        payload = json.loads(request.content)
+        if payload.get("keep_alive") == 0:
+            return httpx.Response(200, json={"done": True})
+        inference_timeouts.append(request.extensions["timeout"]["read"])
+        if payload["model"] == "qwen3:4b":
+            return httpx.Response(500, json={"error": "CUDA out of memory"})
+        return httpx.Response(200, json=chat_response(payload["model"], "Fallback reply."))
+
+    profile = load_model_profile()
+    adapter = adapter_for(handler)
+    result = await adapter.generate_conversation(
+        ConversationGenerationRequest(
+            model="qwen3:4b",
+            system_prompt="Respond locally.",
+            messages=(ConversationMessage(role="user", content="Hello."),),
+            limits=profile.text_limits,
+            timeout_seconds=30,
+        )
+    )
+    await adapter.close()
+
+    assert result.model == "qwen3:1.7b"
+    assert inference_timeouts == [30, 20]
+
+
 async def test_conversation_generation_rejects_invalid_assistant_output() -> None:
     """Do not pass incomplete or empty free-text responses to the backend."""
 
@@ -353,7 +390,7 @@ async def test_conversation_timeout_uses_the_caller_deadline() -> None:
         )
     await adapter.close()
 
-    assert observed_timeout == 30
+    assert observed_timeout == pytest.approx(30, abs=0.1)
 
 
 async def test_embedding_generation_uses_local_embed_endpoint() -> None:
