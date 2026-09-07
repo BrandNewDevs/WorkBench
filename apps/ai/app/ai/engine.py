@@ -13,6 +13,8 @@ from app.ai.schemas import (
     CapabilityDecision,
     CodeRepairRequest,
     CodeRepairResult,
+    ConversationReply,
+    ConversationRequest,
     DraftRequest,
     EvidenceChunk,
     GroundedDraft,
@@ -46,6 +48,10 @@ class AIEngine(Protocol):
 
     async def choose_capability(self, task: TaskDescriptor) -> CapabilityDecision:
         """Select the local model capability for a task."""
+        ...
+
+    async def reply_to_conversation(self, request: ConversationRequest) -> ConversationReply:
+        """Generate one local text-only reply without tools or workflow actions."""
         ...
 
     async def plan_task(self, request: AgentContext) -> TaskPlan:

@@ -4,7 +4,7 @@ import asyncio
 from types import TracebackType
 
 from app.ai.engine import AIEngineDependencies
-from app.ai.generation import StructuredTextGenerator
+from app.ai.generation import LocalConversationGenerator, StructuredTextGenerator
 from app.ai.knowledge.chroma_ingestion import (
     ChromaKnowledgeIngestor,
     create_persistent_chroma_client,
@@ -23,15 +23,19 @@ from app.ai.schemas import (
     CapabilityDecision,
     CodeRepairRequest,
     CodeRepairResult,
+    ConversationReply,
+    ConversationRequest,
     DraftRequest,
     EvidenceChunk,
     GroundedDraft,
     IngestionResult,
+    InputModality,
     KnowledgeQuery,
     ModelProfile,
     ModelRuntimeHealth,
     SourceDocument,
     TaskDescriptor,
+    TaskKind,
     TaskPlan,
     VisionAnalysis,
     VisualAnalysisRequest,
@@ -71,6 +75,10 @@ class LocalAIEngine:
             dependencies.model_adapter,
             dependencies.model_profile,
         )
+        self._conversation = LocalConversationGenerator(
+            dependencies.model_adapter,
+            dependencies.model_profile,
+        )
         self._close_lock = asyncio.Lock()
         self._closed = False
 
@@ -94,6 +102,19 @@ class LocalAIEngine:
         """Route from task facts and current local health without model inference."""
 
         return self._dependencies.router.choose(task, await self.health())
+
+    async def reply_to_conversation(self, request: ConversationRequest) -> ConversationReply:
+        """Generate one ordinary local text reply without agent or tool behavior."""
+
+        decision = await self.choose_capability(
+            TaskDescriptor(
+                task_id=request.session_id,
+                kind=TaskKind.CHAT,
+                summary="Ordinary local text conversation.",
+                modalities=(InputModality.TEXT,),
+            )
+        )
+        return await self._conversation.reply(request, model=decision.selected_model)
 
     async def plan_task(self, request: AgentContext) -> TaskPlan:
         """Return a typed plan without advancing any backend workflow stage."""

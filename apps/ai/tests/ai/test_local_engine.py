@@ -25,7 +25,11 @@ from app.ai.schemas import (
     ApprovedKnowledgeRoot,
     CodeRepairContent,
     CodeRepairRequest,
+    ConversationGenerationRequest,
+    ConversationGenerationResult,
     ConversationMessage,
+    ConversationReply,
+    ConversationRequest,
     DraftRequest,
     EmbeddingRequest,
     EmbeddingResult,
@@ -109,6 +113,16 @@ class RecordingModelAdapter:
             model=request.model,
             text=json.dumps(output),
             structured_output=output,
+            metrics=sample_inference_metrics(),
+        )
+
+    async def generate_conversation(
+        self, request: ConversationGenerationRequest
+    ) -> ConversationGenerationResult:
+        self.calls.append(f"generate_conversation:{request.model}")
+        return ConversationGenerationResult(
+            model=request.model,
+            text="The previous message was: " + request.messages[-1].content,
             metrics=sample_inference_metrics(),
         )
 
@@ -198,6 +212,12 @@ async def test_local_engine_exposes_every_ai_operation_through_one_interface(
 
     health = await interface.health()
     decision = await interface.choose_capability(sample_task())
+    conversation: ConversationReply = await interface.reply_to_conversation(
+        ConversationRequest(
+            session_id="session-local-engine",
+            user_message="Can you confirm this is a local conversation?",
+        )
+    )
     context = AgentContext(
         task=sample_task(),
         conversation=(ConversationMessage(role="user", content="Prepare the note."),),
@@ -266,6 +286,8 @@ async def test_local_engine_exposes_every_ai_operation_through_one_interface(
     assert health.runtime_ready is True
     assert health.knowledge_ready is True
     assert decision.selected_model == "qwen3-vl:4b"
+    assert conversation.assistant_text.endswith("local conversation?")
+    assert conversation.model == "qwen3-vl:4b"
     assert plan == sample_task_plan()
     assert analysis == _vision_analysis()
     assert ingestion.document_id == "local-sop"

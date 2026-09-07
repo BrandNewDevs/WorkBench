@@ -23,6 +23,10 @@ from app.ai.schemas import (
     CapabilityDecision,
     CodeRepairRequest,
     CodeRepairResult,
+    ConversationGenerationRequest,
+    ConversationGenerationResult,
+    ConversationReply,
+    ConversationRequest,
     DraftRequest,
     EmbeddingRequest,
     EmbeddingResult,
@@ -46,6 +50,7 @@ from app.ai.schemas import (
 type FakeEngineOperation = Literal[
     "health",
     "choose_capability",
+    "reply_to_conversation",
     "plan_task",
     "analyze_visual",
     "ingest_knowledge",
@@ -88,6 +93,18 @@ class FakeModelAdapter:
             model=request.model,
             text='{"status":"ok"}',
             structured_output={"status": "ok"},
+            metrics=sample_inference_metrics(),
+        )
+
+    async def generate_conversation(
+        self, request: ConversationGenerationRequest
+    ) -> ConversationGenerationResult:
+        """Return one safe, deterministic conversational reply without Ollama."""
+
+        self.calls.append(f"generate_conversation:{request.model}")
+        return ConversationGenerationResult(
+            model=request.model,
+            text="Deterministic local fake reply.",
             metrics=sample_inference_metrics(),
         )
 
@@ -199,6 +216,7 @@ class FakeAIEngine:
     ingestion_result: IngestionResult | None = None
     action_proposal: AgentProposal | None = None
     code_repair_result: CodeRepairResult | None = None
+    conversation_reply: ConversationReply | None = None
     failures: dict[FakeEngineOperation, AIError] = field(default_factory=dict)
     calls: list[str] = field(default_factory=list, init=False)
 
@@ -215,6 +233,20 @@ class FakeAIEngine:
         self.calls.append(f"choose_capability:{task.task_id}")
         self._raise_configured_failure("choose_capability")
         return self.capability_decision
+
+    async def reply_to_conversation(self, request: ConversationRequest) -> ConversationReply:
+        """Return a configured local reply without inference, files, or tools."""
+
+        self.calls.append(f"reply_to_conversation:{request.session_id}")
+        self._raise_configured_failure("reply_to_conversation")
+        if self.conversation_reply is not None:
+            return self.conversation_reply
+        return ConversationReply(
+            session_id=request.session_id,
+            assistant_text="Deterministic local fake reply.",
+            model="qwen3:4b",
+            metrics=sample_inference_metrics(),
+        )
 
     async def plan_task(self, request: AgentContext) -> TaskPlan:
         """Return a bounded fake plan without taking any workflow action."""

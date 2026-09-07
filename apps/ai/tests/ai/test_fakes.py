@@ -20,6 +20,7 @@ from app.ai.schemas import (
     CodeRepairRequest,
     CodeRepairResult,
     ConversationMessage,
+    ConversationRequest,
     DraftRequest,
     IngestionResult,
     KnowledgeQuery,
@@ -44,6 +45,23 @@ async def test_fake_ai_engine_returns_a_typed_plan() -> None:
 
     assert plan.next_step_id == plan.steps[0].step_id
     assert engine.calls == ["plan_task:task-inspection-001"]
+
+
+async def test_fake_ai_engine_returns_a_local_conversation_reply() -> None:
+    """Let Backend 1 test normal chat without a local model runtime."""
+
+    engine = FakeAIEngine()
+
+    reply = await engine.reply_to_conversation(
+        ConversationRequest(
+            session_id="session-chat-fake",
+            user_message="Is this response local?",
+        )
+    )
+
+    assert reply.session_id == "session-chat-fake"
+    assert reply.model == "qwen3:4b"
+    assert engine.calls == ["reply_to_conversation:session-chat-fake"]
 
 
 async def test_fake_model_returns_structured_vision_output() -> None:
