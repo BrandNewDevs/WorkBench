@@ -276,8 +276,12 @@ class CheckpointAwareWorkflowRunner:
         try:
             if admission.run.workflow_type is WorkflowType.INSPECTION_ANALYSIS:
                 await self._run_inspection(admission)
-            else:
+            elif admission.run.workflow_type is WorkflowType.CODE_REPAIR:
                 await self._run_code_repair(admission)
+            else:
+                # Only the two deterministic MVP workflows are runnable; any
+                # other session kind must never reach a stage pipeline.
+                await self._mark_interrupted(admission)
         except asyncio.CancelledError:
             await self._mark_interrupted(admission)
             raise

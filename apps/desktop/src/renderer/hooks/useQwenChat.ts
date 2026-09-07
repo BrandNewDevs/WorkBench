@@ -5,10 +5,8 @@ import { LocalApiError, apiFailureWasDefinitive, localApi } from "../api/localAp
 import { chatSessionTitleFromDraft } from "../lib/chatThreads.ts";
 import {
   conversationFailureMessage,
-  loadQwenSessionIds,
   oversizedMessageText,
   pendingUserMessage,
-  rememberQwenSessionId,
   turnWasStored,
   type QwenConversationStatus,
 } from "../lib/qwenChat.ts";
@@ -58,7 +56,7 @@ export const initialQwenChatState: QwenChatState = {
 type QwenChatAction =
   | { type: "draftChanged"; draft: string }
   | { type: "pickerLoading" }
-  | { type: "pickerLoaded"; sessions: readonly ChatSession[]; qwenSessionIds: ReadonlySet<string> }
+  | { type: "pickerLoaded"; sessions: readonly ChatSession[] }
   | { type: "pickerFailed" }
   | { type: "sessionSelected"; sessionId: string; title: string }
   | { type: "newConversation" }
@@ -80,11 +78,11 @@ export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): Q
     case "pickerLoading":
       return state.pickerState === "loading" ? state : { ...state, pickerState: "loading" };
     case "pickerLoaded": {
-      // Only active sessions created by this mode are eligible conversation
-      // targets; a workflow session would mix plain turns into its shared
-      // history and break the strict user/assistant pair contract.
+      // Only active plain-chat sessions are eligible conversation targets.
+      // Their data-layer type keeps workflow sessions out of this picker, and
+      // the workflow workspace filters these sessions out in turn.
       const pickerSessions = action.sessions
-        .filter((session) => session.status === "active" && action.qwenSessionIds.has(session.sessionId))
+        .filter((session) => session.status === "active" && session.workflowType === "localConversation")
         .map((session) => ({ sessionId: session.sessionId, title: session.title }));
       return { ...state, pickerState: "ready", pickerSessions };
     }
@@ -228,10 +226,6 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
   // gate is authoritative against duplicate sends within one tick.
   const sendInFlightRef = useRef(false);
   const loadSequenceRef = useRef(0);
-  // Sessions created by this mode, persisted locally; the picker offers only
-  // these so workflow sessions never receive plain conversation turns.
-  const qwenSessionIdsRef = useRef<ReadonlySet<string> | undefined>(undefined);
-  qwenSessionIdsRef.current ??= loadQwenSessionIds();
 
   const loadMessages = useCallback(
     (sessionId: string) => {
@@ -256,8 +250,7 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
   const refreshSessions = useCallback(() => {
     dispatch({ type: "pickerLoading" });
     void localApi.listChatSessions(apiBaseUrl).then(
-      (response) =>
-        dispatch({ type: "pickerLoaded", sessions: response.sessions, qwenSessionIds: qwenSessionIdsRef.current! }),
+      (response) => dispatch({ type: "pickerLoaded", sessions: response.sessions }),
       () => dispatch({ type: "pickerFailed" }),
     );
   }, [apiBaseUrl]);
@@ -329,12 +322,13 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
       try {
         if (sessionId === undefined) {
           dispatch({ type: "sessionCreating" });
+          // The data-layer session type separates plain chat from workflows:
+          // the backend refuses workflow admission for it, and the workflow
+          // workspace filters these sessions out of its own UI.
           const created = await localApi.createChatSession(
-            { workflowType: "inspectionAnalysis", title: chatSessionTitleFromDraft(content), clientSessionId },
+            { workflowType: "localConversation", title: chatSessionTitleFromDraft(content), clientSessionId },
             apiBaseUrl,
           );
-          rememberQwenSessionId(created.sessionId);
-          qwenSessionIdsRef.current = new Set(qwenSessionIdsRef.current).add(created.sessionId);
           dispatch({ type: "sessionCreated", session: created });
           sessionId = created.sessionId;
         }

@@ -121,6 +121,23 @@ test("loaded sessions replace pristine local threads and map backend fields", ()
   assert.equal(result.activeThreadId, loaded.id);
 });
 
+test("plain-chat sessions never enter the workflow workspace", () => {
+  const pristine = thread("pristine", 30);
+  const state = stateOf([pristine], pristine.id, "loading");
+  const result = chatThreadReducer(state, {
+    type: "sessionsLoaded", freshThreadId: "fresh" as ChatThreadId, now: 40,
+    sessions: [
+      session("44444444-4444-4444-8444-444444444444", { workflowType: "localConversation", title: "Local Qwen chat" }),
+      session("55555555-5555-4555-8555-555555555555", { workflowType: "inspectionAnalysis" }),
+    ],
+  });
+  // Local Qwen chat owns these sessions; only workflow sessions map here.
+  assert.deepEqual(
+    result.threads.map((candidate) => candidate.sessionId),
+    ["55555555-5555-4555-8555-555555555555"],
+  );
+});
+
 test("loaded sessions preserve local threads that still hold unsent content", () => {
   const dirty = { ...thread("dirty", 35), draft: "Unsent note" };
   const state = stateOf([dirty], dirty.id, "loading");

@@ -273,7 +273,8 @@ export interface WorkflowUploadProgress {
 
 /** Wire contracts mirroring the local FastAPI chat surface. FastAPI serializes camelCase. */
 
-export const chatWorkflowTypeSchema = z.enum(["inspectionAnalysis", "codeRepair"]);
+/** Session kinds; "localConversation" backs plain chat and never runs workflows. */
+export const chatWorkflowTypeSchema = z.enum(["inspectionAnalysis", "codeRepair", "localConversation"]);
 
 export const chatStageSchema = z.enum([
   "collectingInputs",

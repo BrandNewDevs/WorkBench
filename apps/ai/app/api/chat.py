@@ -60,6 +60,7 @@ from app.workflow.contracts import (
     WorkflowSession,
     WorkflowStage,
     WorkflowStatus,
+    WorkflowType,
 )
 from app.workflow.runner import WorkflowRunner
 
@@ -440,6 +441,14 @@ def build_chat_router() -> APIRouter:
             return _error(
                 "session_not_active",
                 "This chat session is closed and no longer accepts messages.",
+                409,
+            )
+        if session.workflow_type is WorkflowType.LOCAL_CONVERSATION:
+            # Plain chat sessions have no workflow pipeline; admitting a run
+            # would mix generated workflow turns into a conversation history.
+            return _error(
+                "workflow_not_allowed",
+                "Plain chat sessions do not run workflows.",
                 409,
             )
         store = _chat_store(request)

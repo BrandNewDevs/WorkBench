@@ -126,11 +126,12 @@ def test_timestamps_must_be_utc() -> None:
 
 
 def test_workflow_type_is_explicit() -> None:
-    """The only Phase 0 workflow types remain the MVP inspection and repair flows."""
+    """Two runnable MVP workflows plus the plain chat session kind, nothing else."""
 
     assert {workflow_type.value for workflow_type in WorkflowType} == {
         "inspectionAnalysis",
         "codeRepair",
+        "localConversation",
     }
 
 

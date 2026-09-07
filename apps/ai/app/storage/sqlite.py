@@ -183,7 +183,27 @@ _CREATE_WORKFLOW_SESSIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS workflow_sessions (
     session_id TEXT PRIMARY KEY NOT NULL,
     owner_user_id TEXT NOT NULL,
-    workflow_type TEXT NOT NULL CHECK (workflow_type IN ('inspectionAnalysis', 'codeRepair')),
+    workflow_type TEXT NOT NULL CHECK (
+        workflow_type IN ('inspectionAnalysis', 'codeRepair', 'localConversation')
+    ),
+    title TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('active', 'completed', 'failed', 'approvalRejected')
+    ),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    client_session_id TEXT
+)
+"""
+
+_CREATE_WORKFLOW_SESSIONS_PLAIN_CHAT_TABLE = """
+CREATE TABLE workflow_sessions_plain_chat (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    workflow_type TEXT NOT NULL CHECK (
+        workflow_type IN ('inspectionAnalysis', 'codeRepair', 'localConversation')
+    ),
     title TEXT NOT NULL,
     stage TEXT NOT NULL,
     status TEXT NOT NULL CHECK (
@@ -607,6 +627,7 @@ class LocalSQLiteDatabase:
                     "ALTER TABLE workflow_sessions ADD COLUMN client_session_id TEXT"
                 )
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX)
+            await self._migrate_sessions_for_plain_chat(connection)
             await connection.execute(_CREATE_WORKFLOW_RUNS_TABLE)
             cursor = await connection.execute("PRAGMA table_info(workflow_runs)")
             run_columns = {row[1] for row in await cursor.fetchall()}
@@ -728,6 +749,50 @@ class LocalSQLiteDatabase:
                 ),
             )
         await connection.execute("DROP TABLE activity_events_phase3_legacy")
+
+    @staticmethod
+    async def _migrate_sessions_for_plain_chat(
+        connection: aiosqlite.Connection,
+    ) -> None:
+        """Rebuild workflow_sessions so plain chat sessions can be stored locally.
+
+        Local Qwen chat sessions carry their own ``localConversation`` type so
+        no workflow run may ever be admitted for them. Older local databases
+        constrain the column to the two workflow kinds only, so the table is
+        rebuilt in place while every stored session row is preserved. Workflow
+        runs and approvals keep their stricter check: plain chat sessions can
+        never own workflow runs.
+        """
+
+        cursor = await connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workflow_sessions'"
+        )
+        row = await cursor.fetchone()
+        if row is None or row["sql"] is None or "localConversation" in row["sql"]:
+            return
+        # The rebuild briefly drops the referenced table, so foreign keys are
+        # suspended for this connection only and restored after the commit.
+        await connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            await connection.execute(_CREATE_WORKFLOW_SESSIONS_PLAIN_CHAT_TABLE)
+            await connection.execute(
+                """INSERT INTO workflow_sessions_plain_chat (
+                    session_id, owner_user_id, workflow_type, title, stage, status,
+                    created_at, updated_at, client_session_id
+                ) SELECT
+                    session_id, owner_user_id, workflow_type, title, stage, status,
+                    created_at, updated_at, client_session_id
+                FROM workflow_sessions"""
+            )
+            await connection.execute("DROP TABLE workflow_sessions")
+            await connection.execute(
+                "ALTER TABLE workflow_sessions_plain_chat RENAME TO workflow_sessions"
+            )
+            await connection.execute(_CREATE_WORKFLOW_SESSIONS_OWNER_INDEX)
+            await connection.execute(_CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX)
+            await connection.commit()
+        finally:
+            await connection.execute("PRAGMA foreign_keys = ON")
 
     @staticmethod
     async def _reconcile_legacy_nonterminal_runs(

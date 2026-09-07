@@ -28,10 +28,12 @@ UtcTimestamp = Annotated[datetime, AfterValidator(_require_utc)]
 
 
 class WorkflowType(StrEnum):
-    """The two deterministic MVP workflows."""
+    """Session kinds: two deterministic MVP workflows plus plain local chat."""
 
     INSPECTION_ANALYSIS = "inspectionAnalysis"
     CODE_REPAIR = "codeRepair"
+    # Backs plain text conversations. No workflow may ever be admitted for it.
+    LOCAL_CONVERSATION = "localConversation"
 
 
 class WorkflowStage(StrEnum):

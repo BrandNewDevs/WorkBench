@@ -901,6 +901,120 @@ async def test_plain_conversation_maps_known_ai_failures_without_assistant_persi
         assert messages == []
 
 
+async def test_local_conversation_sessions_refuse_workflow_messages(
+    tmp_path: Path,
+) -> None:
+    ai = RecordingConversationAI()
+    runner = RecordingWorkflowRunner()
+    app, cookie, _ = await _build_app_with_two_employees(
+        tmp_path, ai_engine=ai, workflow_runner=runner
+    )
+    async with app.router.lifespan_context(app):
+        created = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "create-local-conversation",
+                    "POST",
+                    "/chat/sessions",
+                    cookie=cookie,
+                    body={"workflowType": "localConversation", "title": "Local Qwen chat"},
+                ),
+            )
+        )
+        session_id = _payload(created)["sessionId"]
+        appended = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "append-local-conversation",
+                    "POST",
+                    f"/chat/sessions/{session_id}/messages",
+                    cookie=cookie,
+                    body={
+                        "content": "Queue a workflow anyway",
+                        "clientMessageId": str(uuid4()),
+                    },
+                ),
+            )
+        )
+        listed = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "list-local-conversation",
+                    "GET",
+                    f"/chat/sessions/{session_id}/messages",
+                    cookie=cookie,
+                ),
+            )
+        )
+
+    assert created["status"] == 200
+    assert _payload(created)["workflowType"] == "localConversation"
+    assert appended["status"] == 409
+    assert _payload(appended)["code"] == "workflow_not_allowed"
+    assert _payload(listed)["messages"] == []
+    assert runner.admissions == []
+    assert ai.conversation_requests == []
+
+
+async def test_plain_conversation_supports_local_conversation_sessions(
+    tmp_path: Path,
+) -> None:
+    ai = RecordingConversationAI()
+    runner = RecordingWorkflowRunner()
+    app, cookie, _ = await _build_app_with_two_employees(
+        tmp_path, ai_engine=ai, workflow_runner=runner
+    )
+    async with app.router.lifespan_context(app):
+        created = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "create-local-conversation",
+                    "POST",
+                    "/chat/sessions",
+                    cookie=cookie,
+                    body={"workflowType": "localConversation", "title": "Local Qwen chat"},
+                ),
+            )
+        )
+        session_id = _payload(created)["sessionId"]
+        turn = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "local-conversation-turn",
+                    "POST",
+                    f"/chat/sessions/{session_id}/conversation",
+                    cookie=cookie,
+                    body={"message": "First question", "clientRequestId": str(uuid4())},
+                ),
+            )
+        )
+        listed = json.loads(
+            await _dispatch(
+                app,
+                _frame(
+                    "local-conversation-list",
+                    "GET",
+                    f"/chat/sessions/{session_id}/messages",
+                    cookie=cookie,
+                ),
+            )
+        )
+
+    assert created["status"] == 200
+    assert turn["status"] == 200
+    assert _payload(turn)["assistantText"] == "Local Qwen reply."
+    assert _payload(turn)["selectedModel"] == "qwen3:4b"
+    messages = _payload(listed)["messages"]
+    assert isinstance(messages, list)
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert runner.admissions == []
+
+
 async def test_concurrent_conversation_turns_are_serialized_per_session(
     tmp_path: Path,
 ) -> None:

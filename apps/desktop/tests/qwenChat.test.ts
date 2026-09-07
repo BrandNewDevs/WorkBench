@@ -5,10 +5,8 @@ import { conversationMessageMaxLength } from "../src/shared/contracts.ts";
 import { LocalApiError } from "../src/renderer/api/localApi.ts";
 import {
   conversationFailureMessage,
-  loadQwenSessionIds,
   oversizedMessageText,
   pendingUserMessage,
-  rememberQwenSessionId,
   statusLine,
   turnWasStored,
 } from "../src/renderer/lib/qwenChat.ts";
@@ -41,11 +39,16 @@ function qwenState(overrides: Partial<QwenChatState> = {}): QwenChatState {
   return { ...initialQwenChatState, ...overrides };
 }
 
-function pickerSession(status: ChatSession["status"], title = "Local Qwen chat", sessionId = "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"): ChatSession {
+function pickerSession(
+  status: ChatSession["status"],
+  title = "Local Qwen chat",
+  sessionId = "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  workflowType: ChatSession["workflowType"] = "localConversation",
+): ChatSession {
   return {
     sessionId,
     ownerUserId: "6a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
-    workflowType: "inspectionAnalysis",
+    workflowType,
     title,
     stage: "collectingInputs",
     status,
@@ -53,24 +56,6 @@ function pickerSession(status: ChatSession["status"], title = "Local Qwen chat",
     updatedAt: "2026-09-07T09:05:00Z",
     clientSessionId: null,
   };
-}
-
-function fakeStorage(initial: Record<string, string> = {}): Storage {
-  const entries = new Map(Object.entries(initial));
-  return {
-    get length() {
-      return entries.size;
-    },
-    clear: () => entries.clear(),
-    getItem: (key: string) => (entries.has(key) ? entries.get(key)! : null),
-    key: (index: number) => [...entries.keys()][index] ?? null,
-    removeItem: (key: string) => {
-      entries.delete(key);
-    },
-    setItem: (key: string, value: string) => {
-      entries.set(key, value);
-    },
-  } as Storage;
 }
 
 test("status labels name the selected local model and only real fallbacks", () => {
@@ -161,23 +146,22 @@ test("a retried turn never renders a duplicate optimistic message", () => {
   assert.equal(twice.messages.length, 1);
 });
 
-test("the picker offers only active sessions created by this mode", () => {
+test("the picker offers only active plain-chat sessions", () => {
   const qwenId = "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
-  const workflowId = "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
   const closedQwenId = "8a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
   const result = qwenChatReducer(qwenState({ pickerState: "loading" }), {
     type: "pickerLoaded",
     sessions: [
       pickerSession("active", "Pump seal question", qwenId),
-      pickerSession("active", "Inspection workflow review", workflowId),
+      pickerSession("active", "Inspection workflow review", "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "inspectionAnalysis"),
+      pickerSession("active", "Code repair review", "9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "codeRepair"),
       pickerSession("completed", "Closed qwen chat", closedQwenId),
-      pickerSession("failed", "Failed qwen chat", "9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
+      pickerSession("failed", "Failed qwen chat", "aa2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
     ],
-    qwenSessionIds: new Set([qwenId, closedQwenId, "9a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"]),
   });
   assert.equal(result.pickerState, "ready");
-  // A workflow session with the same active status must never become a
-  // plain-chat target; inactive sessions stay hidden even when registered.
+  // The data-layer type separates plain chat from workflows: neither the
+  // workflow workspace nor this picker can cross that boundary.
   assert.deepEqual(result.pickerSessions, [{ sessionId: qwenId, title: "Pump seal question" }]);
 });
 
@@ -202,40 +186,6 @@ test("a created conversation joins the picker exactly once so it can be resumed"
     session: pickerSession("active", "Pump seal question", "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
   });
   assert.equal(replayed.pickerSessions.length, 2);
-});
-
-test("the local registry persists only valid session IDs", () => {
-  const registryKey = "workbench.qwenChat.sessionIds";
-  const empty = loadQwenSessionIds(fakeStorage());
-  assert.equal(empty.size, 0);
-
-  const storage = fakeStorage();
-  rememberQwenSessionId("5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", storage);
-  rememberQwenSessionId("7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", storage);
-  rememberQwenSessionId("not-a-uuid", storage);
-  rememberQwenSessionId("", storage);
-  assert.deepEqual([...loadQwenSessionIds(storage)].sort(), [
-    "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
-    "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
-  ]);
-  assert.deepEqual(JSON.parse(storage.getItem(registryKey)!), [
-    "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
-    "7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
-  ]);
-
-  // Entries written by anything else are validated on read.
-  const hostile = fakeStorage({
-    [registryKey]: JSON.stringify(["8a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", 42, null, "../../etc/passwd"]),
-  });
-  assert.deepEqual([...loadQwenSessionIds(hostile)], ["8a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"]);
-});
-
-test("a corrupted registry reads as empty instead of failing the picker", () => {
-  const storage = fakeStorage({ "workbench.qwenChat.sessionIds": "not-json" });
-  assert.equal(loadQwenSessionIds(storage).size, 0);
-  // Remembering still recovers and persists a valid registry.
-  rememberQwenSessionId("5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", storage);
-  assert.deepEqual([...loadQwenSessionIds(storage)], ["5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"]);
 });
 
 test("a definitive send failure removes the optimistic message and clears pending keys", () => {

@@ -172,6 +172,79 @@ def test_session_metadata_requires_utc_created_at() -> None:
 
 
 @pytest.mark.asyncio
+async def test_initialize_migrates_sessions_for_plain_chat(tmp_path: Path) -> None:
+    """A legacy database keeps its sessions and gains the plain chat kind."""
+
+    database_path = tmp_path / "workbench.db"
+    legacy_session_id = str(uuid4())
+    legacy_user_id = str(uuid4())
+    async with aiosqlite.connect(database_path) as connection:
+        await connection.execute(
+            """
+            CREATE TABLE workflow_sessions (
+                session_id TEXT PRIMARY KEY NOT NULL,
+                owner_user_id TEXT NOT NULL,
+                workflow_type TEXT NOT NULL CHECK (
+                    workflow_type IN ('inspectionAnalysis', 'codeRepair')
+                ),
+                title TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('active', 'completed', 'failed', 'approvalRejected')
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                client_session_id TEXT
+            )
+            """
+        )
+        await connection.execute(
+            """
+            INSERT INTO workflow_sessions (
+                session_id, owner_user_id, workflow_type, title, stage, status,
+                created_at, updated_at, client_session_id
+            ) VALUES (?, ?, 'inspectionAnalysis', 'Pump review', 'collectingInputs',
+                'active', '2026-09-01T10:00:00+00:00', '2026-09-01T10:05:00+00:00', NULL)
+            """,
+            (legacy_session_id, legacy_user_id),
+        )
+        await connection.commit()
+
+    database = LocalSQLiteDatabase(database_path)
+    await database.initialize()
+
+    async with database.open() as connection:
+        cursor = await connection.execute("SELECT * FROM workflow_sessions")
+        rows = list(await cursor.fetchall())
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == legacy_session_id
+        assert rows[0]["workflow_type"] == "inspectionAnalysis"
+        # The rebuilt table accepts plain chat sessions...
+        await connection.execute(
+            """
+            INSERT INTO workflow_sessions (
+                session_id, owner_user_id, workflow_type, title, stage, status,
+                created_at, updated_at, client_session_id
+            ) VALUES (?, ?, 'localConversation', 'Local Qwen chat', 'collectingInputs',
+                'active', '2026-09-01T10:10:00+00:00', '2026-09-01T10:15:00+00:00', NULL)
+            """,
+            (str(uuid4()), legacy_user_id),
+        )
+        # ...while workflow runs stay exclusive to the two real workflows.
+        with pytest.raises(aiosqlite.IntegrityError):
+            await connection.execute(
+                """
+                INSERT INTO workflow_runs (
+                    workflow_run_id, session_id, owner_user_id, workflow_type,
+                    stage, stage_version, status, created_at, updated_at
+                ) VALUES (?, ?, ?, 'localConversation', 'collectingInputs', 0,
+                    'queued', '2026-09-01T10:20:00+00:00', '2026-09-01T10:20:00+00:00')
+                """,
+                (str(uuid4()), legacy_session_id, legacy_user_id),
+            )
+
+
+@pytest.mark.asyncio
 async def test_database_constraint_rejects_arbitrary_status(tmp_path: Path) -> None:
     database = LocalSQLiteDatabase(tmp_path / "workbench.db")
     await database.initialize()

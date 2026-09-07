@@ -287,12 +287,18 @@ export function chatThreadReducer(state: ChatThreadState, action: ChatThreadActi
     case "sessionsLoaded": {
       // Backend sessions are the truth for stage and status. Existing threads
       // merge by session ID so unsent content and history survive a refresh.
-      const backendThreads = action.sessions.map(chatThreadFromSession);
+      // Plain-chat sessions belong to the Local Qwen chat mode; the workflow
+      // workspace must not claim them or append workflow turns to their
+      // shared history.
+      const workflowSessions = action.sessions.filter(
+        (session) => session.workflowType !== "localConversation",
+      );
+      const backendThreads = workflowSessions.map(chatThreadFromSession);
       const backendBySessionId = new Map(backendThreads.map((thread) => [thread.sessionId, thread]));
       // A create that committed while its response was lost shows up here by
       // its client key; the refresh rebinds the draft thread to it instead of
       // leaving a duplicate empty conversation beside the unsent draft.
-      const replayedSessionIds = new Map(action.sessions.map((session) => [session.clientSessionId, session.sessionId]));
+      const replayedSessionIds = new Map(workflowSessions.map((session) => [session.clientSessionId, session.sessionId]));
       const keptThreads: ChatThread[] = [];
       for (const existing of state.threads) {
         if (existing.source === "example") {
