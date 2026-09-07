@@ -277,6 +277,10 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
     ) {
       return;
     }
+    // Invalidate any in-flight message load: its delayed callback would
+    // otherwise install the previous session's messages into the blank
+    // conversation this reset creates.
+    ++loadSequenceRef.current;
     dispatch({ type: "newConversation" });
   }, []);
 
