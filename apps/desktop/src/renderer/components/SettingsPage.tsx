@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import type { DesktopStatus, EmployeeSession, HealthResponse } from "../../shared/contracts";
+import type {
+  DesktopStatus,
+  EmployeeSession,
+  HealthResponse,
+  ModelHealth,
+  SubsystemReadiness,
+} from "../../shared/contracts";
 import { isHealthFresh } from "../lib/health";
 import type { SettingsSection } from "../lib/settings";
 import { Button } from "./ui/button";
@@ -39,7 +45,7 @@ function healthStatusLabel(healthState: HealthState, now: number): string {
   if (healthState.kind === "loading") return "Checking";
   if (healthState.kind === "error") return "Unavailable";
   if (!isHealthFresh(healthState.health, now)) return "Stale";
-  return healthState.health.status === "healthy" ? "Healthy" : "Degraded";
+  return healthState.health.status === "ready" ? "Ready" : "Degraded";
 }
 
 function checkedAtLabel(healthState: HealthState, now: number): string {
@@ -132,22 +138,49 @@ function securityValue(value: string | number | undefined): string | number {
   return value ?? "Unknown";
 }
 
+function readinessValue(readiness: SubsystemReadiness | undefined): string | undefined {
+  if (!readiness) return undefined;
+  const status = readiness.ready ? "Ready" : "Unavailable";
+  return readiness.detail ? `${status} — ${readiness.detail}` : status;
+}
+
+function modelReadinessValue(model: ModelHealth): string {
+  const capability = model.capability[0].toUpperCase() + model.capability.slice(1);
+  const status = model.status[0].toUpperCase() + model.status.slice(1);
+  const selectedModel = model.selectedModel ? ` — ${model.selectedModel}` : "";
+  const detail = model.lastError ?? model.fallbackReason;
+  return `${capability}: ${status}${selectedModel}${detail ? ` — ${detail}` : ""}`;
+}
+
 function SecuritySection({ healthState, now }: { healthState: HealthState; now: number }) {
   const snapshot = lastKnownHealth(healthState);
   const health = freshHealth(healthState, now);
-  const localInference = health ? (health.localInference ? "Enabled" : "Disabled") : undefined;
-  const currentModel = health?.currentModel?.trim() ? health.currentModel : undefined;
-  const externalApis = health?.externalApis;
-  const outboundStatus = health?.outboundStatus === "blocked" ? "Blocked" : health?.outboundStatus === "clear" ? "Clear" : undefined;
+  const localInference = health
+    ? readinessValue({ ready: health.ai.runtimeReady, detail: health.ai.runtimeError })
+    : undefined;
+  const knowledge = health
+    ? readinessValue({ ready: health.ai.knowledgeReady, detail: health.ai.knowledgeError })
+    : undefined;
+  const outboundStatus = health ? (health.outboundNetworkBlocked ? "Blocked" : "Not blocked") : undefined;
 
   return (
     <GroupedSettingsPanel label="Security settings">
       <GroupedSettingsRow description="Whether Electron reports its managed local service process as running." title="Desktop service">{securityValue(snapshot?.desktop.serviceRunning === true ? "Running" : snapshot?.desktop.serviceRunning === false ? "Stopped" : undefined)}</GroupedSettingsRow>
-      <GroupedSettingsRow description="No verified backend air-gapped-mode status is available in this build." title="Air-gapped mode">Unknown</GroupedSettingsRow>
-      <GroupedSettingsRow description="Whether the latest fresh health response reports local inference." title="Local inference">{securityValue(localInference)}</GroupedSettingsRow>
-      <GroupedSettingsRow description="The model named by the latest fresh health response." title="Current model">{securityValue(currentModel)}</GroupedSettingsRow>
-      <GroupedSettingsRow description="The number reported by the latest fresh health response." title="External APIs">{securityValue(externalApis)}</GroupedSettingsRow>
-      <GroupedSettingsRow description="The network status reported by the latest fresh health response." title="Outbound status">{securityValue(outboundStatus)}</GroupedSettingsRow>
+      <GroupedSettingsRow description="Whether the latest fresh response identifies this as a local-only deployment." title="Local-only mode">{securityValue(health ? "Enabled" : undefined)}</GroupedSettingsRow>
+      <GroupedSettingsRow description="Readiness of the local model runtime." title="Local inference">{securityValue(localInference)}</GroupedSettingsRow>
+      <GroupedSettingsRow description="Readiness of every required local model capability." title="Required models">
+        {health ? (
+          health.ai.models.length > 0 ? (
+            <span className="flex flex-col gap-1">{health.ai.models.map((model) => <span key={model.capability}>{modelReadinessValue(model)}</span>)}</span>
+          ) : "Unavailable"
+        ) : "Unknown"}
+      </GroupedSettingsRow>
+      <GroupedSettingsRow description="Readiness of the local knowledge index." title="Knowledge index">{securityValue(knowledge)}</GroupedSettingsRow>
+      <GroupedSettingsRow description="Readiness of local application storage." title="Storage">{securityValue(readinessValue(health?.storage))}</GroupedSettingsRow>
+      <GroupedSettingsRow description="Readiness of isolated local code execution." title="Sandbox">{securityValue(readinessValue(health?.sandbox))}</GroupedSettingsRow>
+      <GroupedSettingsRow description="Readiness of the local audit store." title="Audit">{securityValue(readinessValue(health?.audit))}</GroupedSettingsRow>
+      <GroupedSettingsRow description="The number of configured external APIs reported by FastAPI." title="External APIs">{securityValue(health?.externalApiCount)}</GroupedSettingsRow>
+      <GroupedSettingsRow description="Whether outbound network access is reported as blocked." title="Outbound network">{securityValue(outboundStatus)}</GroupedSettingsRow>
     </GroupedSettingsPanel>
   );
 }

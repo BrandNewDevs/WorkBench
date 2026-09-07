@@ -1,4 +1,5 @@
 import type {
+  ChatMessage,
   ChatMessageAppendRequest,
   ChatMessageListResponse,
   ChatSession,
@@ -10,7 +11,6 @@ import type {
   EmployeeSession,
   EmployeeSessionRestoreResponse,
   HealthResponse,
-  OutboundStatus,
   LocalServiceRequest,
   WorkflowMessageAccepted,
   WorkflowUploadResponse,
@@ -20,6 +20,7 @@ import {
   chatMessageListResponseSchema,
   chatSessionListResponseSchema,
   chatSessionSchema,
+  healthResponseSchema,
   workflowMessageAcceptedSchema,
   workflowUploadResponseSchema,
 } from "../../shared/contracts.ts";
@@ -131,48 +132,26 @@ function parseLogoutResponse(value: unknown): EmployeeLogoutResponse {
   return { revoked: value.revoked };
 }
 
-function parseHealthResponse(value: unknown): HealthResponse {
-  if (!isRecord(value)) {
-    throw new LocalApiError("FastAPI returned an invalid health response.", "invalidResponse");
+function parseHealthResponse(value: unknown, status: number): HealthResponse {
+  const result = healthResponseSchema.safeParse(value);
+  if (!result.success) {
+    throw new LocalApiError("FastAPI returned an invalid health response.", "invalidResponse", status);
   }
+  return result.data;
+}
 
-  const rawStatus = value.status;
-  const status = rawStatus === "ok" || rawStatus === "healthy" ? "healthy" : rawStatus === "degraded" ? "degraded" : undefined;
-  const outboundStatus = value.outboundStatus;
-  const validOutboundStatus: OutboundStatus | undefined =
-    outboundStatus === "blocked" || outboundStatus === "clear" || outboundStatus === "unknown"
-      ? outboundStatus
-      : undefined;
-  const externalApis = value.externalApis;
-
-  if (
-    !status ||
-    value.service !== "fastapi" ||
-    typeof value.localInference !== "boolean" ||
-    (typeof value.currentModel !== "string" && value.currentModel !== null) ||
-    typeof externalApis !== "number" ||
-    !Number.isInteger(externalApis) ||
-    externalApis < 0 ||
-    !validOutboundStatus ||
-    typeof value.checkedAt !== "string" ||
-    !Number.isFinite(Date.parse(value.checkedAt))
-  ) {
-    throw new LocalApiError("FastAPI returned an invalid health response.", "invalidResponse");
-  }
-
-  return {
-    status,
-    service: "fastapi",
-    localInference: value.localInference,
-    currentModel: value.currentModel,
-    externalApis,
-    outboundStatus: validOutboundStatus,
-    checkedAt: value.checkedAt,
-  };
+interface ParsedJsonResponse {
+  status: number;
+  value: unknown;
 }
 
 export class LocalApiClient {
-  private async requestJson(request: LocalServiceRequest, operation: string, timeoutMs = requestTimeoutMs): Promise<unknown> {
+  private async requestJsonResponse(
+    request: LocalServiceRequest,
+    operation: string,
+    timeoutMs = requestTimeoutMs,
+    acceptedStatuses: readonly number[] = [],
+  ): Promise<ParsedJsonResponse> {
     let timeout: number | undefined;
     try {
       const pending = window.workbench.requestLocalService(request);
@@ -190,14 +169,28 @@ export class LocalApiClient {
         }
         throw new LocalApiError(`The local employee ${operation} endpoint is unavailable on FastAPI.`, "endpointUnavailable", response.status);
       }
-      if (response.status < 200 || response.status >= 300) throw new LocalApiError(`FastAPI ${operation} returned HTTP ${response.status}.`, "http", response.status);
-      try { return JSON.parse(response.body) as unknown; } catch { throw new LocalApiError(`FastAPI returned malformed JSON for ${operation}.`, "malformedJson"); }
+      if ((response.status < 200 || response.status >= 300) && !acceptedStatuses.includes(response.status)) {
+        throw new LocalApiError(`FastAPI ${operation} returned HTTP ${response.status}.`, "http", response.status);
+      }
+      try {
+        return { status: response.status, value: JSON.parse(response.body) as unknown };
+      } catch {
+        throw new LocalApiError(`FastAPI returned malformed JSON for ${operation}.`, "malformedJson", response.status);
+      }
     } catch (error) {
       if (error instanceof LocalApiError) throw error;
       throw new LocalApiError(`FastAPI is unavailable for local employee ${operation}.`, "network");
     } finally {
       if (timeout !== undefined) window.clearTimeout(timeout);
     }
+  }
+
+  private async requestJson(
+    request: LocalServiceRequest,
+    operation: string,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<unknown> {
+    return (await this.requestJsonResponse(request, operation, timeoutMs)).value;
   }
 
   async login(request: EmployeeLoginRequest, apiBaseUrl?: string): Promise<EmployeeSession> {
@@ -219,7 +212,24 @@ export class LocalApiClient {
 
   async getHealth(apiBaseUrl?: string): Promise<HealthResponse> {
     void apiBaseUrl;
-    return parseHealthResponse(await this.requestJson({ operation: "health" }, "health check"));
+    const response = await this.requestJsonResponse(
+      { operation: "health" },
+      "health check",
+      requestTimeoutMs,
+      [503],
+    );
+    const health = parseHealthResponse(response.value, response.status);
+    if (
+      (response.status === 200 && health.status !== "ready") ||
+      (response.status === 503 && health.status !== "degraded")
+    ) {
+      throw new LocalApiError(
+        "FastAPI returned an inconsistent health response.",
+        "invalidResponse",
+        response.status,
+      );
+    }
+    return health;
   }
 
   async listChatSessions(apiBaseUrl?: string): Promise<ChatSessionListResponse> {
