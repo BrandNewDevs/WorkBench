@@ -2,7 +2,7 @@
 
 `AIEngine` is the only AI interface Backend 1 needs to learn. It hides model health,
 deterministic routing, vision/OCR, local knowledge ingestion and retrieval, structured drafting,
-tool proposals, and code repair.
+tool proposals, code repair, and bounded local text conversation.
 
 The AI module does not own FastAPI routes, workflow transitions, upload approval, persistence,
 artifact rendering, sandbox execution, or delivery of progress events.
@@ -104,3 +104,33 @@ In particular, `ModelNotInstalled`, `ModelCapacityError`, `InvalidStructuredOutp
 
 Hardware benchmark and Jetson promotion instructions are in
 [`JETSON_VALIDATION.md`](../../JETSON_VALIDATION.md).
+
+## Basic local conversation handoff
+
+The ordinary chat endpoint should pass an authenticated session ID, the current user message, and
+the bounded ordered history it read from its own local message store. The AI module does not read
+or persist messages itself, and it does not start a workflow, retrieve evidence, or invoke tools.
+
+```python
+from app.ai.engine import AIEngine
+from app.ai.schemas import ConversationMessage, ConversationRequest
+
+reply = await engine.reply_to_conversation(
+    ConversationRequest(
+        session_id=session_id,
+        user_message=user_message,
+        history=(
+            ConversationMessage(role="user", content="Earlier local question."),
+            ConversationMessage(role="assistant", content="Earlier local answer."),
+        ),
+        timeout_seconds=120,
+    )
+)
+```
+
+The history limit is twenty completed user/assistant turns and the engine rejects input that cannot fit its
+configured context budget. It never silently drops or summarizes conversation data. The reply
+contains only assistant text plus safe local model, fallback, timing, and token metadata.
+`ModelNotInstalled`, `ModelRuntimeUnavailable`, `ModelRequestTimeout`, and
+`ConversationContextTooLarge` are typed failures Backend 1 must translate into user-facing API
+responses. A cancelled FastAPI task propagates cancellation through the local Ollama request.

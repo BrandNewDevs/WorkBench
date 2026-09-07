@@ -14,6 +14,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
+MAX_CONVERSATION_HISTORY_MESSAGES = 40
+
 
 class ContractModel(BaseModel):
     """Base model for strict Python/JSON application boundaries."""
@@ -543,7 +545,10 @@ class ConversationRequest(ContractModel):
 
     session_id: str = Field(min_length=1)
     user_message: str = Field(min_length=1)
-    history: tuple[ConversationMessage, ...] = Field(default=(), max_length=20)
+    history: tuple[ConversationMessage, ...] = Field(
+        default=(),
+        max_length=MAX_CONVERSATION_HISTORY_MESSAGES,
+    )
     timeout_seconds: float | None = Field(default=None, gt=0)
 
     @field_validator("user_message")
@@ -559,6 +564,8 @@ class ConversationRequest(ContractModel):
     def require_alternating_completed_history(self) -> ConversationRequest:
         """Keep the supplied history ordered and ready for the next user turn."""
 
+        if self.history and self.history[0].role != "user":
+            raise ValueError("conversation history must start with a user message")
         for previous, current in zip(self.history, self.history[1:], strict=False):
             if previous.role == current.role:
                 raise ValueError("conversation history roles must alternate")
