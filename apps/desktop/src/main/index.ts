@@ -17,6 +17,9 @@ import {
   chatMessageAppendRequestSchema,
   chatSessionCreateRequestSchema,
   chatSessionIdSchema,
+  conversationCreateRequestSchema,
+  localGenerationRequestTimeoutMs,
+  minGenerationRequestTimeoutMs,
   sessionActivityEventSchema,
 } from "../shared/contracts";
 
@@ -44,6 +47,21 @@ let localSigningSecret: string | undefined;
 const managedServiceCookieUrl = "http://127.0.0.1/";
 const localServiceFrameLimitBytes = 1024 * 1024;
 const localServiceRequestTimeoutMs = 5_000;
+// File transfers stream through the same pipe and may outlast a normal request.
+const localServiceUploadTimeoutMs = 120_000;
+
+// Issue #56: local text generation on Jetson-class hardware can legitimately
+// run for minutes. Health, auth, and session traffic keep the short general
+// watchdog; only generation requests may wait this long. The value is
+// configurable for slower local models and stays within the 120-180 second
+// validation window.
+function resolveGenerationRequestTimeoutMs(): number {
+  const raw = process.env.WORKBENCH_LOCAL_GENERATION_TIMEOUT_MS;
+  const configured = raw === undefined ? Number.NaN : Number(raw);
+  if (!Number.isFinite(configured)) return localGenerationRequestTimeoutMs;
+  return Math.min(Math.max(Math.round(configured), minGenerationRequestTimeoutMs), localGenerationRequestTimeoutMs);
+}
+const localServiceGenerationRequestTimeoutMs = resolveGenerationRequestTimeoutMs();
 let localServiceCapability: string | undefined;
 let localServiceVerified = false;
 let startingLocalService = false;
@@ -714,6 +732,7 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
   let path: string;
   let init: RequestInit;
   let filePath: string | undefined;
+  let timeoutMs = localServiceRequestTimeoutMs;
   switch (request.operation) {
     case "health":
       path = "/health";
@@ -742,6 +761,18 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
       path = "/chat/sessions";
       init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
       break;
+    case "conversationCreate": {
+      if (
+        !chatSessionIdSchema.safeParse(request.sessionId).success ||
+        !conversationCreateRequestSchema.safeParse(request.request).success
+      ) {
+        throw new Error("The local service request is not allowed.");
+      }
+      path = `/chat/sessions/${request.sessionId}/conversation`;
+      init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.request) };
+      timeoutMs = localServiceGenerationRequestTimeoutMs;
+      break;
+    }
     case "workflowUpload": {
       if (!chatSessionIdSchema.safeParse(request.sessionId).success || !chatSessionIdSchema.safeParse(request.uploadToken).success) {
         throw new Error("The local service request is not allowed.");
@@ -750,6 +781,7 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
       if (!filePath) throw new Error("The selected local file is no longer available.");
       path = `/sessions/${request.sessionId}/uploads`;
       init = { method: "POST" };
+      timeoutMs = localServiceUploadTimeoutMs;
       break;
     }
     case "chatGetSession":
@@ -786,7 +818,7 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
     "X-Workbench-Capability": localServiceCapability,
     ...(cookieHeader ? { Cookie: cookieHeader } : {}),
     ...(init.headers as Record<string, string> | undefined),
-  }, typeof init.body === "string" ? init.body : undefined, filePath, filePath ? 120_000 : localServiceRequestTimeoutMs);
+  }, typeof init.body === "string" ? init.body : undefined, filePath, timeoutMs);
   for (const [name, value] of response.headers) {
     if (name.toLowerCase() !== "set-cookie") continue;
     const [pair, ...attributes] = value.split(";").map((part) => part.trim());

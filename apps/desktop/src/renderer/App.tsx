@@ -8,6 +8,7 @@ import { AccountPopover } from "./components/AccountPopover";
 import { CommandPalette } from "./components/CommandPalette";
 import { ChatPage } from "./components/ChatPage";
 import { LoginScreen } from "./components/LoginScreen";
+import { QwenChatPage } from "./components/QwenChatPage";
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { SettingsPage, type HealthState } from "./components/SettingsPage";
 import { WorkspaceSidebar, type WorkspaceView } from "./components/WorkspaceSidebar";
@@ -196,7 +197,13 @@ function Workspace({
         onSignOut={onSignOut}
       />
         <main
-          aria-label={activeView === "settings" ? "Settings workspace" : "Chat workspace"}
+          aria-label={
+            activeView === "settings"
+              ? "Settings workspace"
+              : activeView === "qwenChat"
+                ? "Local Qwen chat"
+                : "Chat workspace"
+          }
         className={`${activeView === "settings" ? "workspace-settings" : "workspace-chat"} relative isolate flex min-h-0 min-w-0 flex-col bg-background`}
       >
         <Toaster position="top-right" />
@@ -217,6 +224,10 @@ function Workspace({
             setActiveView("settings");
             setAccountOpen(true);
           }}
+          onOpenQwenChat={() => {
+            setAccountOpen(false);
+            setActiveView("qwenChat");
+          }}
           onOpenSettings={(section) => {
             onSettingsOpen(section);
             setActiveView("settings");
@@ -232,6 +243,8 @@ function Workspace({
             onRefreshHealth={() => void refreshHealth()}
             selectedSection={settingsSection}
           />
+        ) : activeView === "qwenChat" ? (
+          <QwenChatPage apiBaseUrl={apiBaseUrl} connected={access.kind === "authenticated"} />
         ) : (
           <ChatPage
             backendConnected={access.kind === "authenticated"}

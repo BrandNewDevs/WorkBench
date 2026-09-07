@@ -1,5 +1,6 @@
 import { Command } from "cmdk";
 import {
+  MessageCircle,
   MessageSquare,
   PanelLeftClose,
   RefreshCw,
@@ -17,6 +18,7 @@ type CommandPaletteDialogProps = {
   onGoToChat: () => void;
   onOpenAccount: () => void;
   onOpenChange: (open: boolean) => void;
+  onOpenQwenChat: () => void;
   onOpenSettings: (section: SettingsSection) => void;
   onToggleSidebar: () => void;
   open: boolean;
@@ -47,6 +49,7 @@ export function CommandPaletteDialog({
   onGoToChat,
   onOpenAccount,
   onOpenChange,
+  onOpenQwenChat,
   onOpenSettings,
   onToggleSidebar,
   open,
@@ -64,6 +67,13 @@ export function CommandPaletteDialog({
       label: "Go to Chat",
       onSelect: onGoToChat,
       value: "go-to-chat",
+    },
+    {
+      icon: MessageCircle,
+      keywords: ["qwen", "local", "text", "conversation", "jetson"],
+      label: "Open Local Qwen chat",
+      onSelect: onOpenQwenChat,
+      value: "open-local-qwen-chat",
     },
     {
       icon: SlidersHorizontal,

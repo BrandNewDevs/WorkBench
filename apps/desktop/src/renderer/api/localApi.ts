@@ -5,6 +5,8 @@ import type {
   ChatSession,
   ChatSessionCreateRequest,
   ChatSessionListResponse,
+  ConversationCreateRequest,
+  ConversationCreateResponse,
   EmployeeLoginRequest,
   EmployeeLoginResponse,
   EmployeeLogoutResponse,
@@ -20,7 +22,9 @@ import {
   chatMessageSchema,
   chatSessionListResponseSchema,
   chatSessionSchema,
+  conversationCreateResponseSchema,
   healthResponseSchema,
+  rendererGenerationRequestTimeoutMs,
   workflowUploadResponseSchema,
 } from "../../shared/contracts.ts";
 import type { ZodType } from "zod";
@@ -42,12 +46,15 @@ export type LocalApiErrorKind =
 export class LocalApiError extends Error {
   readonly kind: LocalApiErrorKind;
   readonly status: number | undefined;
+  /** Sanitized FastAPI error code, when the body carried one. */
+  readonly errorCode: string | undefined;
 
-  constructor(message: string, kind: LocalApiErrorKind, status?: number) {
+  constructor(message: string, kind: LocalApiErrorKind, status?: number, errorCode?: string) {
     super(message);
     this.name = "LocalApiError";
     this.kind = kind;
     this.status = status;
+    this.errorCode = errorCode;
   }
 }
 
@@ -164,12 +171,17 @@ export class LocalApiClient {
       if (response.status === 404) {
         const errorCode = chatErrorCodeSchema.safeParse(parseErrorCode(response.body));
         if (errorCode.success && errorCode.data === "session_not_found") {
-          throw new LocalApiError("The chat session was not found for this employee.", "resourceNotFound", response.status);
+          throw new LocalApiError("The chat session was not found for this employee.", "resourceNotFound", response.status, errorCode.data);
         }
         throw new LocalApiError(`The local employee ${operation} endpoint is unavailable on FastAPI.`, "endpointUnavailable", response.status);
       }
       if ((response.status < 200 || response.status >= 300) && !acceptedStatuses.includes(response.status)) {
-        throw new LocalApiError(`FastAPI ${operation} returned HTTP ${response.status}.`, "http", response.status);
+        throw new LocalApiError(
+          `FastAPI ${operation} returned HTTP ${response.status}.`,
+          "http",
+          response.status,
+          parseErrorCode(response.body),
+        );
       }
       try {
         return { status: response.status, value: JSON.parse(response.body) as unknown };
@@ -286,6 +298,25 @@ export class LocalApiClient {
       await this.requestJson({ operation: "workflowUpload", sessionId, uploadToken }, "workflow upload", 120_000),
       "workflow upload",
     );
+  }
+
+  /**
+   * One complete local conversation turn. Generation may legitimately take
+   * minutes, so this call races the renderer guard that outlives the
+   * main-process generation watchdog instead of the short request timeout.
+   */
+  async sendConversationMessage(
+    sessionId: string,
+    request: ConversationCreateRequest,
+    apiBaseUrl?: string,
+  ): Promise<ConversationCreateResponse> {
+    void apiBaseUrl;
+    const response = await this.requestJsonResponse(
+      { operation: "conversationCreate", sessionId, request },
+      "local conversation turn",
+      rendererGenerationRequestTimeoutMs,
+    );
+    return parseChat(conversationCreateResponseSchema, response.value, "local conversation turn");
   }
 }
 

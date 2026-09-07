@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ChatMessage, ChatSession, LocalServiceRequest, LocalServiceResponse } from "../src/shared/contracts.ts";
+import {
+  localGenerationRequestTimeoutMs,
+  minGenerationRequestTimeoutMs,
+  rendererGenerationRequestTimeoutMs,
+} from "../src/shared/contracts.ts";
 import { LocalApiError, apiFailureWasDefinitive, localApi } from "../src/renderer/api/localApi.ts";
 
 interface StubBridge {
@@ -375,4 +380,118 @@ test("workflow uploads use only Electron-issued opaque selection tokens", async 
   const uploaded = await localApi.uploadWorkflowFile(sessionPayload.sessionId, uploadToken);
   assert.equal(uploaded.fileName, "report.pdf");
   assert.deepEqual(observed, { operation: "workflowUpload", sessionId: sessionPayload.sessionId, uploadToken });
+});
+
+const conversationPayload = {
+  sessionId: sessionPayload.sessionId,
+  userMessageId: "9ef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e97",
+  assistantMessageId: "aef46b0e-7c1a-4d9e-9f2a-3f5c6b7d8e98",
+  assistantText: "Local Qwen reply.",
+  selectedModel: "qwen3:4b",
+  usedFallback: false,
+  fallbackReason: null,
+  metrics: {
+    clientElapsedMs: 12.5,
+    totalDurationNs: 1_000_000,
+    loadDurationNs: null,
+    promptEvalCount: 12,
+    promptEvalDurationNs: 3_000_000,
+    evalCount: 9,
+    evalDurationNs: 4_000_000,
+  },
+};
+
+test("generation requests use dedicated timeouts that outlive local inference", () => {
+  assert.equal(minGenerationRequestTimeoutMs, 120_000);
+  assert.equal(localGenerationRequestTimeoutMs, 180_000);
+  assert.equal(rendererGenerationRequestTimeoutMs, localGenerationRequestTimeoutMs + 10_000);
+});
+
+test("conversation turns round-trip the request and parse the reply contract", async () => {
+  const observed: LocalServiceRequest[] = [];
+  installBridge({
+    requestLocalService: async (request) => {
+      observed.push(request);
+      return ok(conversationPayload);
+    },
+  });
+
+  const turn = await localApi.sendConversationMessage(sessionPayload.sessionId, {
+    message: "Follow-up question",
+    clientRequestId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  });
+
+  assert.equal(turn.sessionId, sessionPayload.sessionId);
+  assert.equal(turn.assistantText, "Local Qwen reply.");
+  assert.equal(turn.selectedModel, "qwen3:4b");
+  assert.equal(turn.usedFallback, false);
+  assert.equal(turn.fallbackReason, null);
+  assert.equal(turn.metrics?.promptEvalCount, 12);
+  assert.deepEqual(observed, [
+    {
+      operation: "conversationCreate",
+      sessionId: sessionPayload.sessionId,
+      request: { message: "Follow-up question", clientRequestId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d" },
+    },
+  ]);
+});
+
+test("malformed conversation replies are rejected instead of trusted", async () => {
+  const invalidReplies: unknown[] = [
+    {},
+    { ...conversationPayload, sessionId: "not-a-uuid" },
+    { ...conversationPayload, assistantText: "" },
+    { ...conversationPayload, selectedModel: "" },
+    { ...conversationPayload, selectedModel: "bad model id with spaces" },
+    { ...conversationPayload, selectedModel: "https://evil.example.com/model" },
+    { ...conversationPayload, selectedModel: "x".repeat(101) },
+    { ...conversationPayload, usedFallback: "no" },
+    { ...conversationPayload, fallbackReason: "x".repeat(501) },
+    { ...conversationPayload, fallbackReason: 42 },
+    { ...conversationPayload, metrics: { ...conversationPayload.metrics, clientElapsedMs: -1 } },
+    { ...conversationPayload, metrics: { ...conversationPayload.metrics, evalCount: 1.5 } },
+    { ...conversationPayload, userMessageId: undefined },
+    { ...conversationPayload, unexpectedField: "rejected" },
+  ];
+  for (const payload of invalidReplies) {
+    installBridge({ requestLocalService: async () => ok(payload) });
+    await assert.rejects(
+      localApi.sendConversationMessage(sessionPayload.sessionId, { message: "Follow-up question" }),
+      (error: unknown) => error instanceof Error && error.name === "LocalApiError",
+    );
+  }
+});
+
+test("conversation failure codes are attached for safe, actionable mapping", async () => {
+  const cases: ReadonlyArray<[number, string, string]> = [
+    [503, "text_model_unavailable", "sensitive model detail"],
+    [503, "ollama_unavailable", "http://10.0.0.1:11434 refused"],
+    [504, "generation_timeout", "stack trace"],
+    [413, "conversation_too_large", "token count"],
+    [409, "conversation_conflict", "conflict detail"],
+    [409, "session_not_active", "closed detail"],
+  ];
+  for (const [status, code, backendMessage] of cases) {
+    installBridge({
+      requestLocalService: async () => ({ status, body: JSON.stringify({ code, message: backendMessage }) }),
+    });
+    await assert.rejects(
+      localApi.sendConversationMessage(sessionPayload.sessionId, { message: "Follow-up question" }),
+      (error: unknown) =>
+        error instanceof LocalApiError && error.kind === "http" && error.status === status && error.errorCode === code,
+    );
+  }
+});
+
+test("conversation 404s keep the resource-not-found distinction", async () => {
+  installBridge({
+    requestLocalService: async () => ({
+      status: 404,
+      body: JSON.stringify({ code: "session_not_found", message: "The chat session was not found for this employee." }),
+    }),
+  });
+  await assert.rejects(
+    localApi.sendConversationMessage(sessionPayload.sessionId, { message: "Follow-up question" }),
+    (error: unknown) => error instanceof LocalApiError && error.kind === "resourceNotFound" && error.status === 404,
+  );
 });

@@ -20,7 +20,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
-export type WorkspaceView = "chat" | "settings";
+export type WorkspaceView = "chat" | "qwenChat" | "settings";
 
 type WorkspaceSidebarProps = {
   access: { kind: "authenticated"; session: EmployeeSession } | { kind: "developmentBypass" };
@@ -105,6 +105,30 @@ export function WorkspaceSidebar({
                 </Button>
               ))}
             </nav>
+            <div className="min-h-0 flex-1" />
+          </>
+        ) : activeView === "qwenChat" ? (
+          <>
+            <div className="px-4 pb-2 pt-3">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                Local Qwen chat
+              </h2>
+            </div>
+            <nav aria-label="Workspace navigation" className="space-y-1 px-3 pt-1">
+              <Button
+                className={navigationClassName(true)}
+                onClick={() => onNavigate("chat")}
+                type="button"
+                variant="ghost"
+              >
+                <ArrowLeft aria-hidden="true" className="size-4" strokeWidth={1.75} />
+                <span>Back to chats</span>
+              </Button>
+            </nav>
+            <p className="px-4 pt-4 text-xs leading-5 text-muted-foreground">
+              Plain multi-turn text conversation with the local Qwen model for validation. Documents and workflow
+              tools are not used here.
+            </p>
             <div className="min-h-0 flex-1" />
           </>
         ) : (

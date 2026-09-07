@@ -13,6 +13,20 @@ export const IPC_CHANNELS = {
 /** The only FastAPI origin the desktop client may contact. */
 export const LOCAL_API_ORIGIN = "http://127.0.0.1:8000";
 
+/**
+ * Generation-specific IPC watchdogs. Local text generation can legitimately
+ * run for minutes on Jetson-class hardware, while health, auth, and session
+ * traffic keep the short general timeout.
+ */
+export const minGenerationRequestTimeoutMs = 120_000;
+/** Watchdog the Electron main process applies to generation requests. */
+export const localGenerationRequestTimeoutMs = 180_000;
+/**
+ * The renderer race must outlive the main-process watchdog so a slow local
+ * reply surfaces as an error instead of being silently dropped.
+ */
+export const rendererGenerationRequestTimeoutMs = 190_000;
+
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 export type LocalServiceMode = "attached" | "managed";
@@ -101,6 +115,7 @@ export type LocalServiceRequest =
   | { operation: "chatGetSession"; sessionId: string }
   | { operation: "chatListMessages"; sessionId: string }
   | { operation: "chatAppendMessage"; sessionId: string; request: ChatMessageAppendRequest }
+  | { operation: "conversationCreate"; sessionId: string; request: ConversationCreateRequest }
   | { operation: "workflowUpload"; sessionId: string; uploadToken: string };
 
 export interface LocalServiceResponse {
@@ -354,6 +369,47 @@ export const workflowUploadResponseSchema = z.strictObject({
   createdAt: chatTimestampSchema,
 });
 
+/** One text-only local conversation turn; workflow and retrieval fields are rejected. */
+export const conversationMessageMaxLength = 20_000;
+
+export const conversationCreateRequestSchema = z.strictObject({
+  message: z
+    .string()
+    .min(1)
+    .max(conversationMessageMaxLength)
+    .refine((message) => message.trim().length > 0, { message: "message must not be blank" }),
+  /** Stable per-attempt idempotency key so an unconfirmed turn can be reconciled. */
+  clientRequestId: uuidSchema.optional(),
+});
+
+/** Non-confidential timing and token counts reported with a completed turn. */
+export const conversationMetricsSchema = z.strictObject({
+  clientElapsedMs: z.number().min(0),
+  totalDurationNs: z.number().int().nonnegative().nullable(),
+  loadDurationNs: z.number().int().nonnegative().nullable(),
+  promptEvalCount: z.number().int().nonnegative().nullable(),
+  promptEvalDurationNs: z.number().int().nonnegative().nullable(),
+  evalCount: z.number().int().nonnegative().nullable(),
+  evalDurationNs: z.number().int().nonnegative().nullable(),
+});
+
+/** One persisted conversation turn plus the safe local-model facts to display. */
+export const conversationCreateResponseSchema = z.strictObject({
+  sessionId: uuidSchema,
+  userMessageId: uuidSchema,
+  assistantMessageId: uuidSchema,
+  assistantText: z.string().min(1).max(20_000),
+  /** Bounded model-identifier shape; malformed values fail parsing, not rendering. */
+  selectedModel: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  usedFallback: z.boolean(),
+  fallbackReason: z.string().max(500).nullable(),
+  metrics: conversationMetricsSchema.nullable(),
+});
+
 export const activityEventTypeSchema = z.enum([
   "session.created",
   "upload.accepted",
@@ -408,4 +464,7 @@ export type ChatSessionCreateRequest = z.infer<typeof chatSessionCreateRequestSc
 
 export type ChatMessageAppendRequest = z.infer<typeof chatMessageAppendRequestSchema>;
 export type WorkflowUploadResponse = z.infer<typeof workflowUploadResponseSchema>;
+export type ConversationCreateRequest = z.infer<typeof conversationCreateRequestSchema>;
+export type ConversationMetrics = z.infer<typeof conversationMetricsSchema>;
+export type ConversationCreateResponse = z.infer<typeof conversationCreateResponseSchema>;
 export type SessionActivityEvent = z.infer<typeof sessionActivityEventSchema>;

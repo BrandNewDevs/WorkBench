@@ -9,11 +9,12 @@ type CommandPaletteProps = {
   onCheckLocalService: () => void;
   onGoToChat: () => void;
   onOpenAccount: () => void;
+  onOpenQwenChat: () => void;
   onOpenSettings: (section: SettingsSection) => void;
   onToggleSidebar: () => void;
 };
 
-export function CommandPalette({ onCheckLocalService, onGoToChat, onOpenAccount, onOpenSettings, onToggleSidebar }: CommandPaletteProps) {
+export function CommandPalette({ onCheckLocalService, onGoToChat, onOpenAccount, onOpenQwenChat, onOpenSettings, onToggleSidebar }: CommandPaletteProps) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -38,6 +39,7 @@ export function CommandPalette({ onCheckLocalService, onGoToChat, onOpenAccount,
           onGoToChat={onGoToChat}
           onOpenAccount={onOpenAccount}
           onOpenChange={setOpen}
+          onOpenQwenChat={onOpenQwenChat}
           onOpenSettings={onOpenSettings}
           onToggleSidebar={onToggleSidebar}
           open={open}

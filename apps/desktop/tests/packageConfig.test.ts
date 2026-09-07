@@ -57,6 +57,30 @@ test("child-pipe requests time out and restart the managed service", () => {
   );
 });
 
+test("generation requests get a dedicated configurable watchdog", () => {
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+  const contracts = readFileSync(new URL("../src/shared/contracts.ts", import.meta.url), "utf8");
+
+  assert.match(contracts, /const minGenerationRequestTimeoutMs = 120_000/);
+  assert.match(contracts, /const localGenerationRequestTimeoutMs = 180_000/);
+  assert.match(contracts, /const rendererGenerationRequestTimeoutMs = 190_000/);
+  assert.match(main, /function resolveGenerationRequestTimeoutMs\(\): number/);
+  assert.match(main, /process\.env\.WORKBENCH_LOCAL_GENERATION_TIMEOUT_MS/);
+  assert.match(
+    main,
+    /Math\.min\(Math\.max\(Math\.round\(configured\), minGenerationRequestTimeoutMs\), localGenerationRequestTimeoutMs\)/,
+  );
+  assert.match(main, /const localServiceGenerationRequestTimeoutMs = resolveGenerationRequestTimeoutMs\(\)/);
+  assert.match(main, /case "conversationCreate":/);
+  assert.match(main, /conversationCreateRequestSchema\.safeParse\(request\.request\)\.success/);
+  assert.match(main, /path = `\/chat\/sessions\/\$\{request\.sessionId\}\/conversation`/);
+  assert.match(main, /timeoutMs = localServiceGenerationRequestTimeoutMs/);
+  assert.match(main, /const localServiceUploadTimeoutMs = 120_000/);
+  // Every request flows through the same timeout parameter; nothing falls back to 5s implicitly.
+  assert.match(main, /filePath,\s+timeoutMs\)/);
+  assert.doesNotMatch(main, /filePath \? 120_000/);
+});
+
 test("packaged renderer retains its loopback origin while credentials stay off TCP", () => {
   const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
 
