@@ -5,6 +5,7 @@ import { localApi } from "../api/localApi";
 import { streamTurn } from "../api/turnStream";
 import { pdfTurnSchema, pdfViewSchema, type PdfView } from "../../shared/pdf";
 import type { ChatSession, LocalServiceRequest } from "../../shared/contracts";
+import { pendingPdfTurn, type PendingPdfTurn } from "../lib/pdfTurns";
 
 async function pdfRequest(request: LocalServiceRequest): Promise<unknown> {
   const response = await window.workbench.requestLocalService(request);
@@ -25,6 +26,7 @@ export function PdfChatPage({ onLocalChat }: { onLocalChat: () => void }) {
   const [activity, setActivity] = useState<string[]>([]);
   const [provisional, setProvisional] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const retryRequestRef = useRef<PendingPdfTurn | null>(null);
   useEffect(() => {
     void localApi.listChatSessions().then(result => setSessions(result.sessions.filter(s => s.workflowType === "pdfDocument")));
     return () => abortRef.current?.abort();
@@ -48,7 +50,7 @@ export function PdfChatPage({ onLocalChat }: { onLocalChat: () => void }) {
       if (selected.kind !== "selected") return;
       const id = await ensureSession();
       const uploaded = await localApi.uploadWorkflowFile(id, selected.file.uploadToken);
-      setUploadId(uploaded.uploadId); setFilename(uploaded.fileName);
+      setUploadId(uploaded.uploadId); setFilename(uploaded.fileName); await load(id);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "PDF upload failed"); }
     finally { setBusy(false); }
   };
@@ -56,11 +58,18 @@ export function PdfChatPage({ onLocalChat }: { onLocalChat: () => void }) {
     if (busy || !draft.trim()) return;
     const submitted = draft;
     const abort = new AbortController(); abortRef.current = abort;
+    const pendingRequest = pendingPdfTurn(
+      retryRequestRef.current,
+      submitted,
+      () => crypto.randomUUID(),
+    );
+    const requestId = pendingRequest.requestId;
+    retryRequestRef.current = pendingRequest;
     setBusy(true); setError(""); setActivity([]); setProvisional("");
     try {
       const id = await ensureSession();
       const result = await streamTurn({mode: "pdfDocument", sessionId: id, message: submitted,
-        clientRequestId: crypto.randomUUID(), ...(uploadId ? {uploadId} : {})}, event => {
+        clientRequestId: requestId, ...(uploadId ? {uploadId} : {})}, event => {
         if (event.event === "turn.accepted" && draftRef.current === submitted) changeDraft("");
         if (event.event.startsWith("tool.")) setActivity(old => [...old, event.text]);
         if (event.event === "assistant.reset") setProvisional("");
@@ -68,6 +77,7 @@ export function PdfChatPage({ onLocalChat }: { onLocalChat: () => void }) {
       }, abort.signal);
       pdfTurnSchema.parse(result);
       await load(id);
+      retryRequestRef.current = null;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "PDF generation failed");
       if (!draftRef.current) changeDraft(submitted);
@@ -85,10 +95,10 @@ export function PdfChatPage({ onLocalChat }: { onLocalChat: () => void }) {
   return <section className="flex min-h-0 flex-1 flex-col gap-4 p-8">
     <header className="flex items-center gap-3"><h1 className="text-lg font-medium">PDF</h1>
       <Button variant="outline" onClick={onLocalChat} disabled={busy}>Local chat</Button>
-      <Button variant="outline" disabled={busy} onClick={() => {setSessionId(undefined); setView({source:null,pages:[],turns:[],activity:[]}); setUploadId(undefined); setFilename(""); setActivity([]);}}>New PDF conversation</Button>
+      <Button variant="outline" disabled={busy} onClick={() => {setSessionId(undefined); setView({source:null,pages:[],turns:[],activity:[]}); setUploadId(undefined); setFilename(""); setActivity([]); retryRequestRef.current=null;}}>New PDF conversation</Button>
     </header>
     <p className="text-xs text-muted-foreground">Offline — local models only. Create/edit actions require approval.</p>
-    <nav className="flex flex-wrap gap-2" aria-label="Recent PDF conversations">{sessions.map(s => <Button key={s.sessionId} disabled={busy} variant="ghost" onClick={() => void load(s.sessionId).catch(() => setError("Could not restore PDF conversation"))}>{s.title}</Button>)}</nav>
+    <nav className="flex flex-wrap gap-2" aria-label="Recent PDF conversations">{sessions.map(s => <Button key={s.sessionId} disabled={busy} variant="ghost" onClick={() => {retryRequestRef.current=null; void load(s.sessionId).catch(() => setError("Could not restore PDF conversation"));}}>{s.title}</Button>)}</nav>
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
       {filename && <div className="rounded border p-3">{filename} · {view.source?.pageCount ?? "…"} pages
         {view.pages.length > 0 && <span> · {view.pages.every(p => p.extractionMethod === "native") ? "Native text" : view.pages.every(p => p.extractionMethod === "visual") ? "Scanned" : "Mixed"}</span>}</div>}
