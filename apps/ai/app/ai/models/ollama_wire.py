@@ -46,6 +46,7 @@ class OllamaConversationRequest(OllamaRequestModel):
     messages: tuple[OllamaChatMessage, ...] = Field(min_length=1)
     stream: Literal[False] = False
     think: Literal[False] = False
+    format: dict[str, JsonValue]
     keep_alive: str | int
     options: OllamaGenerationOptions
 
@@ -113,6 +114,7 @@ class OllamaAssistantMessage(OllamaWireModel):
 
     role: str
     content: str
+    thinking: str | None = None
 
 
 class OllamaChatResponse(OllamaWireModel):

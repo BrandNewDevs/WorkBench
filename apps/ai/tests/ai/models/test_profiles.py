@@ -29,6 +29,21 @@ def test_profile_selection_comes_from_environment(monkeypatch: pytest.MonkeyPatc
     assert profile.embedding_candidates == ("qwen3-embedding:0.6b",)
 
 
+def test_laptop_chat_profile_uses_1_7b_without_a_text_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat the small laptop model as intentional rather than degraded fallback use."""
+
+    monkeypatch.setenv("WORKBENCH_AI_MODEL_PROFILE", "laptop-chat-1.7b")
+
+    profile = load_model_profile()
+
+    assert profile.profile_id == "laptop-chat-1.7b"
+    assert profile.text_candidates == ("qwen3:1.7b",)
+    assert profile.vision_candidates == ("qwen3-vl:4b", "qwen3-vl:2b")
+    assert profile.embedding_candidates == ("qwen3-embedding:0.6b",)
+
+
 @pytest.mark.parametrize(
     ("profile_id", "text_model", "vision_model"),
     (

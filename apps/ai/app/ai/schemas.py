@@ -673,14 +673,54 @@ class TextGenerationRequest(ContractModel):
 
 
 class ConversationGenerationRequest(ContractModel):
-    """Low-level free-text request for one local conversational model turn."""
+    """Low-level request for one validated local conversational model turn."""
 
     model: str = Field(min_length=1)
     system_prompt: str = Field(min_length=1)
+    assistant_name: str = Field(default="WorkBench", min_length=1, max_length=100)
+    disclose_runtime_model: bool = True
     messages: tuple[ConversationMessage, ...] = Field(min_length=1)
     limits: GenerationLimits
     timeout_seconds: float | None = Field(default=None, gt=0)
     temperature: float = Field(default=0.2, ge=0, le=1)
+
+    @field_validator("assistant_name")
+    @classmethod
+    def require_single_line_assistant_name(cls, value: str) -> str:
+        """Keep application-controlled identity metadata out of prompt structure."""
+
+        normalized = value.strip()
+        if not normalized or "\n" in normalized or "\r" in normalized:
+            raise ValueError("assistant name must be a non-empty single line")
+        return normalized
+
+    @field_validator("messages")
+    @classmethod
+    def require_current_user_message(
+        cls, messages: tuple[ConversationMessage, ...]
+    ) -> tuple[ConversationMessage, ...]:
+        """Require a current user turn before applying the model-only mode control."""
+
+        if messages[-1].role != "user":
+            raise ValueError("conversation generation must end with the current user message")
+        return messages
+
+
+class ConversationModelOutput(ContractModel):
+    """Validated final answer returned by an ordinary local chat model."""
+
+    answer: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("answer")
+    @classmethod
+    def reject_embedded_thinking_tags(cls, answer: str) -> str:
+        """Never accept hidden-reasoning markup as user-visible answer content."""
+
+        normalized = answer.strip()
+        lowered = normalized.lower()
+        if "<think>" in lowered or "</think>" in lowered:
+            raise ValueError("conversation answer must not contain thinking tags")
+        return normalized
 
 
 class VisionGenerationRequest(ContractModel):

@@ -42,6 +42,7 @@ from app.ai.schemas import (
     Capability,
     ConversationGenerationRequest,
     ConversationGenerationResult,
+    ConversationModelOutput,
     ConversationMessage,
     EmbeddingRequest,
     EmbeddingResult,
@@ -189,6 +190,8 @@ class OllamaModelAdapter:
                 operation=lambda model, remaining_timeout_seconds: self._conversation(
                     model=model,
                     system_prompt=request.system_prompt,
+                    assistant_name=request.assistant_name,
+                    disclose_runtime_model=request.disclose_runtime_model,
                     messages=request.messages,
                     context_window=request.limits.context_window,
                     max_output_tokens=request.limits.max_output_tokens,
@@ -490,6 +493,8 @@ class OllamaModelAdapter:
         *,
         model: str,
         system_prompt: str,
+        assistant_name: str,
+        disclose_runtime_model: bool,
         messages: tuple[ConversationMessage, ...],
         context_window: int,
         max_output_tokens: int,
@@ -498,17 +503,32 @@ class OllamaModelAdapter:
     ) -> ConversationGenerationResult:
         """Call local Ollama without structured-output constraints for ordinary chat."""
 
+        runtime_identity = f"- Assistant name: {assistant_name}"
+        if disclose_runtime_model:
+            runtime_identity += f"\n- Active local model: {model}"
+        controlled_system_prompt = (
+            f"{system_prompt}\n\nAPPLICATION-CONTROLLED RUNTIME IDENTITY:\n"
+            f"{runtime_identity}"
+        )
+        model_messages = (
+            *messages[:-1],
+            messages[-1].model_copy(
+                update={"content": f"{messages[-1].content}\n\n/no_think"}
+            ),
+        )
+        output_schema = ConversationModelOutput.model_json_schema(by_alias=True)
         payload = OllamaConversationRequest(
             model=model,
             messages=(
-                OllamaChatMessage(role="system", content=system_prompt),
+                OllamaChatMessage(role="system", content=controlled_system_prompt),
                 *(
                     OllamaChatMessage.model_validate(
                         {"role": message.role, "content": message.content}
                     )
-                    for message in messages
+                    for message in model_messages
                 ),
             ),
+            format=output_schema,
             keep_alive=self._settings.keep_alive,
             options=OllamaGenerationOptions(
                 temperature=temperature,
@@ -552,12 +572,45 @@ class OllamaModelAdapter:
                 model=model,
                 metrics=metrics,
             )
+        cleaned_content = self._strip_legacy_thinking(result.message.content)
+        try:
+            parsed_output = ConversationModelOutput.model_validate_json(cleaned_content)
+        except ValidationError as error:
+            raise InvalidStructuredOutput(
+                "Ollama returned invalid structured conversation output",
+                model=model,
+                metrics=metrics,
+            ) from error
         return ConversationGenerationResult(
             model=model,
-            text=result.message.content,
+            text=parsed_output.answer,
             done_reason=result.done_reason,
             metrics=metrics,
         )
+
+    @staticmethod
+    def _strip_legacy_thinking(content: str) -> str:
+        """Remove only complete leading legacy blocks and reject ambiguous markup."""
+
+        remaining = content.strip()
+        while remaining.lower().startswith("<think>"):
+            closing_index = remaining.lower().find("</think>")
+            if closing_index < 0:
+                raise InvalidStructuredOutput(
+                    "Ollama returned an unterminated conversation thinking block"
+                )
+            thinking = remaining[len("<think>") : closing_index]
+            if "<think>" in thinking.lower() or "</think>" in thinking.lower():
+                raise InvalidStructuredOutput(
+                    "Ollama returned a nested conversation thinking block"
+                )
+            remaining = remaining[closing_index + len("</think>") :].strip()
+        lowered = remaining.lower()
+        if "<think>" in lowered or "</think>" in lowered:
+            raise InvalidStructuredOutput(
+                "Ollama returned thinking markup inside the conversation answer"
+            )
+        return remaining
 
     async def _embed(
         self,

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.ai.models.ollama_wire import (
+    OllamaConversationRequest,
     OllamaChatMessage,
     OllamaChatRequest,
     OllamaEmbedRequest,
@@ -35,6 +36,24 @@ def test_chat_request_serializes_the_validated_ollama_shape() -> None:
     assert payload["stream"] is False
     assert payload["think"] is False
     assert payload["messages"][1] == {"role": "user", "content": "Return status."}
+
+
+def test_conversation_request_requires_non_thinking_structured_output() -> None:
+    """Keep ordinary chat on the same validated final-answer boundary."""
+
+    request = OllamaConversationRequest(
+        model="qwen3:1.7b",
+        messages=(OllamaChatMessage(role="user", content="Hello.\n\n/no_think"),),
+        format={"type": "object"},
+        keep_alive="5m",
+        options=OllamaGenerationOptions(temperature=0.2, num_ctx=8_192, num_predict=2_048),
+    )
+
+    payload = request.model_dump(mode="json")
+
+    assert payload["stream"] is False
+    assert payload["think"] is False
+    assert payload["format"] == {"type": "object"}
 
 
 @pytest.mark.parametrize(

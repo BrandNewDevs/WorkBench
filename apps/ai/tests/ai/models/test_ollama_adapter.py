@@ -204,7 +204,7 @@ async def test_structured_text_generation_is_local_non_streaming_and_measured() 
 
 
 async def test_conversation_generation_preserves_ordered_turns_without_json_format() -> None:
-    """Send ordinary text chat to local Ollama without structured-output constraints."""
+    """Send ordered chat with an answer-only schema and model-only non-thinking control."""
 
     payloads: list[dict[str, Any]] = []
 
@@ -213,7 +213,17 @@ async def test_conversation_generation_preserves_ordered_turns_without_json_form
             return httpx.Response(200, json=tags_response("qwen3:4b"))
         payload = json.loads(request.content)
         payloads.append(payload)
-        return httpx.Response(200, json=chat_response(payload["model"], "V-17 is remembered."))
+        return httpx.Response(
+            200,
+            json={
+                **chat_response(payload["model"], '{"answer":"V-17 is remembered."}'),
+                "message": {
+                    "role": "assistant",
+                    "content": '{"answer":"V-17 is remembered."}',
+                    "thinking": "This must never leave the adapter.",
+                },
+            },
+        )
 
     profile = load_model_profile()
     adapter = adapter_for(handler)
@@ -221,6 +231,8 @@ async def test_conversation_generation_preserves_ordered_turns_without_json_form
         ConversationGenerationRequest(
             model="qwen3:4b",
             system_prompt="Respond locally.",
+            assistant_name="WorkBench",
+            disclose_runtime_model=True,
             messages=(
                 ConversationMessage(role="user", content="Remember V-17."),
                 ConversationMessage(role="assistant", content="I will remember V-17."),
@@ -236,13 +248,29 @@ async def test_conversation_generation_preserves_ordered_turns_without_json_form
         {
             "model": "qwen3:4b",
             "messages": [
-                {"role": "system", "content": "Respond locally."},
+                {
+                    "role": "system",
+                    "content": (
+                        "Respond locally.\n\nAPPLICATION-CONTROLLED RUNTIME IDENTITY:\n"
+                        "- Assistant name: WorkBench\n- Active local model: qwen3:4b"
+                    ),
+                },
                 {"role": "user", "content": "Remember V-17."},
                 {"role": "assistant", "content": "I will remember V-17."},
-                {"role": "user", "content": "What did I ask you to remember?"},
+                {"role": "user", "content": "What did I ask you to remember?\n\n/no_think"},
             ],
             "stream": False,
             "think": False,
+            "format": {
+                "additionalProperties": False,
+                "description": "Validated final answer returned by an ordinary local chat model.",
+                "properties": {
+                    "answer": {"maxLength": 20000, "minLength": 1, "title": "Answer", "type": "string"}
+                },
+                "required": ["answer"],
+                "title": "ConversationModelOutput",
+                "type": "object",
+            },
             "keep_alive": "5m",
             "options": {
                 "temperature": 0.2,
@@ -274,7 +302,11 @@ async def test_conversation_generation_uses_the_text_fallback_once() -> None:
         if payload.get("keep_alive") == 0:
             return httpx.Response(200, json={"done": True})
         generated_models.append(payload["model"])
-        return httpx.Response(200, json=chat_response(payload["model"], "Local fallback reply."))
+        assert "Active local model: qwen3:1.7b" in payload["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json=chat_response(payload["model"], '{"answer":"Local fallback reply."}'),
+        )
 
     profile = load_model_profile()
     adapter = adapter_for(handler)
@@ -292,6 +324,77 @@ async def test_conversation_generation_uses_the_text_fallback_once() -> None:
     assert result.model == "qwen3:1.7b"
     assert result.used_fallback is True
     assert "not installed" in (result.fallback_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("raw_content", "expected"),
+    (
+        ('<think>private reasoning</think>\n{"answer":"Final answer."}', "Final answer."),
+        ('  <think>first</think><think>second</think> {"answer":"Clean."}', "Clean."),
+    ),
+)
+async def test_conversation_generation_removes_legacy_leading_thinking_blocks(
+    raw_content: str,
+    expected: str,
+) -> None:
+    """Allow only the validated answer after complete leading legacy thinking blocks."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json=tags_response("qwen3:4b"))
+        payload = json.loads(request.content)
+        if payload.get("keep_alive") == 0:
+            return httpx.Response(200, json={"done": True})
+        return httpx.Response(200, json=chat_response(payload["model"], raw_content))
+
+    adapter = adapter_for(handler)
+    profile = load_model_profile()
+    result = await adapter.generate_conversation(
+        ConversationGenerationRequest(
+            model="qwen3:4b",
+            system_prompt="Return the final answer only.",
+            messages=(ConversationMessage(role="user", content="Hello."),),
+            limits=profile.text_limits,
+        )
+    )
+    await adapter.close()
+
+    assert result.text == expected
+
+
+@pytest.mark.parametrize(
+    "raw_content",
+    (
+        '<think>unfinished {"answer":"Do not show this."}',
+        '{"answer":"Visible <think>private</think> reasoning"}',
+        'Okay, the user is asking what this is.',
+    ),
+)
+async def test_conversation_generation_rejects_reasoning_or_non_schema_content(
+    raw_content: str,
+) -> None:
+    """Do not forward raw reasoning-shaped content to Backend or Electron."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json=tags_response("qwen3:4b"))
+        payload = json.loads(request.content)
+        if payload.get("keep_alive") == 0:
+            return httpx.Response(200, json={"done": True})
+        return httpx.Response(200, json=chat_response(payload["model"], raw_content))
+
+    adapter = adapter_for(handler)
+    profile = load_model_profile()
+    with pytest.raises(InvalidStructuredOutput):
+        await adapter.generate_conversation(
+            ConversationGenerationRequest(
+                model="qwen3:4b",
+                system_prompt="Return the final answer only.",
+                messages=(ConversationMessage(role="user", content="Hello."),),
+                limits=profile.text_limits,
+            )
+        )
+    await adapter.close()
 
 
 async def test_conversation_fallback_uses_only_the_remaining_caller_deadline(
@@ -312,7 +415,10 @@ async def test_conversation_fallback_uses_only_the_remaining_caller_deadline(
         inference_timeouts.append(request.extensions["timeout"]["read"])
         if payload["model"] == "qwen3:4b":
             return httpx.Response(500, json={"error": "CUDA out of memory"})
-        return httpx.Response(200, json=chat_response(payload["model"], "Fallback reply."))
+        return httpx.Response(
+            200,
+            json=chat_response(payload["model"], '{"answer":"Fallback reply."}'),
+        )
 
     profile = load_model_profile()
     adapter = adapter_for(handler)
