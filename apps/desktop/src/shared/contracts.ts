@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { TurnStreamRequest, TurnStreamEvent } from "./pdf";
 
 export const IPC_CHANNELS = {
   getDesktopStatus: "desktop:get-status",
@@ -8,6 +9,8 @@ export const IPC_CHANNELS = {
   startSessionEvents: "desktop:start-session-events",
   stopSessionEvents: "desktop:stop-session-events",
   sessionEvent: "desktop:session-event",
+  startTurn: "desktop:start-turn",
+  turnEvent: "desktop:turn-event",
 } as const;
 
 /** The only FastAPI origin the desktop client may contact. */
@@ -116,6 +119,10 @@ export type LocalServiceRequest =
   | { operation: "chatListMessages"; sessionId: string }
   | { operation: "chatAppendMessage"; sessionId: string; request: ChatMessageAppendRequest }
   | { operation: "conversationCreate"; sessionId: string; request: ConversationCreateRequest }
+  | { operation: "pdfView"; sessionId: string }
+  | { operation: "pdfDelete"; sessionId: string }
+  | { operation: "pdfApprove"; sessionId: string; approvalId: string; approve: boolean; argumentsHash: string }
+  | { operation: "pdfArtifact"; sessionId: string; artifactId: string; action: "open" | "save" }
   | { operation: "workflowUpload"; sessionId: string; uploadToken: string };
 
 export interface LocalServiceResponse {
@@ -124,6 +131,7 @@ export interface LocalServiceResponse {
 }
 
 export interface DesktopBridge {
+  subscribeTurn(request: TurnStreamRequest, onUpdate: (event: TurnStreamEvent) => void): () => void;
   getDesktopStatus(): Promise<DesktopStatus>;
   requestLocalService(request: LocalServiceRequest): Promise<LocalServiceResponse>;
   selectUploadFiles(requestedKind: UploadKind): Promise<UploadSelectionResult>;
@@ -274,9 +282,10 @@ export interface WorkflowUploadProgress {
 /** Wire contracts mirroring the local FastAPI chat surface. FastAPI serializes camelCase. */
 
 /** Session kinds; "localConversation" backs plain chat and never runs workflows. */
-export const chatWorkflowTypeSchema = z.enum(["inspectionAnalysis", "codeRepair", "localConversation"]);
+export const chatWorkflowTypeSchema = z.enum(["inspectionAnalysis", "codeRepair", "localConversation", "pdfDocument"]);
 
 export const chatStageSchema = z.enum([
+  "ready",
   "collectingInputs",
   "extracting",
   "retrieving",

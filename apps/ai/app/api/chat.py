@@ -1,6 +1,7 @@
 """Employee chat routes over the private managed pipe; no workflow control here."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
@@ -457,7 +458,7 @@ def build_chat_router() -> APIRouter:
                     TurnEvent(
                         event="turn.failed",
                         text="Local chat failed.",
-                        result=bytes(result.body).decode(),
+                        result={**json.loads(bytes(result.body)), "status": result.status_code},
                     )
                 )
             else:

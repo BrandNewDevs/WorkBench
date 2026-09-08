@@ -28,6 +28,8 @@ import {
   workflowUploadResponseSchema,
 } from "../../shared/contracts.ts";
 import type { ZodType } from "zod";
+import { streamTurn, TurnStreamFailure } from "./turnStream.ts";
+import type { TurnStreamEvent } from "../../shared/pdf";
 
 const requestTimeoutMs = 5_000;
 
@@ -309,8 +311,23 @@ export class LocalApiClient {
     sessionId: string,
     request: ConversationCreateRequest,
     apiBaseUrl?: string,
+    onUpdate?: (event: TurnStreamEvent) => void,
+    signal?: AbortSignal,
   ): Promise<ConversationCreateResponse> {
     void apiBaseUrl;
+    if (onUpdate) {
+      try {
+        return parseChat(conversationCreateResponseSchema, await streamTurn({
+          mode: "localConversation", sessionId, message: request.message,
+          clientRequestId: request.clientRequestId ?? crypto.randomUUID(),
+        }, onUpdate, signal), "local conversation turn");
+      } catch (error) {
+        if (error instanceof TurnStreamFailure && isRecord(error.result) && typeof error.result.code === "string") {
+          throw new LocalApiError(error.message, "http", typeof error.result.status === "number" ? error.result.status : 502, error.result.code);
+        }
+        throw error;
+      }
+    }
     const response = await this.requestJsonResponse(
       { operation: "conversationCreate", sessionId, request },
       "local conversation turn",

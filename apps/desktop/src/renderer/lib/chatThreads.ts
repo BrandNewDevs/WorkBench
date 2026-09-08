@@ -291,7 +291,7 @@ export function chatThreadReducer(state: ChatThreadState, action: ChatThreadActi
       // workspace must not claim them or append workflow turns to their
       // shared history.
       const workflowSessions = action.sessions.filter(
-        (session) => session.workflowType !== "localConversation",
+        (session) => session.workflowType === "inspectionAnalysis" || session.workflowType === "codeRepair",
       );
       const backendThreads = workflowSessions.map(chatThreadFromSession);
       const backendBySessionId = new Map(backendThreads.map((thread) => [thread.sessionId, thread]));
@@ -599,6 +599,7 @@ export function chatStageSteps(
 }
 
 export const chatStageLabels: Record<ChatStage, string> = {
+  ready: "Ready",
   collectingInputs: "Collecting inputs",
   extracting: "Extraction",
   retrieving: "Retrieval",

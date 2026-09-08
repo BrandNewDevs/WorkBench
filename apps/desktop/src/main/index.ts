@@ -2,8 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { app, BrowserWindow, dialog, session, type IpcMainEvent, type IpcMainInvokeEvent, type Session, type WebContents } from "electron";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { app, BrowserWindow, dialog, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Session, type WebContents } from "electron";
+import { turnStreamEventSchema, type TurnStreamRequest, pdfArtifactSchema } from "../shared/pdf";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerDesktopIpc, resolveSelectedUploadPath } from "./ipc";
@@ -73,6 +74,8 @@ interface PendingLocalServiceRequest {
 }
 const localServiceRequests = new Map<string, PendingLocalServiceRequest>();
 interface SessionEventSubscription {
+  turn?: boolean;
+  completed?: boolean;
   sender: WebContents;
   sessionId: string;
   sseBuffer: string;
@@ -238,8 +241,7 @@ function clearManagedLocalService(child?: ChildProcess): void {
   localServiceRequests.clear();
   for (const [subscriptionId, subscription] of sessionEventSubscriptions) {
     if (!subscription.sender.isDestroyed()) {
-      subscription.sender.send(IPC_CHANNELS.sessionEvent, {
-        subscriptionId,
+      emitSessionEvent(subscriptionId, {
         type: "error",
         message: "The local workflow activity stream closed.",
       });
@@ -431,6 +433,11 @@ interface LocalServiceFrame {
 function emitSessionEvent(subscriptionId: string, update: Record<string, unknown>): void {
   const subscription = sessionEventSubscriptions.get(subscriptionId);
   if (!subscription || subscription.sender.isDestroyed()) return;
+  if (subscription.turn && update.type === "error") {
+    subscription.sender.send(IPC_CHANNELS.turnEvent, {subscriptionId,
+      event: {event: "turn.failed", text: "The local service is unavailable. Please retry.", result: null}});
+    return;
+  }
   subscription.sender.send(IPC_CHANNELS.sessionEvent, { subscriptionId, ...update });
 }
 
@@ -449,6 +456,15 @@ function consumeSse(subscriptionId: string, chunk: string): void {
       .join("\n");
     if (data) {
       try {
+        if (subscription.turn) {
+          const parsed = turnStreamEventSchema.safeParse(JSON.parse(data));
+          if (parsed.success && !subscription.sender.isDestroyed()) {
+            if (parsed.data.event === "assistant.completed" || parsed.data.event === "turn.failed") subscription.completed = true;
+            subscription.sender.send(IPC_CHANNELS.turnEvent, { subscriptionId, event: parsed.data });
+          }
+          boundary = subscription.sseBuffer.indexOf("\n\n");
+          continue;
+        }
         const parsed = sessionActivityEventSchema.safeParse(JSON.parse(data));
         if (parsed.success && parsed.data.sessionId === subscription.sessionId) {
           emitSessionEvent(subscriptionId, { type: "event", event: parsed.data });
@@ -484,6 +500,10 @@ function receiveLocalServiceFrame(value: string): void {
         subscription.errorBody += chunk;
       }
     } else if (frame.kind === "streamEnd") {
+      if (subscription.turn && !subscription.completed && !subscription.sender.isDestroyed()) {
+        subscription.sender.send(IPC_CHANNELS.turnEvent, { subscriptionId: frame.id,
+          event: { event: "turn.failed", text: "The local response ended before completion. Please retry.", result: null } });
+      }
       if (subscription.status === undefined || subscription.status < 200 || subscription.status >= 300) {
         emitSessionEvent(frame.id, { type: "error", message: `FastAPI activity stream returned HTTP ${subscription.status ?? "unknown"}.` });
       } else {
@@ -560,10 +580,10 @@ async function sendLocalServiceRequest(
   });
 }
 
-async function startSessionEvents(subscriptionId: string, sessionId: string, afterEventId: number, event: IpcMainEvent): Promise<void> {
+async function startSessionEvents(subscriptionId: string, sessionId: string, afterEventId: number, event: IpcMainEvent, turn?: TurnStreamRequest): Promise<void> {
   if (!chatSessionIdSchema.safeParse(sessionId).success || !chatSessionIdSchema.safeParse(subscriptionId).success) return;
-  sessionEventSubscriptions.set(subscriptionId, { sender: event.sender, sessionId, sseBuffer: "", errorBody: "" });
-  if (!localServiceCapability || !managedLocalServiceIsRunning()) {
+  sessionEventSubscriptions.set(subscriptionId, { sender: event.sender, sessionId, sseBuffer: "", errorBody: "", turn: !!turn });
+  if (!localServiceVerified || !localServiceCapability || !managedLocalServiceIsRunning()) {
     emitSessionEvent(subscriptionId, { type: "error", message: "The local workflow activity stream is temporarily unavailable." });
     sessionEventSubscriptions.delete(subscriptionId);
     return;
@@ -572,17 +592,19 @@ async function startSessionEvents(subscriptionId: string, sessionId: string, aft
   const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
   const frame = JSON.stringify({
     id: subscriptionId,
-    path: `/sessions/${sessionId}/events`,
-    method: "GET",
+    path: turn ? (turn.mode === "pdfDocument" ? `/pdf/sessions/${sessionId}/turns/stream` : `/chat/sessions/${sessionId}/conversation/stream`) : `/sessions/${sessionId}/events`,
+    method: turn ? "POST" : "GET",
     stream: true,
     headers: {
       Accept: "text/event-stream",
+      ...(turn ? { "Content-Type": "application/json" } : {}),
       Origin: rendererOrigin(),
       "X-Workbench-Capability": localServiceCapability,
       ...(afterEventId > 0 ? { "Last-Event-ID": String(afterEventId) } : {}),
       ...(cookieHeader ? { Cookie: cookieHeader } : {}),
     },
-    body: "",
+    body: turn ? Buffer.from(JSON.stringify({message: turn.message, clientRequestId: turn.clientRequestId,
+      ...(turn.mode === "pdfDocument" && turn.uploadId ? {uploadId: turn.uploadId} : {})})).toString("base64") : "",
   });
   localService?.stdin?.write(`${frame}\n`);
 }
@@ -784,6 +806,29 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
       timeoutMs = localServiceUploadTimeoutMs;
       break;
     }
+    case "pdfView":
+    case "pdfDelete":
+    case "pdfApprove":
+    case "pdfArtifact": {
+      if (!chatSessionIdSchema.safeParse(request.sessionId).success) throw new Error("Invalid PDF session");
+      path = `/pdf/sessions/${request.sessionId}`;
+      init = { method: "GET" };
+      if (request.operation === "pdfDelete") {
+        path += "/delete";
+        init = {method: "POST"};
+      }
+      if (request.operation === "pdfApprove") {
+        if (!chatSessionIdSchema.safeParse(request.approvalId).success || typeof request.approve !== "boolean" || !/^[0-9a-f]{64}$/.test(request.argumentsHash)) throw new Error("Invalid PDF approval");
+        path += `/approvals/${request.approvalId}`;
+        init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({approve: request.approve, argumentsHash: request.argumentsHash}) };
+      }
+      if (request.operation === "pdfArtifact") {
+        if (!chatSessionIdSchema.safeParse(request.artifactId).success || !["open", "save"].includes(request.action)) throw new Error("Invalid PDF artifact");
+        path += `/artifacts/${request.artifactId}`;
+      }
+      timeoutMs = localServiceGenerationRequestTimeoutMs;
+      break;
+    }
     case "chatGetSession":
     case "chatListMessages":
     case "chatAppendMessage": {
@@ -819,6 +864,26 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
     ...(cookieHeader ? { Cookie: cookieHeader } : {}),
     ...(init.headers as Record<string, string> | undefined),
   }, typeof init.body === "string" ? init.body : undefined, filePath, timeoutMs);
+  if (request.operation === "pdfArtifact" && response.status === 200) {
+    const payload: unknown = JSON.parse(response.body);
+    if (!payload || typeof payload !== "object" || !("artifact" in payload) || !("contentBase64" in payload) || typeof payload.contentBase64 !== "string") throw new Error("Invalid artifact response");
+    const artifact = pdfArtifactSchema.parse(payload.artifact);
+    const bytes = Buffer.from(payload.contentBase64, "base64");
+    if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("PDF integrity verification failed");
+    if (artifact.artifactId !== request.artifactId || bytes.length !== artifact.sizeBytes || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("Invalid PDF artifact bytes");
+    if (request.action === "save") {
+      const selected = await dialog.showSaveDialog({title: "Save PDF", defaultPath: "workbench-draft.pdf", filters: [{name: "PDF", extensions: ["pdf"]}]});
+      if (!selected.canceled && selected.filePath) await writeFile(selected.filePath, bytes);
+    } else {
+      const folder = join(app.getPath("temp"), "workbench-pdf");
+      await mkdir(folder, { recursive: true });
+      const file = join(folder, `${request.artifactId}.pdf`);
+      await writeFile(file, bytes);
+      const error = await shell.openPath(file);
+      if (error) throw new Error("No local PDF viewer is available");
+    }
+    return {status: 200, body: "{}"};
+  }
   for (const [name, value] of response.headers) {
     if (name.toLowerCase() !== "set-cookie") continue;
     const [pair, ...attributes] = value.split(";").map((part) => part.trim());
@@ -931,6 +996,12 @@ async function startApplication(): Promise<void> {
     getDesktopStatus,
     isTrustedSender: isTrustedIpcSender,
     requestLocalService,
+    startTurn: (id, request, event) => {
+      void startSessionEvents(id, request.sessionId, 0, event, request).catch(() => {
+        if (!event.sender.isDestroyed()) event.sender.send(IPC_CHANNELS.turnEvent, {subscriptionId: id,
+          event: {event: "turn.failed", text: "Could not start local generation.", result: null}});
+      });
+    },
     startSessionEvents: (subscriptionId, sessionId, afterEventId, event) => {
       void startSessionEvents(subscriptionId, sessionId, afterEventId, event).catch(() => {
         emitSessionEvent(subscriptionId, { type: "error", message: "The local workflow activity stream could not start." });

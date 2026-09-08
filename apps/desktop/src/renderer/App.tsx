@@ -9,6 +9,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { ChatPage } from "./components/ChatPage";
 import { LoginScreen } from "./components/LoginScreen";
 import { QwenChatPage } from "./components/QwenChatPage";
+import { PdfChatPage } from "./components/PdfChatPage";
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { SettingsPage, type HealthState } from "./components/SettingsPage";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
@@ -91,6 +92,7 @@ function Workspace({
     access.kind === "authenticated" ? defaultEmployeeWorkspaceView : "chat",
   );
   const [accountOpen, setAccountOpen] = useState(false);
+  const [pdfMode, setPdfMode] = useState(false);
   const [healthState, setHealthState] = useState<HealthState>({ kind: "loading" });
   const [now, setNow] = useState(() => Date.now());
   const chatThreads = useChatThreads({
@@ -259,7 +261,8 @@ function Workspace({
             selectedSection={settingsSection}
           />
         ) : activeView === "qwenChat" ? (
-          <QwenChatPage chat={qwenChat} connected={access.kind === "authenticated"} />
+          pdfMode ? <PdfChatPage onLocalChat={() => setPdfMode(false)} /> :
+          <QwenChatPage chat={qwenChat} connected={access.kind === "authenticated"} onPdf={() => setPdfMode(true)} />
         ) : (
           <ChatPage
             backendConnected={access.kind === "authenticated"}

@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { turnStreamRequestSchema, type TurnStreamRequest } from "../shared/pdf";
 import { randomUUID } from "node:crypto";
 import { basename, extname } from "node:path";
 import { dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type OpenDialogReturnValue } from "electron";
@@ -32,6 +33,7 @@ function registerSelectedPath(filePath: string): string {
 }
 
 interface DesktopIpcDependencies {
+  startTurn: (subscriptionId: string, request: TurnStreamRequest, event: IpcMainEvent) => void;
   getDesktopStatus: () => DesktopStatus;
   isTrustedSender: (event: IpcMainInvokeEvent | IpcMainEvent) => boolean;
   requestLocalService: (request: LocalServiceRequest) => Promise<LocalServiceResponse>;
@@ -234,6 +236,14 @@ function assertTrustedEventSender(event: IpcMainEvent, dependencies: DesktopIpcD
 }
 
 export function registerDesktopIpc(dependencies: DesktopIpcDependencies): void {
+  ipcMain.on(IPC_CHANNELS.startTurn, (event, payload: unknown) => {
+    assertTrustedEventSender(event, dependencies);
+    if (!payload || typeof payload !== "object" || !("subscriptionId" in payload) || !("request" in payload)) return;
+    const parsed = turnStreamRequestSchema.safeParse(payload.request);
+    if (typeof payload.subscriptionId === "string" && parsed.success) {
+      dependencies.startTurn(payload.subscriptionId, parsed.data, event);
+    }
+  });
   ipcMain.handle(IPC_CHANNELS.getDesktopStatus, (event) => {
     assertTrustedSender(event, dependencies);
     return dependencies.getDesktopStatus();

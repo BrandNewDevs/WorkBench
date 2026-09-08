@@ -23,6 +23,7 @@ export interface QwenPickerSession {
 }
 
 export interface QwenChatState {
+  provisionalAnswer?: string;
   /** Bound local session; absent until the first send is accepted. */
   sessionId?: string;
   sessionTitle?: string;
@@ -54,6 +55,7 @@ export const initialQwenChatState: QwenChatState = {
 };
 
 type QwenChatAction =
+  | { type: "answerDelta"; text: string | null }
   | { type: "draftChanged"; draft: string }
   | { type: "pickerLoading" }
   | { type: "pickerLoaded"; sessions: readonly ChatSession[] }
@@ -73,6 +75,8 @@ type QwenChatAction =
 
 export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): QwenChatState {
   switch (action.type) {
+    case "answerDelta":
+      return {...state, provisionalAnswer: action.text === null ? "" : (state.provisionalAnswer ?? "") + action.text};
     case "draftChanged":
       return { ...state, draft: action.draft };
     case "pickerLoading":
@@ -211,6 +215,7 @@ export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): Q
 }
 
 export interface QwenChat {
+  cancel: () => void;
   state: QwenChatState;
   setDraft: (draft: string) => void;
   sendMessage: () => void;
@@ -223,6 +228,8 @@ export interface QwenChat {
 export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; connected: boolean }): QwenChat {
   const [state, dispatch] = useReducer(qwenChatReducer, initialQwenChatState);
   const stateRef = useRef(state);
+  const turnAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => turnAbort.current?.abort(), []);
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -337,10 +344,17 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
           dispatch({ type: "sessionCreated", session: created });
           sessionId = created.sessionId;
         }
+        const abort = new AbortController();
+        turnAbort.current = abort;
         const turn = await localApi.sendConversationMessage(
           sessionId,
           { message: content, clientRequestId },
           apiBaseUrl,
+          (event) => {
+            if (event.event === "assistant.delta") dispatch({type: "answerDelta", text: event.text});
+            if (event.event === "assistant.reset") dispatch({type: "answerDelta", text: null});
+          },
+          abort.signal,
         );
         const stored = await localApi.listChatMessages(sessionId, apiBaseUrl);
         dispatch({
@@ -384,12 +398,14 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
         }
         dispatch({ type: "sendFailed", message: `${baseMessage}${unconfirmedDeliverySuffix}`, definitive: false });
       } finally {
+        turnAbort.current = null;
         sendInFlightRef.current = false;
       }
     })();
   }, [apiBaseUrl, connected]);
 
   return {
+    cancel: () => turnAbort.current?.abort(),
     state,
     setDraft: useCallback((draft: string) => dispatch({ type: "draftChanged", draft }), []),
     sendMessage,
