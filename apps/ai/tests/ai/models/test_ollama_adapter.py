@@ -203,7 +203,7 @@ async def test_structured_text_generation_is_local_non_streaming_and_measured() 
     assert result.metrics.client_elapsed_ms >= 0
 
 
-async def test_conversation_generation_preserves_ordered_turns_without_json_format() -> None:
+async def test_conversation_generation_preserves_ordered_turns_with_answer_schema() -> None:
     """Send ordered chat with an answer-only schema and model-only non-thinking control."""
 
     payloads: list[dict[str, Any]] = []
@@ -265,7 +265,12 @@ async def test_conversation_generation_preserves_ordered_turns_without_json_form
                 "additionalProperties": False,
                 "description": "Validated final answer returned by an ordinary local chat model.",
                 "properties": {
-                    "answer": {"maxLength": 20000, "minLength": 1, "title": "Answer", "type": "string"}
+                    "answer": {
+                        "maxLength": 20000,
+                        "minLength": 1,
+                        "title": "Answer",
+                        "type": "string",
+                    }
                 },
                 "required": ["answer"],
                 "title": "ConversationModelOutput",

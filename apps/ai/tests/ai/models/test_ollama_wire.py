@@ -4,9 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.ai.models.ollama_wire import (
-    OllamaConversationRequest,
     OllamaChatMessage,
     OllamaChatRequest,
+    OllamaConversationRequest,
     OllamaEmbedRequest,
     OllamaGenerationOptions,
     OllamaUnloadRequest,
