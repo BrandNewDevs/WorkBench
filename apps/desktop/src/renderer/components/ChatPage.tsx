@@ -127,7 +127,7 @@ function ChatComposer({ canSend, disabledReason, draft, isSelecting, isSending, 
         id="chat-draft"
         onChange={(event) => onDraftChange(event.target.value)}
         onKeyDown={(event) => {
-          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             send();
           }

@@ -2,15 +2,18 @@
 
 from hashlib import sha256
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import pymupdf
 
 from app.pdf.contracts import (
+    PdfAddAnnotation,
     PdfDocumentDraft,
     PdfEditPlan,
     PdfExtractionMethod,
     PdfPage,
+    PdfRedactBlock,
+    PdfReplaceText,
     PdfSource,
     PdfTable,
     PdfTextBlock,
@@ -50,7 +53,7 @@ class LocalPdfDocumentEngine:
     def inspect(self, source: PdfSource, path: Path) -> tuple[PdfPage, ...]:
         self._require_safe_source(source, path)
         try:
-            with pymupdf.open(path) as document:
+            with pymupdf.open(path) as document:  # type: ignore[no-untyped-call]
                 if document.needs_pass:
                     raise PdfDocumentError("encrypted PDFs are not supported")
                 if document.page_count != source.page_count:
@@ -73,13 +76,16 @@ class LocalPdfDocumentEngine:
                         bbox = block.get("bbox", ())
                         if len(bbox) != 4:
                             continue
-                        first_span = next(
-                            (
-                                span
-                                for line in block.get("lines", ())
-                                for span in line.get("spans", ())
+                        first_span = cast(
+                            dict[str, object],
+                            next(
+                                (
+                                    span
+                                    for line in block.get("lines", ())
+                                    for span in line.get("spans", ())
+                                ),
+                                {},
                             ),
-                            {},
                         )
                         block_digest = sha256(
                             f"{source.sha256}:{index + 1}:{block_index}:{text}".encode()
@@ -95,7 +101,9 @@ class LocalPdfDocumentEngine:
                                 y1=float(bbox[3]),
                                 font_name=str(first_span.get("font", "")) or None,
                                 font_size=(
-                                    float(first_span["size"]) if first_span.get("size") else None
+                                    float(cast(float, first_span["size"]))
+                                    if first_span.get("size")
+                                    else None
                                 ),
                             )
                         )
@@ -154,21 +162,23 @@ class LocalPdfDocumentEngine:
             raise PdfDocumentError("edit plan does not match the uploaded PDF")
         block_map = {block.block_id: block for page in pages for block in page.text_blocks}
         try:
-            with pymupdf.open(path) as document:
+            with pymupdf.open(path) as document:  # type: ignore[no-untyped-call]
                 if document.needs_pass:
                     raise PdfDocumentError("encrypted PDFs are not supported")
                 for operation in plan.operations:
-                    if operation.operation in {"replaceText", "redactBlock"}:
+                    if isinstance(operation, (PdfReplaceText, PdfRedactBlock)):
                         block = block_map.get(operation.block_id)
                         if block is None:
                             raise PdfDocumentError(
                                 "edit plan references a non-existent native text block"
                             )
                         page = document.load_page(block.page_number - 1)
-                        rect = pymupdf.Rect(block.x0, block.y0, block.x1, block.y1)
+                        rect = pymupdf.Rect(  # type: ignore[no-untyped-call]
+                            block.x0, block.y0, block.x1, block.y1
+                        )
                         page.add_redact_annot(rect, fill=(1, 1, 1))
                         page.apply_redactions()
-                        if operation.operation == "replaceText":
+                        if isinstance(operation, PdfReplaceText):
                             inserted = page.insert_textbox(
                                 rect,
                                 operation.replacement,
@@ -181,14 +191,16 @@ class LocalPdfDocumentEngine:
                                 raise PdfDocumentError(
                                     "replacement text does not fit the original text area"
                                 )
-                    else:
+                    elif isinstance(operation, PdfAddAnnotation):
                         if operation.page_number > document.page_count:
                             raise PdfDocumentError("annotation page does not exist")
                         page = document.load_page(operation.page_number - 1)
                         if operation.x > page.rect.width or operation.y > page.rect.height:
                             raise PdfDocumentError("annotation position is outside the page")
                         page.add_text_annot(
-                            pymupdf.Point(operation.x, operation.y),
+                            pymupdf.Point(  # type: ignore[no-untyped-call]
+                                operation.x, operation.y
+                            ),
                             operation.text,
                             icon="Note",
                         )
@@ -221,7 +233,7 @@ class LocalPdfDocumentEngine:
     @staticmethod
     def _extract_tables(page: pymupdf.Page, page_number: int) -> tuple[PdfTable, ...]:
         try:
-            tables = page.find_tables().tables
+            tables = page.find_tables().tables  # type: ignore[no-untyped-call]
         except AttributeError, RuntimeError, ValueError:
             return ()
         extracted: list[PdfTable] = []
@@ -235,14 +247,17 @@ class LocalPdfDocumentEngine:
         try:
             if not destination.is_file() or destination.stat().st_size <= 4:
                 raise PdfDocumentError("local PDF renderer produced no output")
-            with pymupdf.open(destination) as document:
+            with pymupdf.open(destination) as document:  # type: ignore[no-untyped-call]
                 if document.needs_pass or document.page_count == 0:
                     raise PdfDocumentError("local PDF output failed validation")
                 for page in document:
                     if page.rect.is_empty:
                         raise PdfDocumentError("local PDF output contains an empty page")
-                    page.get_pixmap(matrix=pymupdf.Matrix(0.5, 0.5), alpha=False)
-                return document.page_count
+                    page.get_pixmap(
+                        matrix=pymupdf.Matrix(0.5, 0.5),  # type: ignore[no-untyped-call]
+                        alpha=False,
+                    )
+                return cast(int, document.page_count)
         except PdfDocumentError:
             destination.unlink(missing_ok=True)
             raise

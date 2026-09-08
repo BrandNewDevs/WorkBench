@@ -91,7 +91,7 @@ export function QwenChatPage({ chat, connected }: QwenChatPageProps) {
             maxLength={conversationMessageMaxLength}
             onChange={(event) => chat.setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 send();
               }

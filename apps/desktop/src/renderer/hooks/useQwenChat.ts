@@ -129,6 +129,9 @@ export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): Q
         ...state,
         sendState: "sending",
         sendError: undefined,
+        // The composer clears as soon as the turn is accepted locally.  The
+        // immutable pending snapshot remains available for a safe retry.
+        draft: "",
         // A retry keeps each key bound to the snapshot it was created for;
         // later edits or errant dispatches never rotate the pending identity.
         pendingClientRequestId: state.pendingClientRequestId ?? action.clientRequestId,
