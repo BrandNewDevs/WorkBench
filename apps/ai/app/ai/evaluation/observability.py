@@ -99,7 +99,10 @@ class ObservedModelAdapter:
         """Observe ordinary text chat without retaining conversation content."""
 
         try:
-            result = await self._adapter.generate_conversation(request)
+            if on_delta is None:
+                result = await self._adapter.generate_conversation(request)
+            else:
+                result = await self._adapter.generate_conversation(request, on_delta=on_delta)
         except InvalidStructuredOutput as error:
             self._record_invalid_output(Capability.TEXT, error)
             raise

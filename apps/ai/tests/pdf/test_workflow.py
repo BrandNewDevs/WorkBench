@@ -241,6 +241,8 @@ async def test_fastapi_upload_to_pdf_answer_and_session_restore(tmp_path: Path) 
             files={"file": ("inspection.pdf", data, "application/pdf")},
         )
         assert uploaded.status_code == 201, uploaded.text
+        bound = await client.get(f"/pdf/sessions/{session.session_id}")
+        assert bound.json()["source"]["uploadId"] == uploaded.json()["uploadId"]
         response = await client.post(
             f"/pdf/sessions/{session.session_id}/turns",
             json={
@@ -310,3 +312,120 @@ async def test_invented_page_is_not_persisted(tmp_path: Path) -> None:
             ),
         )
     assert not (await service.store.get(session.session_id, session.owner_user_id)).turns
+
+
+@pytest.mark.asyncio
+async def test_mixed_pdf_uses_vision_only_for_scanned_page(tmp_path: Path) -> None:
+    service, session, _, data = await setup(tmp_path)
+    with pymupdf.open(stream=data, filetype="pdf") as native:  # type: ignore[no-untyped-call]
+        image = native[0].get_pixmap().tobytes("png")
+        page = native.new_page()
+        page.insert_image(page.rect, stream=image)
+        mixed = native.tobytes()
+    uploaded = await service.files.save_upload(
+        session=session,
+        upload_id=uuid4(),
+        source_id=uuid4(),
+        file_name="mixed.pdf",
+        mime_type="application/pdf",
+        content=chunks(mixed),
+    )
+    await service.turn(
+        session.session_id,
+        session.owner_user_id,
+        PdfTurnRequest(
+            message="What requires inspection?",
+            client_request_id=uuid4(),
+            upload_id=uploaded.upload_id,
+        ),
+    )
+    state = await service.store.get(session.session_id, session.owner_user_id)
+    assert state.pages[0].extraction_method == "native"
+    assert state.pages[1].extraction_method == "visual" and state.pages[1].visual_text
+    assert isinstance(service.ai, FakeAIEngine)
+    assert len([call for call in service.ai.calls if call.startswith("analyze_visual")]) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_deletion_removes_pdf_evidence_and_files(tmp_path: Path) -> None:
+    service, session, _, data = await setup(tmp_path)
+    uploaded = await service.files.save_upload(
+        session=session,
+        upload_id=uuid4(),
+        source_id=uuid4(),
+        file_name="source.pdf",
+        mime_type="application/pdf",
+        content=chunks(data),
+    )
+    await service.turn(
+        session.session_id,
+        session.owner_user_id,
+        PdfTurnRequest(message="Read it", client_request_id=uuid4(), upload_id=uploaded.upload_id),
+    )
+    await service.delete(session.session_id, session.owner_user_id)
+    with pytest.raises(PermissionError):
+        await service.store.get(session.session_id, session.owner_user_id)
+    assert not list((tmp_path / "sessions").rglob("*.pdf"))
+    assert (
+        await service.index.search(
+            str(session.owner_user_id), str(session.session_id), str(uploaded.source_id), "Valve 17"
+        )
+        == []
+    )
+
+
+@pytest.mark.live_ollama
+@pytest.mark.asyncio
+async def test_live_pdf_conversation_three_runs(tmp_path: Path) -> None:
+    import os
+
+    from app.ai.errors import AIError
+    from app.ai.models.ollama import create_ollama_adapter
+
+    if os.environ.get("WORKBENCH_RUN_LIVE_OLLAMA") != "1":
+        pytest.skip("Enable the explicit live-model gate")
+    service, session, _, data = await setup(tmp_path)
+    adapter = create_ollama_adapter(profile=service.profile)
+    try:
+        try:
+            installed = {model.name for model in await adapter.list_models()}
+        except AIError:
+            pytest.skip("Local Ollama unavailable")
+        required = {service.profile.text_candidates[0], service.profile.embedding_candidates[0]}
+        if not required <= installed:
+            pytest.skip("Preload the selected Qwen text and embedding models manually")
+        service.models = adapter
+        service.index.models = adapter
+        uploaded = await service.files.save_upload(
+            session=session,
+            upload_id=uuid4(),
+            source_id=uuid4(),
+            file_name="inspection.pdf",
+            mime_type="application/pdf",
+            content=chunks(data),
+        )
+        for _ in range(3):
+            deltas: list[str] = []
+
+            async def delta(text: str | None, output: list[str] = deltas) -> None:
+                if text is None:
+                    output.clear()
+                else:
+                    output.append(text)
+
+            result = await service.turn(
+                session.session_id,
+                session.owner_user_id,
+                PdfTurnRequest(
+                    message="Summarize the inspection requirement in this PDF.",
+                    client_request_id=uuid4(),
+                    upload_id=uploaded.upload_id,
+                ),
+                on_delta=delta,
+            )
+            assert result.selected_model == service.profile.text_candidates[0]
+            assert not result.used_fallback and "17" in result.answer and result.pages == (1,)
+            assert "<think" not in result.answer.lower()
+            assert "".join(deltas).strip() == result.answer.strip()
+    finally:
+        await adapter.close()

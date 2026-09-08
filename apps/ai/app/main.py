@@ -374,6 +374,19 @@ def create_app(
         )
 
     application.add_exception_handler(PdfDocumentError, pdf_error)
+
+    async def pdf_access_error(request: Request, error: Exception) -> JSONResponse:
+        if request.url.path.startswith("/pdf/"):
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "code": "pdf_not_found",
+                    "message": "PDF session, source or artifact not found for this employee.",
+                },
+            )
+        return await _unhandled_error_handler(request, error)
+
+    application.add_exception_handler(PermissionError, pdf_access_error)
     application.include_router(_health_router(resolved_settings, resolved_dependencies))
     application.include_router(build_auth_router(resolved_settings))
     application.include_router(build_session_router())

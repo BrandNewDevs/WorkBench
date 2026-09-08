@@ -273,21 +273,37 @@ class LocalPdfDocumentEngine:
                         page.apply_redactions()
                         if isinstance(operation, PdfReplaceText):
                             font_size = block.font_size or 10
-                            replacement_rect = rect
-                            # Preserve the approved area; accommodate font ascent within it.
-                            font_size *= 0.8
-                            inserted = page.insert_textbox(
-                                replacement_rect,
-                                operation.replacement,
-                                fontsize=font_size,
-                                fontname="helv",
-                                color=(0, 0, 0),
-                                overlay=True,
-                            )
-                            if inserted < 0:
+                            fonts = {
+                                "Helvetica": "helv",
+                                "Helvetica-Bold": "hebo",
+                                "Helvetica-Oblique": "heit",
+                                "Courier": "cour",
+                                "Times-Roman": "tiro",
+                            }
+                            font_name = fonts.get(block.font_name or "")
+                            if font_name is None:
+                                raise PdfDocumentError(
+                                    "Original font is unavailable for safe replacement"
+                                )
+                            font = pymupdf.Font(font_name)  # type: ignore[no-untyped-call]
+                            lines = operation.replacement.splitlines()
+                            required_height = (font.ascender - font.descender) * font_size
+                            required_height += max(0, len(lines) - 1) * font_size * 1.2
+                            if required_height > rect.height + 0.1 or any(
+                                font.text_length(line, fontsize=font_size) > rect.width  # type: ignore[no-untyped-call]
+                                for line in lines
+                            ):
                                 raise PdfDocumentError(
                                     "replacement text does not fit the original text area"
                                 )
+                            page.insert_text(
+                                (rect.x0, rect.y0 + font.ascender * font_size),
+                                operation.replacement,
+                                fontname=font_name,
+                                fontsize=font_size,
+                                lineheight=1.2,
+                                overlay=True,
+                            )
                     elif isinstance(operation, PdfAddAnnotation):
                         if operation.page_number > document.page_count:
                             raise PdfDocumentError("annotation page does not exist")

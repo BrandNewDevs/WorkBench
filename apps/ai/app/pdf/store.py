@@ -65,9 +65,25 @@ class PdfStateStore:
                     (str(session_id),),
                 )
             ).fetchall()
+            failed = await (
+                await connection.execute(
+                    "SELECT approval_id FROM pdf_write_claims "
+                    "WHERE session_id=? AND status='failed'",
+                    (str(session_id),),
+                )
+            ).fetchall()
         state = PdfSessionView.model_validate_json(row[0]) if row else PdfSessionView()
+        failed_ids = {entry[0] for entry in failed}
+        turns = tuple(
+            turn.model_copy(
+                update={"approval": turn.approval.model_copy(update={"status": "failed"})}
+            )
+            if turn.approval and str(turn.approval.approval_id) in failed_ids
+            else turn
+            for turn in state.turns
+        )
         return state.model_copy(
-            update={"activity": tuple(event[0] for event in reversed(list(events)))}
+            update={"activity": tuple(event[0] for event in reversed(list(events))), "turns": turns}
         )
 
     async def record_activity(self, session_id: UUID, label: str) -> None:
@@ -95,6 +111,8 @@ class PdfStateStore:
             )
             pending = state.turns[-1].approval if state.turns else None
             stage = "awaitingApproval" if pending and pending.status == "pending" else "ready"
+            if not state.pages and not state.turns:
+                stage = "collectingInputs"
             await connection.execute(
                 "UPDATE workflow_sessions SET stage=?, "
                 "updated_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now') "

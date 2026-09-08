@@ -23,6 +23,7 @@ from app.api.session_contracts import (
     WorkflowUploadResponse,
 )
 from app.auth.service import AuthError, AuthService
+from app.pdf.service import PdfWorkflowService
 from app.ports.local_backend import (
     ActivityEventStore,
     AuditAction,
@@ -157,9 +158,7 @@ def _upload_type(workflow_type: WorkflowType, file_name: str, prefix: bytes) -> 
         ".txt": "text/plain",
     }
     supported = (
-        inspection_types
-        if workflow_type is WorkflowType.INSPECTION_ANALYSIS
-        else text_types
+        inspection_types if workflow_type is WorkflowType.INSPECTION_ANALYSIS else text_types
     )
     if workflow_type is WorkflowType.PDF_DOCUMENT:
         supported = {".pdf": "application/pdf"}
@@ -343,11 +342,24 @@ def build_session_router() -> APIRouter:
                 mime_type=mime_type,
                 content=content(),
             )
+            if session.workflow_type is WorkflowType.PDF_DOCUMENT:
+                pdf = cast(
+                    PdfWorkflowService | None, getattr(request.app.state, "pdf_service", None)
+                )
+                if pdf is None:
+                    raise UploadValidationError("PDF service is unavailable")
+                try:
+                    await pdf.bind_upload(session.session_id, user.user_id, stored.upload_id)
+                except Exception:
+                    await files.cleanup_session_uploads(
+                        session_id=session.session_id, owner_user_id=user.user_id
+                    )
+                    raise
         except UploadTooLargeError:
             return _error(*_UPLOAD_TOO_LARGE, status.HTTP_413_CONTENT_TOO_LARGE)
         except UnsupportedMediaError:
             return _error(*_UNSUPPORTED_MEDIA, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
-        except (UnicodeDecodeError, UploadValidationError, ValueError):
+        except UnicodeDecodeError, UploadValidationError, ValueError:
             return _error(*_INVALID_FILE, status.HTTP_422_UNPROCESSABLE_CONTENT)
         except UploadSessionStateConflictError:
             return _error(*_INVALID_STAGE, status.HTTP_409_CONFLICT)
@@ -413,9 +425,7 @@ def build_session_router() -> APIRouter:
         if last_event_id is None:
             after_event_id = 0
         elif (
-            not last_event_id.isascii()
-            or not last_event_id.isdecimal()
-            or len(last_event_id) > 19
+            not last_event_id.isascii() or not last_event_id.isdecimal() or len(last_event_id) > 19
         ):
             return _error(*_INVALID_EVENT_ID, status.HTTP_422_UNPROCESSABLE_CONTENT)
         else:

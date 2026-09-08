@@ -24,6 +24,7 @@ from app.ai.schemas import (
     VisualMimeType,
 )
 from app.pdf.contracts import (
+    GroundedPdfAnswer,
     PdfApproval,
     PdfApprovalDecision,
     PdfArtifact,
@@ -74,6 +75,37 @@ class PdfWorkflowService:
         if approved is None:
             raise PermissionError("PDF upload is unavailable for this session")
         return approved.path
+
+    async def bind_upload(self, session: UUID, owner: UUID, upload: UUID) -> None:
+        """Persist source identity immediately so refresh never loses an uploaded PDF."""
+        async with self.lock:
+            state = await self.store.get(session, owner)
+            if state.source:
+                if state.source.upload_id != upload:
+                    raise PdfDocumentError("PDF session already has a source")
+                return
+            stored = await self.files.get_upload(
+                upload_id=upload, session_id=session, owner_user_id=owner
+            )
+            approved = await self.files.resolve_approved_path(
+                upload_id=upload, session_id=session, owner_user_id=owner
+            )
+            if stored is None or approved is None or stored.mime_type != "application/pdf":
+                raise PermissionError("PDF upload is unavailable")
+            try:
+                with pymupdf.open(approved.path) as document:  # type: ignore[no-untyped-call]
+                    if document.needs_pass or not 1 <= document.page_count <= 200:
+                        raise PdfDocumentError("Encrypted or oversized PDFs are unsupported")
+                    source = PdfSource(
+                        upload_id=upload,
+                        source_id=stored.source_id,
+                        file_name=stored.file_name,
+                        sha256=stored.sha256,
+                        page_count=document.page_count,
+                    )
+                await self.store.save(session, owner, state.model_copy(update={"source": source}))
+            except (pymupdf.FileDataError, RuntimeError) as error:
+                raise PdfDocumentError("PDF is corrupt or cannot be opened") from error
 
     async def delete(self, session: UUID, owner: UUID) -> None:
         async with self.lock:
@@ -195,6 +227,10 @@ class PdfWorkflowService:
                 if state.source is None:
                     state = await self._inspect(session, owner, request.upload_id, progress)
                     await self.store.save(session, owner, state)
+            if state.source and not state.pages:
+                extracted = await self._inspect(session, owner, state.source.upload_id, progress)
+                state = state.model_copy(update={"pages": extracted.pages})
+                await self.store.save(session, owner, state)
             intelligence = PdfIntelligence(self.models, self.profile)
             history = json.dumps([(t.user_message, t.answer) for t in state.turns[-4:]])
             await progress("Planning PDF action")
@@ -215,7 +251,14 @@ class PdfWorkflowService:
                         str(state.source.source_id),
                         request.message + "\n" + history[-2_000:],
                     )
-                    answer = await intelligence.answer(request.message, evidence)
+                    answer = (
+                        await intelligence.answer(request.message, evidence)
+                        if evidence
+                        else GroundedPdfAnswer(
+                            missing_information="The attached PDF does not provide enough "
+                            "relevant evidence to answer this question."
+                        )
+                    )
                 citations = tuple(sorted({p for claim in answer.claims for p in claim.pages}))
                 if not set(citations) <= {page.page_number for page in state.pages}:
                     raise PdfDocumentError("PDF evidence references an unavailable page")

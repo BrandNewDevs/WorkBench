@@ -6,9 +6,12 @@ import pymupdf
 import pytest
 
 from app.pdf.contracts import (
+    PdfAddPages,
     PdfDocumentDraft,
     PdfDraftSection,
     PdfEditPlan,
+    PdfOverlay,
+    PdfPageSequence,
     PdfReplaceText,
     PdfSource,
 )
@@ -128,3 +131,55 @@ def test_creation_without_backend_approval_writes_nothing(tmp_path: Path) -> Non
     with pytest.raises(PdfDocumentError, match="approved execution"):
         LocalPdfDocumentEngine().render_draft(draft, destination)
     assert not destination.exists()
+
+
+@pytest.mark.parametrize("kind", ["duplicate", "overlay", "addPages"])
+def test_page_and_overlay_operations_preserve_original(tmp_path: Path, kind: str) -> None:
+    source_path = tmp_path / "original.pdf"
+    _native_pdf(source_path)
+    source = _source(source_path)
+    destination = tmp_path / "result.pdf"
+    original = source_path.read_bytes()
+    draft = PdfDocumentDraft(
+        title="Appendix",
+        purpose="Approved additional page",
+        sections=(PdfDraftSection(heading="Note", paragraphs=("Local inspection information.",)),),
+    )
+    operation = (
+        PdfPageSequence(pages=(1, 1))
+        if kind == "duplicate"
+        else PdfOverlay(page_number=1, x0=72, y0=150, x1=400, y1=200, text="Approved overlay")
+        if kind == "overlay"
+        else PdfAddPages(position="before", draft=draft)
+    )
+    plan = PdfEditPlan(
+        source_id=source.source_id, output_file_name="result.pdf", operations=(operation,)
+    )
+    engine = LocalPdfDocumentEngine(
+        write_policy=lambda candidate, path: candidate == plan and path == destination
+    )
+    count = engine.apply_edit(
+        source, source_path, engine.inspect(source, source_path), plan, destination
+    )
+    assert count == (1 if kind == "overlay" else 2)
+    assert source_path.read_bytes() == original
+
+
+def test_authoring_treats_markup_as_text(tmp_path: Path) -> None:
+    destination = tmp_path / "escaped.pdf"
+    draft = PdfDocumentDraft(
+        title="Untrusted input",
+        purpose="Local test",
+        sections=(
+            PdfDraftSection(
+                heading="Literal text",
+                paragraphs=('<img src="https://invalid.example/image.png"/>',),
+            ),
+        ),
+    )
+    engine = LocalPdfDocumentEngine(
+        write_policy=lambda candidate, path: candidate == draft and path == destination
+    )
+    engine.render_draft(draft, destination)
+    with pymupdf.open(destination) as document:  # type: ignore[no-untyped-call]
+        assert "https://invalid.example" in document[0].get_text()

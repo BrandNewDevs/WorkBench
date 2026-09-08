@@ -8,7 +8,15 @@ from typing import Literal
 from fastapi.responses import StreamingResponse
 from pydantic import JsonValue
 
+from app.ai.errors import (
+    ConversationContextTooLarge,
+    InvalidStructuredOutput,
+    ModelNotInstalled,
+    ModelRequestTimeout,
+    ModelRuntimeUnavailable,
+)
 from app.ai.schemas import ContractModel
+from app.pdf.engine import PdfDocumentError
 
 
 class TurnEvent(ContractModel):
@@ -41,6 +49,60 @@ def turn_response(run: Callable[[Emit], Awaitable[None]]) -> StreamingResponse:
                 await run(emit)
             except asyncio.CancelledError:
                 raise
+            except ModelNotInstalled:
+                await emit(
+                    TurnEvent(
+                        event="turn.failed",
+                        text=(
+                            "A required local model is missing. "
+                            "Preload the configured text, embedding or vision model."
+                        ),
+                        result={"code": "model_missing"},
+                    )
+                )
+            except ModelRuntimeUnavailable:
+                await emit(
+                    TurnEvent(
+                        event="turn.failed",
+                        text="Local Ollama is unavailable. Start Ollama and retry.",
+                        result={"code": "ollama_unavailable"},
+                    )
+                )
+            except ModelRequestTimeout:
+                await emit(
+                    TurnEvent(
+                        event="turn.failed",
+                        text="The local model timed out. Retry or use a smaller approved model.",
+                        result={"code": "generation_timeout"},
+                    )
+                )
+            except ConversationContextTooLarge:
+                await emit(
+                    TurnEvent(
+                        event="turn.failed",
+                        text=(
+                            "This task exceeds the model context limit. "
+                            "Start a new conversation or use a shorter PDF."
+                        ),
+                        result={"code": "conversation_too_large"},
+                    )
+                )
+            except InvalidStructuredOutput:
+                await emit(
+                    TurnEvent(
+                        event="turn.failed",
+                        text=(
+                            "The model returned invalid or ungrounded output. No answer was saved."
+                        ),
+                        result={"code": "invalid_ai_response"},
+                    )
+                )
+            except PdfDocumentError as error:
+                await emit(
+                    TurnEvent(
+                        event="turn.failed", text=str(error), result={"code": "pdf_request_failed"}
+                    )
+                )
             except Exception:
                 await emit(
                     TurnEvent(
