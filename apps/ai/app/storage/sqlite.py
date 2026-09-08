@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS workflow_sessions (
     session_id TEXT PRIMARY KEY NOT NULL,
     owner_user_id TEXT NOT NULL,
     workflow_type TEXT NOT NULL CHECK (
-        workflow_type IN ('inspectionAnalysis', 'codeRepair', 'localConversation')
+        workflow_type IN ('inspectionAnalysis', 'codeRepair', 'localConversation', 'pdfDocument')
     ),
     title TEXT NOT NULL,
     stage TEXT NOT NULL,
@@ -202,7 +202,7 @@ CREATE TABLE workflow_sessions_plain_chat (
     session_id TEXT PRIMARY KEY NOT NULL,
     owner_user_id TEXT NOT NULL,
     workflow_type TEXT NOT NULL CHECK (
-        workflow_type IN ('inspectionAnalysis', 'codeRepair', 'localConversation')
+        workflow_type IN ('inspectionAnalysis', 'codeRepair', 'localConversation', 'pdfDocument')
     ),
     title TEXT NOT NULL,
     stage TEXT NOT NULL,
@@ -768,12 +768,13 @@ class LocalSQLiteDatabase:
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workflow_sessions'"
         )
         row = await cursor.fetchone()
-        if row is None or row["sql"] is None or "localConversation" in row["sql"]:
+        if row is None or row["sql"] is None or "pdfDocument" in row["sql"]:
             return
         # The rebuild briefly drops the referenced table, so foreign keys are
         # suspended for this connection only and restored after the commit.
         await connection.execute("PRAGMA foreign_keys = OFF")
         try:
+            await connection.execute("BEGIN IMMEDIATE")
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_PLAIN_CHAT_TABLE)
             await connection.execute(
                 """INSERT INTO workflow_sessions_plain_chat (
@@ -790,7 +791,13 @@ class LocalSQLiteDatabase:
             )
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_OWNER_INDEX)
             await connection.execute(_CREATE_WORKFLOW_SESSIONS_CLIENT_INDEX)
+            cursor = await connection.execute("PRAGMA foreign_key_check")
+            if await cursor.fetchone() is not None:
+                raise ValueError("session migration would break stored references")
             await connection.commit()
+        except BaseException:
+            await connection.rollback()
+            raise
         finally:
             await connection.execute("PRAGMA foreign_keys = ON")
 

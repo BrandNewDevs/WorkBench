@@ -34,12 +34,14 @@ class WorkflowType(StrEnum):
     CODE_REPAIR = "codeRepair"
     # Backs plain text conversations. No workflow may ever be admitted for it.
     LOCAL_CONVERSATION = "localConversation"
+    PDF_DOCUMENT = "pdfDocument"
 
 
 class WorkflowStage(StrEnum):
     """Stages controlled by Backend 1 rather than by a planner."""
 
     COLLECTING_INPUTS = "collectingInputs"
+    READY = "ready"
     EXTRACTING = "extracting"
     RETRIEVING = "retrieving"
     DRAFTING = "drafting"
