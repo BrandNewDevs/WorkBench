@@ -55,6 +55,7 @@ export const initialQwenChatState: QwenChatState = {
 };
 
 type QwenChatAction =
+  | { type: "turnAccepted"; submittedDraft: string }
   | { type: "answerDelta"; text: string | null }
   | { type: "draftChanged"; draft: string }
   | { type: "pickerLoading" }
@@ -75,6 +76,8 @@ type QwenChatAction =
 
 export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): QwenChatState {
   switch (action.type) {
+    case "turnAccepted":
+      return {...state, draft: state.draft === action.submittedDraft ? "" : state.draft};
     case "answerDelta":
       return {...state, provisionalAnswer: action.text === null ? "" : (state.provisionalAnswer ?? "") + action.text};
     case "draftChanged":
@@ -133,8 +136,7 @@ export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): Q
         ...state,
         sendState: "sending",
         sendError: undefined,
-        // Retrying an older request must preserve a newer unsent draft.
-        draft: state.draft === action.submittedDraft ? "" : state.draft,
+        provisionalAnswer: "",
         // A retry keeps each key bound to the snapshot it was created for;
         // later edits or errant dispatches never rotate the pending identity.
         pendingClientRequestId: state.pendingClientRequestId ?? action.clientRequestId,
@@ -351,6 +353,7 @@ export function useQwenChat({ apiBaseUrl, connected }: { apiBaseUrl: string; con
           { message: content, clientRequestId },
           apiBaseUrl,
           (event) => {
+            if (event.event === "turn.accepted") dispatch({type: "turnAccepted", submittedDraft});
             if (event.event === "assistant.delta") dispatch({type: "answerDelta", text: event.text});
             if (event.event === "assistant.reset") dispatch({type: "answerDelta", text: null});
           },

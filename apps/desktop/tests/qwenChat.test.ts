@@ -272,6 +272,8 @@ test("retry preserves a newer unsent draft", () => {
     type: "sendStarted", clientRequestId, clientSessionId, submittedDraft: "Question",
   });
   assert.equal(retry.draft, "My revised question");
+  const accepted = qwenChatReducer(retry, {type: "turnAccepted", submittedDraft: "Question"});
+  assert.equal(accepted.draft, "My revised question");
   assert.equal(retry.pendingDraft, "Question");
 });
 

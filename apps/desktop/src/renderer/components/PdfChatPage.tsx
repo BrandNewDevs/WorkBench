@@ -99,6 +99,8 @@ export function PdfChatPage({ onLocalChat }: { onLocalChat: () => void }) {
         {turn.approval && <div className="rounded border p-3">
           <p>{turn.approval.tool} · {turn.approval.fileName} · {turn.approval.status}</p>
           <details><summary>Review proposed document / edits</summary>
+            <p className="text-sm">Approval creates a new local PDF; the uploaded original is unchanged.</p>
+            <details><summary>Complete approved plan (including tables and layout)</summary><pre className="overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(turn.approval.draft ?? turn.approval.edit, null, 2)}</pre></details>
             {turn.approval.draft && <div className="space-y-2 py-3">
               <h3 className="font-medium">{turn.approval.draft.title}</h3><p>{turn.approval.draft.purpose}</p>
               {turn.approval.draft.sections.map((section,i) => <div key={i}><h4 className="font-medium">{section.heading}</h4>{section.paragraphs.map((p,j) => <p key={j}>{p}</p>)}</div>)}

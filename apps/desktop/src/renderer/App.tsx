@@ -204,10 +204,10 @@ function Workspace({
         localChatsState={qwenChat.state.pickerState}
         activeLocalChatId={qwenChat.state.sessionId}
         onCreateChat={chatThreads.createChat}
-        onCreateLocalChat={qwenChat.startNewConversation}
+        onCreateLocalChat={() => {setPdfMode(false); qwenChat.startNewConversation();}}
         onNavigate={handleNavigate}
         onSelectChat={chatThreads.selectChat}
-        onSelectLocalChat={qwenChat.selectSession}
+        onSelectLocalChat={(id) => {setPdfMode(false); qwenChat.selectSession(id);}}
         onRetryChats={chatThreads.refreshSessions}
         onRetryLocalChats={qwenChat.refreshSessions}
         onSettingsSectionChange={onSettingsSectionChange}
