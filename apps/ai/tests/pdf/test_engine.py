@@ -1,3 +1,4 @@
+import os
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
@@ -159,6 +160,54 @@ def test_creation_does_not_follow_path_substituted_after_approval(
 
     assert outside.read_text() == "must remain unchanged"
     assert destination.is_symlink()
+
+
+@pytest.mark.skipif(
+    os.open not in os.supports_dir_fd,
+    reason="directory-handle race regression requires openat support",
+)
+def test_creation_rejects_parent_substitution_during_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_directory = tmp_path / "artifacts"
+    artifact_directory.mkdir()
+    displaced_directory = tmp_path / "displaced-artifacts"
+    outside_directory = tmp_path / "outside"
+    outside_directory.mkdir()
+    destination = artifact_directory / "artifact.pdf"
+    draft = PdfDocumentDraft(
+        title="Approved draft",
+        purpose="Test parent-bound publication",
+        sections=(PdfDraftSection(heading="Facts", paragraphs=("Approved facts",)),),
+    )
+    engine = LocalPdfDocumentEngine(write_policy=lambda candidate, path: True)
+    original_open = os.open
+    substituted = False
+
+    def substitute_parent(
+        path: str | os.PathLike[str],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal substituted
+        if not substituted and (
+            Path(path) == destination
+            or (dir_fd is not None and Path(path) == Path(destination.name))
+        ):
+            artifact_directory.rename(displaced_directory)
+            artifact_directory.symlink_to(outside_directory, target_is_directory=True)
+            substituted = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr("app.pdf.engine.os.open", substitute_parent)
+
+    with pytest.raises(PdfDocumentError, match="artifact directory"):
+        engine.render_draft(draft, destination)
+
+    assert not (outside_directory / destination.name).exists()
+    assert not (displaced_directory / destination.name).exists()
 
 
 @pytest.mark.parametrize("kind", ["duplicate", "overlay", "addPages"])

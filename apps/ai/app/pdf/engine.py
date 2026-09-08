@@ -448,17 +448,42 @@ class LocalPdfDocumentEngine:
     @staticmethod
     def _publish_new_file(destination: Path, output: bytes) -> None:
         """Create a validated artifact once without following a substituted symlink."""
+        directory_descriptor = -1
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.parent.is_symlink() or not destination.parent.is_dir():
+            expected_directory = os.stat(destination.parent, follow_symlinks=False)
+            if not stat.S_ISDIR(expected_directory.st_mode):
                 raise PdfDocumentError("PDF artifact directory is not trusted")
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
             flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(destination, flags, 0o600)
+            if os.open in os.supports_dir_fd:
+                directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+                directory_descriptor = os.open(destination.parent, directory_flags)
+                opened_directory = os.fstat(directory_descriptor)
+                if not LocalPdfDocumentEngine._same_identity(expected_directory, opened_directory):
+                    raise PdfDocumentError("PDF artifact directory changed before creation")
+                descriptor = os.open(
+                    destination.name,
+                    flags,
+                    0o600,
+                    dir_fd=directory_descriptor,
+                )
+            else:
+                opened_directory = expected_directory
+                descriptor = os.open(destination, flags, 0o600)
         except FileExistsError as error:
+            if directory_descriptor >= 0:
+                os.close(directory_descriptor)
             raise PdfDocumentError("PDF output must be a new file") from error
         except OSError as error:
+            if directory_descriptor >= 0:
+                os.close(directory_descriptor)
             raise PdfDocumentError("PDF output could not be created safely") from error
+        except PdfDocumentError:
+            if directory_descriptor >= 0:
+                os.close(directory_descriptor)
+            raise
 
         opened = os.fstat(descriptor)
         succeeded = False
@@ -470,6 +495,9 @@ class LocalPdfDocumentEngine:
                     raise OSError("artifact write made no progress")
                 remaining = remaining[written:]
             os.fsync(descriptor)
+            current_directory = os.stat(destination.parent, follow_symlinks=False)
+            if not LocalPdfDocumentEngine._same_identity(opened_directory, current_directory):
+                raise PdfDocumentError("PDF artifact directory changed during creation")
             succeeded = True
         except OSError as error:
             raise PdfDocumentError("PDF output could not be written safely") from error
@@ -477,12 +505,19 @@ class LocalPdfDocumentEngine:
             os.close(descriptor)
             if not succeeded:
                 try:
-                    current = os.lstat(destination)
-                    if (
-                        stat.S_ISREG(current.st_mode)
-                        and current.st_dev == opened.st_dev
-                        and current.st_ino == opened.st_ino
-                    ):
-                        destination.unlink()
+                    if directory_descriptor >= 0:
+                        os.unlink(destination.name, dir_fd=directory_descriptor)
+                    else:
+                        current = os.lstat(destination)
+                        if stat.S_ISREG(current.st_mode) and LocalPdfDocumentEngine._same_identity(
+                            current, opened
+                        ):
+                            destination.unlink()
                 except OSError:
                     pass
+            if directory_descriptor >= 0:
+                os.close(directory_descriptor)
+
+    @staticmethod
+    def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+        return left.st_dev == right.st_dev and left.st_ino == right.st_ino
