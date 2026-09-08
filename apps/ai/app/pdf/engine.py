@@ -330,11 +330,7 @@ class LocalPdfDocumentEngine:
                             operation.text,
                             icon="Note",
                         )
-                # Level 4 deduplicates stream contents and has produced corrupt Flate
-                # streams in the Windows PyMuPDF build used by CI. Level 3 still
-                # removes unreachable/duplicate objects without rewriting every
-                # content stream, which keeps edited text portable across platforms.
-                output = cast(bytes, document.tobytes(garbage=3, deflate=False))
+                output = cast(bytes, document.tobytes(garbage=4, deflate=True))
             self._validate_preserved_layout(path, output, plan, block_map)
             page_count = self._validate_output(output)
             self._publish_new_file(destination, output)
@@ -479,6 +475,7 @@ class LocalPdfDocumentEngine:
                 raise PdfDocumentError("PDF artifact directory is not trusted")
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
             flags |= getattr(os, "O_NOFOLLOW", 0)
+            flags |= getattr(os, "O_BINARY", 0)
             if _HAS_DIRECTORY_FD:
                 directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
                 directory_flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -597,6 +594,7 @@ class LocalPdfDocumentEngine:
             if not stat.S_ISDIR(expected_directory.st_mode):
                 raise PdfDocumentError("PDF artifact directory is not trusted")
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            flags |= getattr(os, "O_BINARY", 0)
             if _HAS_DIRECTORY_FD:
                 directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
                 directory_flags |= getattr(os, "O_NOFOLLOW", 0)
