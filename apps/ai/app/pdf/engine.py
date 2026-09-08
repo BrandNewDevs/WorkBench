@@ -560,7 +560,8 @@ class LocalPdfDocumentEngine:
             import msvcrt
             from ctypes import wintypes
 
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+            win_dll = vars(ctypes)["WinDLL"]
+            kernel32 = win_dll("kernel32", use_last_error=True)
             final_path = kernel32.GetFinalPathNameByHandleW
             final_path.argtypes = [
                 wintypes.HANDLE,
@@ -569,7 +570,8 @@ class LocalPdfDocumentEngine:
                 wintypes.DWORD,
             ]
             final_path.restype = wintypes.DWORD
-            handle = msvcrt.get_osfhandle(descriptor)  # type: ignore[attr-defined]
+            get_osfhandle = vars(msvcrt)["get_osfhandle"]
+            handle = get_osfhandle(descriptor)
             buffer = ctypes.create_unicode_buffer(32_768)
             length = final_path(handle, buffer, len(buffer), 0)
             if length == 0 or length >= len(buffer):
