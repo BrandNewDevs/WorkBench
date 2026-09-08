@@ -199,6 +199,9 @@ export function qwenChatReducer(state: QwenChatState, action: QwenChatAction): Q
         messages,
         sendState: "error",
         sendError: action.message,
+        // A locally cleared composer is restored after a failed turn unless
+        // the employee has already begun a new draft.
+        draft: state.draft.length === 0 ? (state.pendingDraft ?? state.draft) : state.draft,
         pendingClientRequestId: keepPending ? state.pendingClientRequestId : undefined,
         pendingDraft: keepPending ? state.pendingDraft : undefined,
         pendingClientSessionId: keepPending ? state.pendingClientSessionId : undefined,

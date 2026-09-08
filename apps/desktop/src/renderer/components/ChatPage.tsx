@@ -10,6 +10,7 @@ import type {
 import type { ChatThread, ChatThreadId, ChatThreads } from "../hooks/useChatThreads";
 import { Message } from "./Message";
 import { SessionStageStrip } from "./SessionStageStrip";
+import { ToolActivity } from "./ToolActivity";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
@@ -393,6 +394,7 @@ export function ChatPage({
             {thread.workflowState === "awaitingApproval" ? " — Approve/Reject actions will be available in Phase 5." : ""}
           </p>
         )}
+        <ToolActivity events={thread.activityEvents} />
         <ChatComposer
           canSend={canSend}
           disabledReason={sendDisabledReason}
