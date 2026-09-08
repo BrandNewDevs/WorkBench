@@ -1,7 +1,7 @@
 """Deterministic local ReportLab PDF renderer for approved drafts."""
 
 from html import escape
-from pathlib import Path
+from io import BytesIO
 
 from reportlab.lib import colors  # type: ignore[import-untyped]
 from reportlab.lib.pagesizes import A4  # type: ignore[import-untyped]
@@ -28,8 +28,9 @@ class PdfRenderError(ValueError):
 class LocalPdfRenderer:
     """Render a professional offline PDF without browser or cloud dependencies."""
 
-    def render_draft(self, draft: PdfDocumentDraft, destination: Path) -> None:
-        destination.parent.mkdir(parents=True, exist_ok=True)
+    def render_draft_bytes(self, draft: PdfDocumentDraft) -> bytes:
+        """Render into memory so callers can publish with exclusive file creation."""
+        output = BytesIO()
         styles = getSampleStyleSheet()
         title = ParagraphStyle(
             "WorkBenchTitle",
@@ -126,7 +127,7 @@ class LocalPdfRenderer:
 
         try:
             document = SimpleDocTemplate(
-                str(destination),
+                output,
                 pagesize=A4,
                 leftMargin=20 * mm,
                 rightMargin=20 * mm,
@@ -135,8 +136,8 @@ class LocalPdfRenderer:
                 title=draft.title,
             )
             document.build(story, onFirstPage=decorate, onLaterPages=decorate)
+            return output.getvalue()
         except (OSError, ValueError, TypeError) as error:
-            destination.unlink(missing_ok=True)
             raise PdfRenderError(
                 "local PDF renderer could not create the requested draft"
             ) from error

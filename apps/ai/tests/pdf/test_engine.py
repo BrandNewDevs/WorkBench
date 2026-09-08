@@ -16,6 +16,7 @@ from app.pdf.contracts import (
     PdfSource,
 )
 from app.pdf.engine import LocalPdfDocumentEngine, PdfDocumentError
+from app.pdf.renderer import LocalPdfRenderer
 
 
 def _source(path: Path, page_count: int = 1) -> PdfSource:
@@ -131,6 +132,33 @@ def test_creation_without_backend_approval_writes_nothing(tmp_path: Path) -> Non
     with pytest.raises(PdfDocumentError, match="approved execution"):
         LocalPdfDocumentEngine().render_draft(draft, destination)
     assert not destination.exists()
+
+
+def test_creation_does_not_follow_path_substituted_after_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "artifact.pdf"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must remain unchanged")
+    draft = PdfDocumentDraft(
+        title="Approved draft",
+        purpose="Test exclusive publication",
+        sections=(PdfDraftSection(heading="Facts", paragraphs=("Approved facts",)),),
+    )
+    rendered = LocalPdfRenderer().render_draft_bytes(draft)
+    engine = LocalPdfDocumentEngine(write_policy=lambda candidate, path: True)
+
+    def substitute_path(_draft: PdfDocumentDraft) -> bytes:
+        destination.symlink_to(outside)
+        return rendered
+
+    monkeypatch.setattr(engine._renderer, "render_draft_bytes", substitute_path)
+
+    with pytest.raises(PdfDocumentError, match="new file"):
+        engine.render_draft(draft, destination)
+
+    assert outside.read_text() == "must remain unchanged"
+    assert destination.is_symlink()
 
 
 @pytest.mark.parametrize("kind", ["duplicate", "overlay", "addPages"])

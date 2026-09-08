@@ -1,5 +1,7 @@
 """Deep local module for approved PDF inspection and controlled output."""
 
+import os
+import stat
 from collections.abc import Callable
 from hashlib import sha256
 from math import ceil, floor
@@ -71,8 +73,6 @@ class LocalPdfDocumentEngine:
     ) -> None:
         if self._write_policy is None or not self._write_policy(plan, destination):
             raise PdfDocumentError("PDF creation requires an exact approved execution claim")
-        if destination.exists() or destination.is_symlink():
-            raise PdfDocumentError("PDF output must be a new file")
 
     def inspect(self, source: PdfSource, path: Path) -> tuple[PdfPage, ...]:
         self._require_safe_source(source, path)
@@ -191,8 +191,10 @@ class LocalPdfDocumentEngine:
     def render_draft(self, draft: PdfDocumentDraft, destination: Path) -> int:
         self._require_write_approval(draft, destination)
         try:
-            self._renderer.render_draft(draft, destination)
-            return self._validate_output(destination)
+            output = self._renderer.render_draft_bytes(draft)
+            page_count = self._validate_output(output)
+            self._publish_new_file(destination, output)
+            return page_count
         except PdfRenderError as error:
             raise PdfDocumentError(str(error)) from error
 
@@ -228,17 +230,13 @@ class LocalPdfDocumentEngine:
                             raise PdfDocumentError("Selected page does not exist")
                         document.select([page - 1 for page in operation.pages])
                     elif isinstance(operation, PdfAddPages):
-                        temporary = destination.with_suffix(".pages.pdf")
-                        if temporary.exists() or temporary.is_symlink():
-                            raise PdfDocumentError("PDF staging output already exists")
-                        try:
-                            self._renderer.render_draft(operation.draft, temporary)
-                            with pymupdf.open(temporary) as addition:  # type: ignore[no-untyped-call]
-                                document.insert_pdf(
-                                    addition, start_at=0 if operation.position == "before" else -1
-                                )
-                        finally:
-                            temporary.unlink(missing_ok=True)
+                        added_pages = self._renderer.render_draft_bytes(operation.draft)
+                        with pymupdf.open(  # type: ignore[no-untyped-call]
+                            stream=added_pages, filetype="pdf"
+                        ) as addition:
+                            document.insert_pdf(
+                                addition, start_at=0 if operation.position == "before" else -1
+                            )
                     elif isinstance(operation, (PdfOverlay, PdfRedactRegion)):
                         if operation.page_number > document.page_count:
                             raise PdfDocumentError("Edit page does not exist")
@@ -317,12 +315,12 @@ class LocalPdfDocumentEngine:
                             operation.text,
                             icon="Note",
                         )
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                document.save(destination, garbage=4, deflate=True)
-            self._validate_preserved_layout(path, destination, plan, block_map)
-            return self._validate_output(destination)
+                output = cast(bytes, document.tobytes(garbage=4, deflate=True))
+            self._validate_preserved_layout(path, output, plan, block_map)
+            page_count = self._validate_output(output)
+            self._publish_new_file(destination, output)
+            return page_count
         except PdfDocumentError:
-            destination.unlink(missing_ok=True)
             raise
         except (
             pymupdf.FileDataError,
@@ -331,7 +329,6 @@ class LocalPdfDocumentEngine:
             RuntimeError,
             ValueError,
         ) as error:
-            destination.unlink(missing_ok=True)
             raise PdfDocumentError("PDF edit could not be completed safely") from error
 
     def _require_safe_source(self, source: PdfSource, path: Path) -> None:
@@ -346,9 +343,14 @@ class LocalPdfDocumentEngine:
 
     @staticmethod
     def _validate_preserved_layout(
-        source: Path, output: Path, plan: PdfEditPlan, blocks: dict[str, PdfTextBlock]
+        source: Path, output: bytes, plan: PdfEditPlan, blocks: dict[str, PdfTextBlock]
     ) -> None:
-        with pymupdf.open(source) as original, pymupdf.open(output) as edited:  # type: ignore[no-untyped-call]
+        with (
+            pymupdf.open(source) as original,  # type: ignore[no-untyped-call]
+            pymupdf.open(  # type: ignore[no-untyped-call]
+                stream=output, filetype="pdf"
+            ) as edited,
+        ):
             mapping = list(range(original.page_count))
             first = plan.operations[0]
             if isinstance(first, PdfPageSequence):
@@ -415,11 +417,13 @@ class LocalPdfDocumentEngine:
                 extracted.append(PdfTable(page_number=page_number, rows=rows))
         return tuple(extracted)
 
-    def _validate_output(self, destination: Path) -> int:
+    def _validate_output(self, output: bytes) -> int:
         try:
-            if not destination.is_file() or destination.stat().st_size <= 4:
+            if len(output) <= 4 or len(output) > self._max_bytes:
                 raise PdfDocumentError("local PDF renderer produced no output")
-            with pymupdf.open(destination) as document:  # type: ignore[no-untyped-call]
+            with pymupdf.open(  # type: ignore[no-untyped-call]
+                stream=output, filetype="pdf"
+            ) as document:
                 if document.needs_pass or not 1 <= document.page_count <= self._max_pages:
                     raise PdfDocumentError("local PDF output failed validation")
                 for page in document:
@@ -431,7 +435,6 @@ class LocalPdfDocumentEngine:
                     )
                 return cast(int, document.page_count)
         except PdfDocumentError:
-            destination.unlink(missing_ok=True)
             raise
         except (
             pymupdf.FileDataError,
@@ -440,5 +443,46 @@ class LocalPdfDocumentEngine:
             RuntimeError,
             ValueError,
         ) as error:
-            destination.unlink(missing_ok=True)
             raise PdfDocumentError("local PDF output failed validation") from error
+
+    @staticmethod
+    def _publish_new_file(destination: Path, output: bytes) -> None:
+        """Create a validated artifact once without following a substituted symlink."""
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.parent.is_symlink() or not destination.parent.is_dir():
+                raise PdfDocumentError("PDF artifact directory is not trusted")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(destination, flags, 0o600)
+        except FileExistsError as error:
+            raise PdfDocumentError("PDF output must be a new file") from error
+        except OSError as error:
+            raise PdfDocumentError("PDF output could not be created safely") from error
+
+        opened = os.fstat(descriptor)
+        succeeded = False
+        try:
+            remaining = memoryview(output)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError("artifact write made no progress")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+            succeeded = True
+        except OSError as error:
+            raise PdfDocumentError("PDF output could not be written safely") from error
+        finally:
+            os.close(descriptor)
+            if not succeeded:
+                try:
+                    current = os.lstat(destination)
+                    if (
+                        stat.S_ISREG(current.st_mode)
+                        and current.st_dev == opened.st_dev
+                        and current.st_ino == opened.st_ino
+                    ):
+                        destination.unlink()
+                except OSError:
+                    pass
