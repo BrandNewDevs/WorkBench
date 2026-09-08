@@ -263,6 +263,18 @@ test("a retry of an ambiguous send reuses the same keys and snapshot", () => {
   assert.equal(editedThenRetried.pendingClientSessionId, clientSessionId);
 });
 
+test("retry preserves a newer unsent draft", () => {
+  const pending = qwenChatReducer(qwenState({ draft: "Question" }), {
+    type: "sendStarted", clientRequestId, clientSessionId, submittedDraft: "Question",
+  });
+  const failed = qwenChatReducer(pending, { type: "sendFailed", definitive: false, message: "Timeout" });
+  const retry = qwenChatReducer({ ...failed, draft: "My revised question" }, {
+    type: "sendStarted", clientRequestId, clientSessionId, submittedDraft: "Question",
+  });
+  assert.equal(retry.draft, "My revised question");
+  assert.equal(retry.pendingDraft, "Question");
+});
+
 test("a completed turn adopts the stored conversation, status, and clears the matching draft", () => {
   const sending = qwenChatReducer(
     qwenState({ draft: "Question", sessionId: "5a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", creatingSession: true }),

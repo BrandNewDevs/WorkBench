@@ -1,5 +1,6 @@
 """Deep local module for approved PDF inspection and controlled output."""
 
+from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol, cast
@@ -25,6 +26,9 @@ class PdfDocumentError(ValueError):
     """A user-safe PDF workflow failure."""
 
 
+PdfWritePolicy = Callable[[PdfDocumentDraft | PdfEditPlan, Path], bool]
+
+
 class PdfDocumentEngine(Protocol):
     """Small interface for all approved-input PDF operations."""
 
@@ -45,10 +49,20 @@ class PdfDocumentEngine(Protocol):
 class LocalPdfDocumentEngine:
     """Keep PDF parsing, safe layout IDs, edits, rendering, and validation local."""
 
-    def __init__(self, *, max_pages: int = 200, max_bytes: int = 50 * 1024 * 1024) -> None:
+    def __init__(
+        self, *, max_pages: int = 200, max_bytes: int = 50 * 1024 * 1024,
+        write_policy: PdfWritePolicy | None = None,
+    ) -> None:
         self._max_pages = max_pages
         self._max_bytes = max_bytes
         self._renderer = LocalPdfRenderer()
+        self._write_policy = write_policy
+
+    def _require_write_approval(self, plan: PdfDocumentDraft | PdfEditPlan, destination: Path) -> None:
+        if self._write_policy is None or not self._write_policy(plan, destination):
+            raise PdfDocumentError("PDF creation requires an exact approved execution claim")
+        if destination.exists() or destination.is_symlink():
+            raise PdfDocumentError("PDF output must be a new file")
 
     def inspect(self, source: PdfSource, path: Path) -> tuple[PdfPage, ...]:
         self._require_safe_source(source, path)
@@ -143,6 +157,7 @@ class LocalPdfDocumentEngine:
             raise PdfDocumentError("PDF could not be decoded safely") from error
 
     def render_draft(self, draft: PdfDocumentDraft, destination: Path) -> int:
+        self._require_write_approval(draft, destination)
         try:
             self._renderer.render_draft(draft, destination)
             return self._validate_output(destination)
@@ -157,10 +172,17 @@ class LocalPdfDocumentEngine:
         plan: PdfEditPlan,
         destination: Path,
     ) -> int:
+        self._require_write_approval(plan, destination)
+        if path.resolve() == destination.resolve():
+            raise PdfDocumentError("the uploaded source cannot be overwritten")
         self._require_safe_source(source, path)
         if plan.source_id != source.source_id:
             raise PdfDocumentError("edit plan does not match the uploaded PDF")
-        block_map = {block.block_id: block for page in pages for block in page.text_blocks}
+        # Resolve geometry again from the hash-verified original, never from caller metadata.
+        block_map = {
+            block.block_id: block
+            for page in self.inspect(source, path) for block in page.text_blocks
+        }
         try:
             with pymupdf.open(path) as document:  # type: ignore[no-untyped-call]
                 if document.needs_pass:

@@ -59,7 +59,9 @@ def test_render_draft_creates_valid_local_pdf(tmp_path: Path) -> None:
         header="WorkBench",
     )
 
-    page_count = LocalPdfDocumentEngine().render_draft(draft, destination)
+    page_count = LocalPdfDocumentEngine(
+        write_policy=lambda candidate, target: candidate == draft and target == destination
+    ).render_draft(draft, destination)
 
     assert page_count == 1
     with pymupdf.open(destination) as document:  # type: ignore[no-untyped-call]
@@ -72,7 +74,7 @@ def test_edit_replaces_only_known_native_block_without_mutating_source(tmp_path:
     _native_pdf(source_path)
     original_bytes = source_path.read_bytes()
     source = _source(source_path)
-    engine = LocalPdfDocumentEngine()
+    engine = LocalPdfDocumentEngine(write_policy=lambda candidate, target: candidate == plan and target == output_path)
     pages = engine.inspect(source, source_path)
     plan = PdfEditPlan(
         source_id=source.source_id,
@@ -98,7 +100,7 @@ def test_edit_rejects_unknown_block_id(tmp_path: Path) -> None:
     source_path = tmp_path / "source.pdf"
     _native_pdf(source_path)
     source = _source(source_path)
-    engine = LocalPdfDocumentEngine()
+    engine = LocalPdfDocumentEngine(write_policy=lambda candidate, target: candidate == plan and target == tmp_path / "edited.pdf")
     pages = engine.inspect(source, source_path)
     plan = PdfEditPlan(
         source_id=source.source_id,
@@ -108,3 +110,13 @@ def test_edit_rejects_unknown_block_id(tmp_path: Path) -> None:
 
     with pytest.raises(PdfDocumentError, match="non-existent"):
         engine.apply_edit(source, source_path, pages, plan, tmp_path / "edited.pdf")
+
+
+def test_creation_without_backend_approval_writes_nothing(tmp_path: Path) -> None:
+    draft = PdfDocumentDraft(title="Draft", purpose="Test", sections=(
+        PdfDraftSection(heading="Facts", paragraphs=("Approved facts",)),
+    ))
+    destination = tmp_path / "denied.pdf"
+    with pytest.raises(PdfDocumentError, match="approved execution"):
+        LocalPdfDocumentEngine().render_draft(draft, destination)
+    assert not destination.exists()
