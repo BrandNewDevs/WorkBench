@@ -1,14 +1,15 @@
-"""Opt-in two-turn Qwen3:4b smoke test for the local Jetson conversation path."""
+"""Opt-in acceptance check for the active local Qwen conversation profile."""
 
 import os
 
 import pytest
 
+from app.ai.generation.conversation import LocalConversationGenerator
 from app.ai.models import create_ollama_adapter, load_model_profile
 from app.ai.schemas import (
     Capability,
-    ConversationGenerationRequest,
     ConversationMessage,
+    ConversationRequest,
     ModelStatus,
 )
 
@@ -16,15 +17,16 @@ pytestmark = [
     pytest.mark.live_ollama,
     pytest.mark.skipif(
         os.getenv("WORKBENCH_RUN_LIVE_OLLAMA") != "1",
-        reason="set WORKBENCH_RUN_LIVE_OLLAMA=1 with preloaded qwen3:4b",
+        reason="set WORKBENCH_RUN_LIVE_OLLAMA=1 with the profile's text model preloaded",
     ),
 ]
 
 
-async def test_preloaded_qwen3_4b_keeps_two_turn_local_conversation_context() -> None:
-    """Verify a real local Qwen response and one follow-up without downloads or web access."""
+async def test_active_qwen_profile_passes_three_local_conversation_sessions() -> None:
+    """Verify identity, clean output, and context three times on the selected device."""
 
     profile = load_model_profile()
+    expected_model = profile.text_candidates[0]
     adapter = create_ollama_adapter(profile=profile)
     try:
         health = await adapter.health(profile)
@@ -34,45 +36,51 @@ async def test_preloaded_qwen3_4b_keeps_two_turn_local_conversation_context() ->
         if (
             not health.runtime_ready
             or text_health.status is not ModelStatus.READY
-            or text_health.selected_model != "qwen3:4b"
+            or text_health.selected_model != expected_model
         ):
-            pytest.skip("preloaded qwen3:4b is unavailable for the local conversation check")
+            pytest.skip(f"preloaded {expected_model} is unavailable for local chat acceptance")
 
-        first = await adapter.generate_conversation(
-            ConversationGenerationRequest(
-                model="qwen3:4b",
-                system_prompt="Reply briefly and only from the supplied conversation.",
-                messages=(
-                    ConversationMessage(
-                        role="user",
-                        content="Remember this exact token: ORIN-LOCAL-TEST.",
+        generator = LocalConversationGenerator(adapter, profile)
+        for run_number in range(1, 4):
+            session_id = f"live-local-chat-{run_number}"
+            memory_token = f"LOCAL-CONTEXT-{run_number}"
+            first = await generator.reply(
+                ConversationRequest(
+                    session_id=session_id,
+                    user_message=(
+                        "Briefly introduce yourself, name the local model currently generating "
+                        f"your answer, and remember this token: {memory_token}."
                     ),
                 ),
-                limits=profile.text_limits,
+                model=expected_model,
             )
-        )
-        second = await adapter.generate_conversation(
-            ConversationGenerationRequest(
-                model="qwen3:4b",
-                system_prompt="Reply briefly and only from the supplied conversation.",
-                messages=(
-                    ConversationMessage(
-                        role="user",
-                        content="Remember this exact token: ORIN-LOCAL-TEST.",
-                    ),
-                    ConversationMessage(role="assistant", content=first.text),
-                    ConversationMessage(
-                        role="user",
-                        content="What exact token did I ask you to remember?",
+            second = await generator.reply(
+                ConversationRequest(
+                    session_id=session_id,
+                    user_message="What exact token did I ask you to remember?",
+                    history=(
+                        ConversationMessage(
+                            role="user",
+                            content=(
+                                "Briefly introduce yourself, name the local model currently "
+                                f"generating your answer, and remember this token: {memory_token}."
+                            ),
+                        ),
+                        ConversationMessage(role="assistant", content=first.assistant_text),
                     ),
                 ),
-                limits=profile.text_limits,
+                model=expected_model,
             )
-        )
+
+            combined = f"{first.assistant_text}\n{second.assistant_text}".lower()
+            assert first.model == expected_model
+            assert second.model == expected_model
+            assert first.used_fallback is False
+            assert second.used_fallback is False
+            assert "workbench" in first.assistant_text.lower()
+            assert expected_model.lower() in first.assistant_text.lower()
+            assert memory_token.lower() in second.assistant_text.lower()
+            assert "<think>" not in combined
+            assert "</think>" not in combined
     finally:
         await adapter.close()
-
-    assert first.model == "qwen3:4b"
-    assert first.text.strip()
-    assert second.model == "qwen3:4b"
-    assert "ORIN-LOCAL-TEST" in second.text.upper()

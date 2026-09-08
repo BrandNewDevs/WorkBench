@@ -501,7 +501,7 @@ class OllamaModelAdapter:
         timeout_seconds: float,
         temperature: float,
     ) -> ConversationGenerationResult:
-        """Call local Ollama without structured-output constraints for ordinary chat."""
+        """Call local Ollama and expose only a validated final conversation answer."""
 
         runtime_identity = f"- Assistant name: {assistant_name}"
         if disclose_runtime_model:
@@ -572,7 +572,11 @@ class OllamaModelAdapter:
                 model=model,
                 metrics=metrics,
             )
-        cleaned_content = self._strip_legacy_thinking(result.message.content)
+        try:
+            cleaned_content = self._strip_legacy_thinking(result.message.content)
+        except InvalidStructuredOutput as error:
+            error.attach_inference_evidence(model=model, metrics=metrics)
+            raise
         try:
             parsed_output = ConversationModelOutput.model_validate_json(cleaned_content)
         except ValidationError as error:

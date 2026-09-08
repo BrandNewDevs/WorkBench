@@ -34,6 +34,10 @@ qwen3-vl:4b
 qwen3-embedding:0.6b
 ```
 
+Laptop chat-only validation may deliberately use the approved `laptop-chat-1.7b` profile with
+only `qwen3:1.7b` preloaded. In that profile the small model is the preferred text model, so a
+successful run must not report fallback use.
+
 Jetson candidate models:
 
 ```text
@@ -69,6 +73,30 @@ pnpm --filter @workbench/ai evaluate:benchmark \
 ```
 
 This proves the safe fallback works on the target device before testing larger models.
+
+## Validate ordinary local chat before the golden workflow
+
+First run the conversation acceptance check on the laptop with the intentional small-model
+profile:
+
+```bash
+WORKBENCH_AI_MODEL_PROFILE=laptop-chat-1.7b \
+pnpm --filter @workbench/ai test:live tests/ai/models/test_conversation_live.py
+```
+
+The check runs three independent two-turn conversations and requires `qwen3:1.7b`, WorkBench
+identity, exact context recall, no fallback, and no thinking tags. It uses no vision or embedding
+model.
+
+After that passes, run the same unchanged check on the Jetson with the safe profile:
+
+```bash
+WORKBENCH_AI_MODEL_PROFILE=safe-8gb \
+pnpm --filter @workbench/ai test:live tests/ai/models/test_conversation_live.py
+```
+
+This run must select `qwen3:4b` without falling back. Keep the resulting terminal output with the
+device validation notes.
 
 ## Test stronger models independently
 
