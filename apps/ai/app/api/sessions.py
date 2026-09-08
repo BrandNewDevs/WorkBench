@@ -110,6 +110,7 @@ def _default_title(workflow_type: WorkflowType) -> str:
     return {
         WorkflowType.INSPECTION_ANALYSIS: "Inspection analysis",
         WorkflowType.CODE_REPAIR: "Code repair",
+        WorkflowType.PDF_DOCUMENT: "PDF",
     }[workflow_type]
 
 
@@ -160,10 +161,12 @@ def _upload_type(workflow_type: WorkflowType, file_name: str, prefix: bytes) -> 
         if workflow_type is WorkflowType.INSPECTION_ANALYSIS
         else text_types
     )
+    if workflow_type is WorkflowType.PDF_DOCUMENT:
+        supported = {".pdf": "application/pdf"}
     expected = supported.get(extension)
     if expected is None:
         raise UnsupportedMediaError("unsupported extension")
-    if workflow_type is WorkflowType.INSPECTION_ANALYSIS:
+    if workflow_type in {WorkflowType.INSPECTION_ANALYSIS, WorkflowType.PDF_DOCUMENT}:
         if detected != expected:
             raise UnsupportedMediaError("detected media does not match extension")
         return expected, False

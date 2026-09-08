@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from hashlib import sha256
+from math import ceil, floor
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -9,11 +10,15 @@ import pymupdf
 
 from app.pdf.contracts import (
     PdfAddAnnotation,
+    PdfAddPages,
     PdfDocumentDraft,
     PdfEditPlan,
     PdfExtractionMethod,
+    PdfOverlay,
     PdfPage,
+    PdfPageSequence,
     PdfRedactBlock,
+    PdfRedactRegion,
     PdfReplaceText,
     PdfSource,
     PdfTable,
@@ -50,7 +55,10 @@ class LocalPdfDocumentEngine:
     """Keep PDF parsing, safe layout IDs, edits, rendering, and validation local."""
 
     def __init__(
-        self, *, max_pages: int = 200, max_bytes: int = 50 * 1024 * 1024,
+        self,
+        *,
+        max_pages: int = 200,
+        max_bytes: int = 50 * 1024 * 1024,
         write_policy: PdfWritePolicy | None = None,
     ) -> None:
         self._max_pages = max_pages
@@ -58,7 +66,9 @@ class LocalPdfDocumentEngine:
         self._renderer = LocalPdfRenderer()
         self._write_policy = write_policy
 
-    def _require_write_approval(self, plan: PdfDocumentDraft | PdfEditPlan, destination: Path) -> None:
+    def _require_write_approval(
+        self, plan: PdfDocumentDraft | PdfEditPlan, destination: Path
+    ) -> None:
         if self._write_policy is None or not self._write_policy(plan, destination):
             raise PdfDocumentError("PDF creation requires an exact approved execution claim")
         if destination.exists() or destination.is_symlink():
@@ -72,18 +82,30 @@ class LocalPdfDocumentEngine:
                     raise PdfDocumentError("encrypted PDFs are not supported")
                 if document.page_count != source.page_count:
                     raise PdfDocumentError("PDF page count changed after upload")
+                if document.page_count > self._max_pages:
+                    raise PdfDocumentError("PDF exceeds the configured page limit")
                 pages: list[PdfPage] = []
                 for index in range(document.page_count):
                     page = document.load_page(index)
+                    if (
+                        page.rect.get_area() > 4_000_000
+                        or max(page.rect.width, page.rect.height) > 4096
+                    ):
+                        raise PdfDocumentError(
+                            "PDF page dimensions exceed the safe rendering limit"
+                        )
                     blocks: list[PdfTextBlock] = []
-                    raw = page.get_text("dict", sort=True)
+                    raw = page.get_text(
+                        "dict",
+                        sort=True,
+                        flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES,
+                    )
                     for block_index, block in enumerate(raw.get("blocks", ())):
                         if block.get("type") != 0:
                             continue
-                        text = "".join(
-                            span.get("text", "")
+                        text = "\n".join(
+                            "".join(span.get("text", "") for span in line.get("spans", ()))
                             for line in block.get("lines", ())
-                            for span in line.get("spans", ())
                         ).strip()
                         if not text:
                             continue
@@ -122,7 +144,14 @@ class LocalPdfDocumentEngine:
                             )
                         )
                     tables = self._extract_tables(page, index + 1)
-                    if blocks:
+                    image_area = 0.0
+                    for info in page.get_image_info():
+                        image_area += float(pymupdf.Rect(info["bbox"]).get_area())  # type: ignore[no-untyped-call]
+                    needs_vision = not blocks or (
+                        image_area > page.rect.get_area() * 0.6
+                        and sum(len(b.text) for b in blocks) < 200
+                    )
+                    if blocks and not needs_vision:
                         pages.append(
                             PdfPage(
                                 page_number=index + 1,
@@ -135,7 +164,10 @@ class LocalPdfDocumentEngine:
                         pages.append(
                             PdfPage(
                                 page_number=index + 1,
-                                extraction_method=PdfExtractionMethod.VISUAL,
+                                extraction_method=PdfExtractionMethod.MIXED
+                                if blocks
+                                else PdfExtractionMethod.VISUAL,
+                                text_blocks=tuple(blocks),
                                 uncertain=True,
                                 uncertainty_reason=(
                                     "Page has no usable native text; "
@@ -181,13 +213,52 @@ class LocalPdfDocumentEngine:
         # Resolve geometry again from the hash-verified original, never from caller metadata.
         block_map = {
             block.block_id: block
-            for page in self.inspect(source, path) for block in page.text_blocks
+            for page in self.inspect(source, path)
+            for block in page.text_blocks
         }
         try:
             with pymupdf.open(path) as document:  # type: ignore[no-untyped-call]
                 if document.needs_pass:
                     raise PdfDocumentError("encrypted PDFs are not supported")
+                if document.get_sigflags() > 0:
+                    raise PdfDocumentError("digitally signed PDFs cannot be edited")
                 for operation in plan.operations:
+                    if isinstance(operation, PdfPageSequence):
+                        if any(page < 1 or page > document.page_count for page in operation.pages):
+                            raise PdfDocumentError("Selected page does not exist")
+                        document.select([page - 1 for page in operation.pages])
+                    elif isinstance(operation, PdfAddPages):
+                        temporary = destination.with_suffix(".pages.pdf")
+                        if temporary.exists() or temporary.is_symlink():
+                            raise PdfDocumentError("PDF staging output already exists")
+                        try:
+                            self._renderer.render_draft(operation.draft, temporary)
+                            with pymupdf.open(temporary) as addition:  # type: ignore[no-untyped-call]
+                                document.insert_pdf(
+                                    addition, start_at=0 if operation.position == "before" else -1
+                                )
+                        finally:
+                            temporary.unlink(missing_ok=True)
+                    elif isinstance(operation, (PdfOverlay, PdfRedactRegion)):
+                        if operation.page_number > document.page_count:
+                            raise PdfDocumentError("Edit page does not exist")
+                        page = document[operation.page_number - 1]
+                        rect = pymupdf.Rect(operation.x0, operation.y0, operation.x1, operation.y1)  # type: ignore[no-untyped-call]
+                        if rect.is_empty or not page.rect.contains(rect):
+                            raise PdfDocumentError("PDF edit region is outside the page")
+                        if isinstance(operation, PdfOverlay):
+                            if (
+                                page.insert_textbox(
+                                    rect, operation.text, fontsize=operation.font_size
+                                )
+                                < 0
+                            ):
+                                raise PdfDocumentError(
+                                    "PDF overlay does not fit its approved region"
+                                )
+                        else:
+                            page.add_redact_annot(rect, fill=(1, 1, 1))
+                            page.apply_redactions()
                     if isinstance(operation, (PdfReplaceText, PdfRedactBlock)):
                         block = block_map.get(operation.block_id)
                         if block is None:
@@ -202,12 +273,9 @@ class LocalPdfDocumentEngine:
                         page.apply_redactions()
                         if isinstance(operation, PdfReplaceText):
                             font_size = block.font_size or 10
-                            replacement_rect = pymupdf.Rect(  # type: ignore[no-untyped-call]
-                                rect.x0,
-                                max(0, rect.y0 - font_size * 0.2),
-                                min(page.rect.width, rect.x1 + 2),
-                                min(page.rect.height, rect.y1 + font_size * 0.8),
-                            )
+                            replacement_rect = rect
+                            # Preserve the approved area; accommodate font ascent within it.
+                            font_size *= 0.8
                             inserted = page.insert_textbox(
                                 replacement_rect,
                                 operation.replacement,
@@ -235,6 +303,7 @@ class LocalPdfDocumentEngine:
                         )
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 document.save(destination, garbage=4, deflate=True)
+            self._validate_preserved_layout(path, destination, plan, block_map)
             return self._validate_output(destination)
         except PdfDocumentError:
             destination.unlink(missing_ok=True)
@@ -260,6 +329,64 @@ class LocalPdfDocumentEngine:
             raise PdfDocumentError("PDF input no longer matches its approved upload")
 
     @staticmethod
+    def _validate_preserved_layout(
+        source: Path, output: Path, plan: PdfEditPlan, blocks: dict[str, PdfTextBlock]
+    ) -> None:
+        with pymupdf.open(source) as original, pymupdf.open(output) as edited:  # type: ignore[no-untyped-call]
+            mapping = list(range(original.page_count))
+            first = plan.operations[0]
+            if isinstance(first, PdfPageSequence):
+                mapping = [page - 1 for page in first.pages]
+            offset = (
+                edited.page_count - original.page_count
+                if isinstance(first, PdfAddPages) and first.position == "before"
+                else 0
+            )
+            for output_index, index in enumerate(mapping):
+                before, after = original[index], edited[output_index + offset]
+                areas: list[tuple[float, float, float, float]] = []
+                for op in plan.operations:
+                    if isinstance(op, (PdfReplaceText, PdfRedactBlock)):
+                        block = blocks[op.block_id]
+                        if block.page_number != index + 1:
+                            continue
+                        areas.append((block.x0, block.y0, block.x1, block.y1))
+                        region = pymupdf.Rect(block.x0, block.y0, block.x1, block.y1)  # type: ignore[no-untyped-call]
+                        extracted = " ".join(after.get_textbox(region).split())
+                        if (
+                            isinstance(op, PdfReplaceText)
+                            and " ".join(op.replacement.split()) not in extracted
+                        ):
+                            raise PdfDocumentError("PDF replacement failed text verification")
+                        if isinstance(op, PdfRedactBlock) and extracted.strip():
+                            raise PdfDocumentError("PDF redaction left native text in its region")
+                    elif isinstance(op, PdfAddAnnotation) and op.page_number == index + 1:
+                        areas.append((op.x, op.y, op.x + 22, op.y + 22))
+                    elif (
+                        isinstance(op, (PdfOverlay, PdfRedactRegion))
+                        and op.page_number == index + 1
+                    ):
+                        areas.append((op.x0, op.y0, op.x1, op.y1))
+                left, right = before.get_pixmap(alpha=False), after.get_pixmap(alpha=False)
+                if (left.width, left.height) != (right.width, right.height):
+                    raise PdfDocumentError("PDF edit changed page dimensions")
+                original_bytes, edited_bytes = left.samples, right.samples
+                for y in range(left.height):
+                    intervals = sorted(
+                        (max(0, floor(x0) - 1), min(left.width, ceil(x1) + 1))
+                        for x0, y0, x1, y1 in areas
+                        if floor(y0) - 1 <= y <= ceil(y1) + 1
+                    )
+                    start = 0
+                    for x0, x1 in [*intervals, (left.width, left.width)]:
+                        a, b = y * left.stride + start * left.n, y * left.stride + x0 * left.n
+                        if b > a and original_bytes[a:b] != edited_bytes[a:b]:
+                            raise PdfDocumentError(
+                                "PDF edit changed pixels outside approved regions"
+                            )
+                        start = max(start, x1)
+
+    @staticmethod
     def _extract_tables(page: pymupdf.Page, page_number: int) -> tuple[PdfTable, ...]:
         try:
             tables = page.find_tables().tables  # type: ignore[no-untyped-call]
@@ -277,7 +404,7 @@ class LocalPdfDocumentEngine:
             if not destination.is_file() or destination.stat().st_size <= 4:
                 raise PdfDocumentError("local PDF renderer produced no output")
             with pymupdf.open(destination) as document:  # type: ignore[no-untyped-call]
-                if document.needs_pass or document.page_count == 0:
+                if document.needs_pass or not 1 <= document.page_count <= self._max_pages:
                     raise PdfDocumentError("local PDF output failed validation")
                 for page in document:
                     if page.rect.is_empty:

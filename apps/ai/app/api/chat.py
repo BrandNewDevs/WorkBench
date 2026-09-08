@@ -8,7 +8,7 @@ from typing import Annotated, cast
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Path, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.ai.engine import AIEngine
 from app.ai.errors import (
@@ -35,6 +35,7 @@ from app.api.chat_contracts import (
     ConversationCreateResponse,
 )
 from app.api.contracts import ErrorResponse
+from app.api.turn_stream import Emit, TurnEvent, turn_response
 from app.auth.contracts import AuthenticatedUser
 from app.ports.local_backend import (
     AuditAction,
@@ -322,6 +323,9 @@ def build_chat_router() -> APIRouter:
                     409,
                 )
 
+            if current_session.workflow_type is WorkflowType.PDF_DOCUMENT:
+                return _error("workflow_not_allowed", "Use the session's workflow route.", 409)
+
             stored_messages = await store.list_messages(
                 current_session.session_id,
                 user.user_id,
@@ -346,13 +350,16 @@ def build_chat_router() -> APIRouter:
                 client_message_id=payload.client_request_id or uuid4(),
             )
             try:
-                reply = await engine.reply_to_conversation(
-                    ConversationRequest(
-                        session_id=str(current_session.session_id),
-                        user_message=user_message.content,
-                        history=history,
-                    )
+                ai_request = ConversationRequest(
+                    session_id=str(current_session.session_id),
+                    user_message=user_message.content,
+                    history=history,
                 )
+                on_delta = getattr(request.state, "answer_delta", None)
+                if on_delta is None:
+                    reply = await engine.reply_to_conversation(ai_request)
+                else:
+                    reply = await engine.reply_to_conversation(ai_request, on_delta=on_delta)
                 if reply.session_id != str(current_session.session_id):
                     raise ValueError("conversation reply session did not match the request")
                 assistant_message_id = uuid5(user_message.message_id, "assistant-reply")
@@ -419,6 +426,50 @@ def build_chat_router() -> APIRouter:
                 metrics=reply.metrics,
             )
 
+    @router.post("/sessions/{session_id}/conversation/stream", response_model=None)
+    async def stream_conversation(
+        session_id: SessionId,
+        payload: ConversationCreateRequest,
+        _: AllowedOrigin,
+        user: CurrentEmployee,
+        request: Request,
+    ) -> StreamingResponse | JSONResponse:
+        session = await _owned_session(session_id, user, request)
+        if isinstance(session, JSONResponse):
+            return session
+        if session.workflow_type is not WorkflowType.LOCAL_CONVERSATION:
+            return _error("workflow_not_allowed", "Use the PDF workflow route.", 409)
+
+        async def run(emit: Emit) -> None:
+            async def delta(text: str | None) -> None:
+                await emit(
+                    TurnEvent(
+                        event="assistant.reset" if text is None else "assistant.delta",
+                        text=text or "",
+                    )
+                )
+
+            request.state.answer_delta = delta
+            await emit(TurnEvent(event="turn.accepted"))
+            result = await create_conversation_turn(session_id, payload, _, user, request)
+            if isinstance(result, JSONResponse):
+                await emit(
+                    TurnEvent(
+                        event="turn.failed",
+                        text="Local chat failed.",
+                        result=bytes(result.body).decode(),
+                    )
+                )
+            else:
+                await emit(
+                    TurnEvent(
+                        event="assistant.completed",
+                        result=result.model_dump(mode="json", by_alias=True),
+                    )
+                )
+
+        return turn_response(run)
+
     @router.post(
         "/sessions/{session_id}/messages",
         response_model=WorkflowMessage,
@@ -443,7 +494,7 @@ def build_chat_router() -> APIRouter:
                 "This chat session is closed and no longer accepts messages.",
                 409,
             )
-        if session.workflow_type is WorkflowType.LOCAL_CONVERSATION:
+        if session.workflow_type in {WorkflowType.LOCAL_CONVERSATION, WorkflowType.PDF_DOCUMENT}:
             # Plain chat sessions have no workflow pipeline; admitting a run
             # would mix generated workflow turns into a conversation history.
             return _error(

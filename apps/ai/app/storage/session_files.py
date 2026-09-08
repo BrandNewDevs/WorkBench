@@ -137,6 +137,15 @@ class SQLiteSessionFileStore:
                         )
                     stored = existing
                 else:
+                    if session.workflow_type.value == "pdfDocument":
+                        cursor = await connection.execute(
+                            "SELECT 1 FROM workflow_uploads WHERE session_id=?",
+                            (str(session.session_id),),
+                        )
+                        if await cursor.fetchone() is not None:
+                            raise UploadSessionStateConflictError(
+                                "PDF sessions accept one source; start a new PDF session"
+                            )
                     try:
                         os.link(temporary_path, destination, follow_symlinks=False)
                     except FileExistsError as error:

@@ -74,7 +74,9 @@ def test_edit_replaces_only_known_native_block_without_mutating_source(tmp_path:
     _native_pdf(source_path)
     original_bytes = source_path.read_bytes()
     source = _source(source_path)
-    engine = LocalPdfDocumentEngine(write_policy=lambda candidate, target: candidate == plan and target == output_path)
+    engine = LocalPdfDocumentEngine(
+        write_policy=lambda candidate, target: candidate == plan and target == output_path
+    )
     pages = engine.inspect(source, source_path)
     plan = PdfEditPlan(
         source_id=source.source_id,
@@ -100,7 +102,11 @@ def test_edit_rejects_unknown_block_id(tmp_path: Path) -> None:
     source_path = tmp_path / "source.pdf"
     _native_pdf(source_path)
     source = _source(source_path)
-    engine = LocalPdfDocumentEngine(write_policy=lambda candidate, target: candidate == plan and target == tmp_path / "edited.pdf")
+    engine = LocalPdfDocumentEngine(
+        write_policy=lambda candidate, target: (
+            candidate == plan and target == tmp_path / "edited.pdf"
+        )
+    )
     pages = engine.inspect(source, source_path)
     plan = PdfEditPlan(
         source_id=source.source_id,
@@ -113,9 +119,11 @@ def test_edit_rejects_unknown_block_id(tmp_path: Path) -> None:
 
 
 def test_creation_without_backend_approval_writes_nothing(tmp_path: Path) -> None:
-    draft = PdfDocumentDraft(title="Draft", purpose="Test", sections=(
-        PdfDraftSection(heading="Facts", paragraphs=("Approved facts",)),
-    ))
+    draft = PdfDocumentDraft(
+        title="Draft",
+        purpose="Test",
+        sections=(PdfDraftSection(heading="Facts", paragraphs=("Approved facts",)),),
+    )
     destination = tmp_path / "denied.pdf"
     with pytest.raises(PdfDocumentError, match="approved execution"):
         LocalPdfDocumentEngine().render_draft(draft, destination)

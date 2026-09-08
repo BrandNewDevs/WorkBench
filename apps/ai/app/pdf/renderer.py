@@ -1,5 +1,6 @@
 """Deterministic local ReportLab PDF renderer for approved drafts."""
 
+from html import escape
 from pathlib import Path
 
 from reportlab.lib import colors  # type: ignore[import-untyped]
@@ -9,6 +10,7 @@ from reportlab.lib.units import mm  # type: ignore[import-untyped]
 from reportlab.platypus import (  # type: ignore[import-untyped]
     ListFlowable,
     ListItem,
+    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -55,20 +57,34 @@ class LocalPdfRenderer:
             leading=14,
             spaceAfter=7,
         )
-        story = [Paragraph(draft.title, title), Paragraph(draft.purpose, body), Spacer(1, 4)]
+        story = [
+            Paragraph(escape(draft.title), title),
+            Paragraph(escape(draft.purpose), body),
+            Spacer(1, 4),
+        ]
         for section in draft.sections:
-            story.append(Paragraph(section.heading, heading))
-            story.extend(Paragraph(paragraph, body) for paragraph in section.paragraphs)
+            if section.page_break_before:
+                story.append(PageBreak())
+            story.append(Paragraph(escape(section.heading), heading))
+            story.extend(Paragraph(escape(paragraph), body) for paragraph in section.paragraphs)
             if section.bullets:
                 story.append(
                     ListFlowable(
-                        [ListItem(Paragraph(item, body)) for item in section.bullets],
+                        [ListItem(Paragraph(escape(item), body)) for item in section.bullets],
                         bulletType="bullet",
                         leftIndent=15,
                     )
                 )
             if section.table:
-                table = Table(section.table, repeatRows=1, hAlign="LEFT")
+                columns = len(section.table[0])
+                if not columns or columns > 8 or any(len(row) != columns for row in section.table):
+                    raise PdfRenderError("PDF table must have one to eight consistent columns")
+                table = Table(
+                    [[Paragraph(escape(cell), body) for cell in row] for row in section.table],
+                    colWidths=[(A4[0] - 40 * mm) / columns] * columns,
+                    repeatRows=1,
+                    hAlign="LEFT",
+                )
                 table.setStyle(
                     TableStyle(
                         [
@@ -92,7 +108,7 @@ class LocalPdfRenderer:
                 [
                     Spacer(1, 8),
                     Paragraph("Uncertainty", heading),
-                    Paragraph(draft.uncertainty_statement, body),
+                    Paragraph(escape(draft.uncertainty_statement), body),
                 ]
             )
 

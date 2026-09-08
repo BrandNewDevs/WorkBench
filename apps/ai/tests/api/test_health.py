@@ -117,6 +117,13 @@ def test_app_registers_health_auth_workflow_session_and_chat_routes() -> None:
         "/chat/sessions/{session_id}",
         "/chat/sessions/{session_id}/conversation",
         "/chat/sessions/{session_id}/messages",
+        "/chat/sessions/{session_id}/conversation/stream",
+        "/pdf/sessions/{session_id}",
+        "/pdf/sessions/{session_id}/delete",
+        "/pdf/sessions/{session_id}/turns",
+        "/pdf/sessions/{session_id}/turns/stream",
+        "/pdf/sessions/{session_id}/approvals/{approval_id}",
+        "/pdf/sessions/{session_id}/artifacts/{artifact_id}",
     }
 
 

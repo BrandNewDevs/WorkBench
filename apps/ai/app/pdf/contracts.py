@@ -62,6 +62,7 @@ class PdfPage(ContractModel):
     extraction_method: PdfExtractionMethod
     text_blocks: tuple[PdfTextBlock, ...] = ()
     tables: tuple[PdfTable, ...] = ()
+    visual_text: str = Field(default="", max_length=30_000)
     uncertain: bool = False
     uncertainty_reason: str | None = Field(default=None, max_length=500)
 
@@ -86,6 +87,7 @@ class PdfDocumentDraft(ContractModel):
 
 
 class PdfDraftSection(ContractModel):
+    page_break_before: bool = False
     heading: str = Field(min_length=1, max_length=200)
     paragraphs: tuple[str, ...] = Field(min_length=1, max_length=100)
     bullets: tuple[str, ...] = Field(default=(), max_length=100)
@@ -111,8 +113,47 @@ class PdfAddAnnotation(ContractModel):
     y: float = Field(ge=0)
 
 
+class PdfOverlay(ContractModel):
+    operation: Literal["overlayText"] = "overlayText"
+    page_number: int = Field(ge=1)
+    x0: float = Field(ge=0)
+    y0: float = Field(ge=0)
+    x1: float = Field(gt=0)
+    y1: float = Field(gt=0)
+    text: str = Field(min_length=1, max_length=2_000)
+    font_size: float = Field(default=10, ge=6, le=36)
+
+
+class PdfRedactRegion(ContractModel):
+    operation: Literal["redactRegion"] = "redactRegion"
+    page_number: int = Field(ge=1)
+    x0: float = Field(ge=0)
+    y0: float = Field(ge=0)
+    x1: float = Field(gt=0)
+    y1: float = Field(gt=0)
+
+
+class PdfPageSequence(ContractModel):
+    """Select source pages in order; omission deletes and repetition duplicates."""
+
+    operation: Literal["selectPages"] = "selectPages"
+    pages: tuple[int, ...] = Field(min_length=1, max_length=200)
+
+
+class PdfAddPages(ContractModel):
+    operation: Literal["addPages"] = "addPages"
+    position: Literal["before", "after"]
+    draft: PdfDocumentDraft
+
+
 PdfEditOperation = Annotated[
-    PdfReplaceText | PdfRedactBlock | PdfAddAnnotation,
+    PdfReplaceText
+    | PdfRedactBlock
+    | PdfAddAnnotation
+    | PdfOverlay
+    | PdfRedactRegion
+    | PdfPageSequence
+    | PdfAddPages,
     Field(discriminator="operation"),
 ]
 
@@ -124,6 +165,14 @@ class PdfEditPlan(ContractModel):
     output_file_name: str = Field(min_length=5, max_length=255, pattern=r"^[^/\\]+\.pdf$")
     operations: tuple[PdfEditOperation, ...] = Field(min_length=1, max_length=50)
 
+    @model_validator(mode="after")
+    def separate_page_operations(self) -> PdfEditPlan:
+        if len(self.operations) > 1 and any(
+            isinstance(op, (PdfPageSequence, PdfAddPages)) for op in self.operations
+        ):
+            raise ValueError("Page reordering/addition must be a separate approved edit")
+        return self
+
 
 class PdfArtifact(ContractModel):
     """Validated local output facts; path is intentionally absent."""
@@ -134,3 +183,64 @@ class PdfArtifact(ContractModel):
     size_bytes: int = Field(ge=1)
     page_count: int = Field(ge=1)
     validated: Literal[True] = True
+
+
+class PdfTurnIntent(ContractModel):
+    tool: Literal["summarize_pdf", "answer_pdf", "create_pdf", "edit_pdf"]
+
+
+class PdfClaim(ContractModel):
+    text: str = Field(min_length=1, max_length=4_000)
+    pages: tuple[int, ...] = Field(min_length=1, max_length=200)
+
+
+class GroundedPdfAnswer(ContractModel):
+    claims: tuple[PdfClaim, ...] = Field(default=(), max_length=100)
+    uncertainties: tuple[str, ...] = Field(default=(), max_length=30)
+    missing_information: str | None = Field(default=None, max_length=2_000)
+
+    @model_validator(mode="after")
+    def require_content(self) -> GroundedPdfAnswer:
+        if not self.claims and not self.missing_information:
+            raise ValueError("answer must contain evidence or explain missing information")
+        return self
+
+
+class PdfTurnRequest(ContractModel):
+    message: str = Field(min_length=1, max_length=10_000)
+    client_request_id: UUID
+    upload_id: UUID | None = None
+
+
+class PdfApproval(ContractModel):
+    approval_id: UUID
+    tool: Literal["create_pdf", "edit_pdf"]
+    arguments_hash: str
+    status: Literal["pending", "executing", "rejected", "completed", "failed"] = "pending"
+    file_name: str
+    draft: PdfDocumentDraft | None = None
+    edit: PdfEditPlan | None = None
+
+
+class PdfApprovalDecision(ContractModel):
+    approve: bool
+    arguments_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class PdfTurnResult(ContractModel):
+    request_id: UUID
+    user_message: str
+    answer: str
+    tool: Literal["summarize_pdf", "answer_pdf", "create_pdf", "edit_pdf"]
+    pages: tuple[int, ...] = ()
+    selected_model: str
+    used_fallback: bool = False
+    approval: PdfApproval | None = None
+    artifact: PdfArtifact | None = None
+
+
+class PdfSessionView(ContractModel):
+    source: PdfSource | None = None
+    pages: tuple[PdfPage, ...] = ()
+    turns: tuple[PdfTurnResult, ...] = ()
+    activity: tuple[str, ...] = ()

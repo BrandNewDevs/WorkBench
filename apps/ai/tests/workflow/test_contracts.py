@@ -132,6 +132,7 @@ def test_workflow_type_is_explicit() -> None:
         "inspectionAnalysis",
         "codeRepair",
         "localConversation",
+        "pdfDocument",
     }
 
 
