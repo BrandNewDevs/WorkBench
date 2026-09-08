@@ -6,6 +6,9 @@ export interface QwenConversationStatus {
   usedFallback: boolean;
 }
 
+/** Persistent disclosure for answers that cannot be verified against the live web. */
+export const offlineChatStatusText = "Offline — no live web verification";
+
 /**
  * Small, non-sensitive status text required by issue #56: the selected model
  * ID, the fact that it is a local model, and a fallback note only when a

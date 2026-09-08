@@ -11,9 +11,12 @@ import { LoginScreen } from "./components/LoginScreen";
 import { QwenChatPage } from "./components/QwenChatPage";
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { SettingsPage, type HealthState } from "./components/SettingsPage";
-import { WorkspaceSidebar, type WorkspaceView } from "./components/WorkspaceSidebar";
+import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { showErrorToast } from "./lib/toast";
 import { useChatThreads } from "./hooks/useChatThreads";
+import { useQwenChat } from "./hooks/useQwenChat";
+import { defaultEmployeeWorkspaceView } from "./lib/workspace";
+import type { WorkspaceView } from "./lib/workspace";
 import { Toaster } from "./components/ui/sonner";
 import {
   Tooltip,
@@ -84,7 +87,9 @@ function Workspace({
   onSettingsSectionChange: (section: SettingsSection) => void;
   onToggleSidebar: () => void;
 }) {
-  const [activeView, setActiveView] = useState<WorkspaceView>("chat");
+  const [activeView, setActiveView] = useState<WorkspaceView>(
+    access.kind === "authenticated" ? defaultEmployeeWorkspaceView : "chat",
+  );
   const [accountOpen, setAccountOpen] = useState(false);
   const [healthState, setHealthState] = useState<HealthState>({ kind: "loading" });
   const [now, setNow] = useState(() => Date.now());
@@ -92,6 +97,10 @@ function Workspace({
     apiBaseUrl,
     connected: access.kind === "authenticated",
     examplesEnabled,
+  });
+  const qwenChat = useQwenChat({
+    apiBaseUrl,
+    connected: access.kind === "authenticated",
   });
   const healthRequestSequenceRef = useRef(0);
   const lastHealthFailureRef = useRef<string | undefined>(undefined);
@@ -189,10 +198,16 @@ function Workspace({
         chats={chatThreads.threads}
         chatsState={chatThreads.sessionsState}
         collapsed={sidebarCollapsed}
+        localChats={qwenChat.state.pickerSessions}
+        localChatsState={qwenChat.state.pickerState}
+        activeLocalChatId={qwenChat.state.sessionId}
         onCreateChat={chatThreads.createChat}
+        onCreateLocalChat={qwenChat.startNewConversation}
         onNavigate={handleNavigate}
         onSelectChat={chatThreads.selectChat}
+        onSelectLocalChat={qwenChat.selectSession}
         onRetryChats={chatThreads.refreshSessions}
+        onRetryLocalChats={qwenChat.refreshSessions}
         onSettingsSectionChange={onSettingsSectionChange}
         onSignOut={onSignOut}
       />
@@ -244,7 +259,7 @@ function Workspace({
             selectedSection={settingsSection}
           />
         ) : activeView === "qwenChat" ? (
-          <QwenChatPage apiBaseUrl={apiBaseUrl} connected={access.kind === "authenticated"} />
+          <QwenChatPage chat={qwenChat} connected={access.kind === "authenticated"} />
         ) : (
           <ChatPage
             backendConnected={access.kind === "authenticated"}

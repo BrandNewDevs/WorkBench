@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   ArrowLeft,
   LogOut,
+  MessageCircle,
   Plus,
   Search,
   Server,
@@ -13,14 +14,14 @@ import {
 } from "lucide-react";
 import type { EmployeeSession } from "../../shared/contracts";
 import type { ChatThread, ChatThreadId } from "../hooks/useChatThreads";
+import type { QwenPickerSession, QwenPickerState } from "../hooks/useQwenChat";
 import type { SettingsSection } from "../lib/settings";
+import type { WorkspaceView } from "../lib/workspace";
 import { Button } from "./ui/button";
 import { PopoverTrigger } from "./ui/popover";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
-
-export type WorkspaceView = "chat" | "qwenChat" | "settings";
 
 type WorkspaceSidebarProps = {
   access: { kind: "authenticated"; session: EmployeeSession } | { kind: "developmentBypass" };
@@ -30,10 +31,16 @@ type WorkspaceSidebarProps = {
   chats: readonly ChatThread[];
   chatsState?: "idle" | "loading" | "ready" | "error";
   collapsed: boolean;
+  localChats: readonly QwenPickerSession[];
+  localChatsState: QwenPickerState;
+  activeLocalChatId?: string;
   onCreateChat: () => void;
+  onCreateLocalChat: () => void;
   onNavigate: (view: WorkspaceView) => void;
   onSelectChat: (threadId: ChatThreadId) => void;
+  onSelectLocalChat: (sessionId: string) => void;
   onRetryChats?: () => void;
+  onRetryLocalChats: () => void;
   onSettingsSectionChange: (section: SettingsSection) => void;
   onSignOut?: () => void;
 };
@@ -64,16 +71,25 @@ export function WorkspaceSidebar({
   chats,
   chatsState,
   collapsed,
+  localChats,
+  localChatsState,
+  activeLocalChatId,
   onCreateChat,
+  onCreateLocalChat,
   onNavigate,
   onSelectChat,
+  onSelectLocalChat,
   onRetryChats,
+  onRetryLocalChats,
   onSettingsSectionChange,
   onSignOut,
 }: WorkspaceSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
   const filteredRecentChats = chats.filter((chat) => chat.title.toLocaleLowerCase().includes(normalizedSearchQuery));
+  const filteredLocalChats = localChats.filter((chat) =>
+    chat.title.toLocaleLowerCase().includes(normalizedSearchQuery),
+  );
 
   return (
     <aside
@@ -109,31 +125,112 @@ export function WorkspaceSidebar({
           </>
         ) : activeView === "qwenChat" ? (
           <>
-            <div className="px-4 pb-2 pt-3">
-              <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                Local Qwen chat
-              </h2>
-            </div>
-            <nav aria-label="Workspace navigation" className="space-y-1 px-3 pt-1">
+            <nav aria-label="Local chat actions" className="workspace-sidebar__actions space-y-2 px-3 py-3">
+              <div className="flex items-center gap-1">
+                <div className="relative min-w-0 flex-1">
+                  <Label className="sr-only" htmlFor="local-chat-search">Search conversations</Label>
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                    strokeWidth={1.75}
+                  />
+                  <Input
+                    className="workspace-sidebar__search h-10 w-full rounded-lg pl-9 pr-3"
+                    id="local-chat-search"
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search"
+                    type="search"
+                    value={searchQuery}
+                  />
+                </div>
+                <Button
+                  aria-label="New local chat"
+                  className="size-8 shrink-0 px-0"
+                  onClick={onCreateLocalChat}
+                  size="icon"
+                  type="button"
+                  variant="outline"
+                >
+                  <Plus aria-hidden="true" className="size-4" strokeWidth={1.75} />
+                </Button>
+              </div>
               <Button
-                className={navigationClassName(true)}
+                className={navigationClassName(false)}
                 onClick={() => onNavigate("chat")}
                 type="button"
                 variant="ghost"
               >
                 <ArrowLeft aria-hidden="true" className="size-4" strokeWidth={1.75} />
-                <span>Back to chats</span>
+                <span>Workflows</span>
               </Button>
             </nav>
-            <p className="px-4 pt-4 text-xs leading-5 text-muted-foreground">
-              Plain multi-turn text conversation with the local Qwen model for validation. Documents and workflow
-              tools are not used here.
-            </p>
-            <div className="min-h-0 flex-1" />
+            <section
+              aria-labelledby="recent-local-chats-heading"
+              className="workspace-sidebar__content min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pt-5"
+            >
+              <h2
+                id="recent-local-chats-heading"
+                className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+              >
+                Recent conversations
+              </h2>
+              {filteredLocalChats.length > 0 ? (
+                <ul aria-labelledby="recent-local-chats-heading" className="mt-4 space-y-1">
+                  {filteredLocalChats.map((chat) => (
+                    <li key={chat.sessionId}>
+                      <Button
+                        aria-current={activeLocalChatId === chat.sessionId ? "page" : undefined}
+                        aria-label={chat.title}
+                        className={`sidebar-button h-9 w-full justify-start px-3 text-muted-foreground${activeLocalChatId === chat.sessionId ? " bg-background text-foreground" : ""}`}
+                        onClick={() => onSelectLocalChat(chat.sessionId)}
+                        type="button"
+                        variant="ghost"
+                      >
+                        <span className="truncate">{chat.title}</span>
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div
+                  className="mt-4 text-xs leading-5 text-muted-foreground"
+                  role={localChatsState === "error" ? "status" : undefined}
+                >
+                  {localChatsState === "loading"
+                    ? "Loading conversations…"
+                    : localChatsState === "error"
+                      ? "Recent conversations could not be loaded from FastAPI."
+                      : normalizedSearchQuery
+                        ? "No matching conversations."
+                        : "No recent conversations yet."}
+                  {localChatsState === "error" && (
+                    <Button
+                      className="mt-2 h-7 px-2 text-xs"
+                      onClick={onRetryLocalChats}
+                      type="button"
+                      variant="outline"
+                    >
+                      Retry
+                    </Button>
+                  )}
+                </div>
+              )}
+            </section>
           </>
         ) : (
           <>
-            <nav aria-label="Chat actions" className="workspace-sidebar__actions flex items-center gap-1 px-3 py-3">
+            <nav aria-label="Workspace navigation" className="px-3 pt-3">
+              <Button
+                className={navigationClassName(false)}
+                onClick={() => onNavigate("qwenChat")}
+                type="button"
+                variant="ghost"
+              >
+                <MessageCircle aria-hidden="true" className="size-4" strokeWidth={1.75} />
+                <span>Local chat</span>
+              </Button>
+            </nav>
+            <nav aria-label="Workflow actions" className="workspace-sidebar__actions flex items-center gap-1 px-3 py-3">
               <div className="relative min-w-0 flex-1">
                 <Label className="sr-only" htmlFor="chat-search">Search chats</Label>
                 <Search
@@ -151,7 +248,7 @@ export function WorkspaceSidebar({
                 />
               </div>
               <Button
-                aria-label="New chat"
+                aria-label="New workflow"
                 className="size-8 shrink-0 px-0"
                 onClick={onCreateChat}
                 size="icon"
@@ -170,7 +267,7 @@ export function WorkspaceSidebar({
                 id="recent-chats-heading"
                 className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
               >
-                Recent chats
+                Recent workflows
               </h2>
               {filteredRecentChats.length > 0 ? (
                 <ul aria-labelledby="recent-chats-heading" className="mt-4 space-y-1">
@@ -193,12 +290,12 @@ export function WorkspaceSidebar({
               ) : (
                 <div className="mt-4 text-xs leading-5 text-muted-foreground" role={chatsState === "error" ? "status" : undefined}>
                   {chatsState === "loading"
-                    ? "Loading chats…"
+                    ? "Loading workflows…"
                     : chatsState === "error"
-                      ? "Recent chats could not be loaded from FastAPI."
+                      ? "Recent workflows could not be loaded from FastAPI."
                       : normalizedSearchQuery
                         ? "No matching chats."
-                        : "No recent chats yet."}
+                        : "No recent workflows yet."}
                   {chatsState === "error" && onRetryChats && (
                     <Button className="mt-2 h-7 px-2 text-xs" onClick={onRetryChats} type="button" variant="outline">
                       Retry
@@ -216,7 +313,7 @@ export function WorkspaceSidebar({
               <Button
                 aria-label="Back"
                 className="sidebar-button h-8 shrink-0 px-2 text-muted-foreground"
-                onClick={() => onNavigate("chat")}
+                onClick={() => onNavigate("qwenChat")}
                 type="button"
                 variant="ghost"
               >

@@ -64,9 +64,10 @@ export function CommandPaletteDialog({
   const commands: readonly PaletteCommand[] = [
     {
       icon: MessageSquare,
-      label: "Go to Chat",
+      keywords: ["inspection", "code", "agent", "workflow"],
+      label: "Open workflows",
       onSelect: onGoToChat,
-      value: "go-to-chat",
+      value: "open-workflows",
     },
     {
       icon: MessageCircle,

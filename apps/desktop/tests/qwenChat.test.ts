@@ -5,11 +5,13 @@ import { conversationMessageMaxLength } from "../src/shared/contracts.ts";
 import { LocalApiError } from "../src/renderer/api/localApi.ts";
 import {
   conversationFailureMessage,
+  offlineChatStatusText,
   oversizedMessageText,
   pendingUserMessage,
   statusLine,
   turnWasStored,
 } from "../src/renderer/lib/qwenChat.ts";
+import { defaultEmployeeWorkspaceView } from "../src/renderer/lib/workspace.ts";
 import {
   initialQwenChatState,
   qwenChatReducer,
@@ -64,6 +66,11 @@ test("status labels name the selected local model and only real fallbacks", () =
     statusLine({ selectedModel: "qwen3:1.7b", usedFallback: true }),
     "qwen3:1.7b · local model · fallback model used",
   );
+});
+
+test("ordinary local chat is the default employee workspace with a permanent offline notice", () => {
+  assert.equal(defaultEmployeeWorkspaceView, "qwenChat");
+  assert.equal(offlineChatStatusText, "Offline — no live web verification");
 });
 
 test("conversation failures map to plain, actionable, non-sensitive text", () => {

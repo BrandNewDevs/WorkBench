@@ -1,20 +1,19 @@
 import { useEffect, useRef } from "react";
 import { LoaderCircle, Send } from "lucide-react";
 import { conversationMessageMaxLength } from "../../shared/contracts";
-import { useQwenChat } from "../hooks/useQwenChat";
-import { statusLine } from "../lib/qwenChat";
+import type { QwenChat } from "../hooks/useQwenChat";
+import { offlineChatStatusText, statusLine } from "../lib/qwenChat";
 import { Message } from "./Message";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 
 type QwenChatPageProps = {
-  apiBaseUrl: string;
+  chat: QwenChat;
   connected: boolean;
 };
 
-export function QwenChatPage({ apiBaseUrl, connected }: QwenChatPageProps) {
-  const chat = useQwenChat({ apiBaseUrl, connected });
+export function QwenChatPage({ chat, connected }: QwenChatPageProps) {
   const { state } = chat;
   const listRef = useRef<HTMLDivElement>(null);
   const messageCount = state.messages.length;
@@ -46,6 +45,9 @@ export function QwenChatPage({ apiBaseUrl, connected }: QwenChatPageProps) {
         <p className="mt-1 text-sm leading-6 text-muted-foreground">
           Plain multi-turn conversation with the local Qwen text model. Documents, tools, and workflow steps are not
           used in this mode.
+        </p>
+        <p className="mt-1 text-xs font-medium text-muted-foreground" role="status">
+          {offlineChatStatusText}
         </p>
         {state.status && (
           <p className="mt-1 text-xs text-muted-foreground" role="status">
@@ -81,37 +83,6 @@ export function QwenChatPage({ apiBaseUrl, connected }: QwenChatPageProps) {
         </div>
       </div>
       <div className="mx-auto w-full max-w-2xl pt-4">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Label className="sr-only" htmlFor="qwen-conversation-select">Conversation</Label>
-          <select
-            className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
-            id="qwen-conversation-select"
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value === "") {
-                chat.startNewConversation();
-              } else {
-                chat.selectSession(value);
-              }
-            }}
-            value={state.sessionId ?? ""}
-          >
-            <option value="">New conversation…</option>
-            {state.pickerSessions.map((session) => (
-              <option key={session.sessionId} value={session.sessionId}>
-                {session.title}
-              </option>
-            ))}
-          </select>
-          {state.pickerState === "loading" && (
-            <span className="text-xs text-muted-foreground" role="status">Loading conversations…</span>
-          )}
-          {state.pickerState === "error" && (
-            <Button className="h-7 px-2 text-xs" onClick={chat.refreshSessions} type="button" variant="outline">
-              Retry
-            </Button>
-          )}
-        </div>
         <div className="relative overflow-hidden rounded-lg border border-border bg-background shadow-sm">
           <Label className="sr-only" htmlFor="qwen-chat-draft">Message draft</Label>
           <Textarea
