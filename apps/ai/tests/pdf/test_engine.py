@@ -64,11 +64,13 @@ def test_render_draft_creates_valid_local_pdf(tmp_path: Path) -> None:
         header="WorkBench",
     )
 
-    page_count = LocalPdfDocumentEngine(
+    written = LocalPdfDocumentEngine(
         write_policy=lambda candidate, target: candidate == draft and target == destination
     ).render_draft(draft, destination)
 
-    assert page_count == 1
+    assert written.page_count == 1
+    assert written.size_bytes == destination.stat().st_size
+    assert written.sha256 == sha256(destination.read_bytes()).hexdigest()
     with pymupdf.open(destination) as document:  # type: ignore[no-untyped-call]
         assert "Inspection note" in document[0].get_text()
 
@@ -235,10 +237,10 @@ def test_page_and_overlay_operations_preserve_original(tmp_path: Path, kind: str
     engine = LocalPdfDocumentEngine(
         write_policy=lambda candidate, path: candidate == plan and path == destination
     )
-    count = engine.apply_edit(
+    written = engine.apply_edit(
         source, source_path, engine.inspect(source, source_path), plan, destination
     )
-    assert count == (1 if kind == "overlay" else 2)
+    assert written.page_count == (1 if kind == "overlay" else 2)
     assert source_path.read_bytes() == original
 
 

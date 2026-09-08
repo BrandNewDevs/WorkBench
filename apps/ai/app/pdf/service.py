@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from hashlib import sha256
+from contextlib import suppress
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -25,17 +25,24 @@ from app.ai.schemas import (
 )
 from app.pdf.contracts import (
     GroundedPdfAnswer,
+    PdfAddAnnotation,
     PdfApproval,
     PdfApprovalDecision,
     PdfArtifact,
     PdfDocumentDraft,
     PdfEditPlan,
+    PdfOverlay,
+    PdfPageSequence,
+    PdfPageView,
+    PdfRedactRegion,
+    PdfSessionResponse,
     PdfSessionView,
     PdfSource,
+    PdfTextBlockPreview,
     PdfTurnRequest,
     PdfTurnResult,
 )
-from app.pdf.engine import LocalPdfDocumentEngine, PdfDocumentError
+from app.pdf.engine import LocalPdfDocumentEngine, PdfDocumentError, PdfWriteResult
 from app.pdf.index import PdfIndex
 from app.pdf.intelligence import PdfIntelligence
 from app.pdf.store import PdfStateStore, plan_hash
@@ -65,6 +72,38 @@ class PdfWorkflowService:
         self.models, self.profile, self.ai, self.index = models, profile, ai, index
         # A single queue also bounds GPU pressure on the workstation MVP.
         self.lock = asyncio.Lock()
+
+    async def view(self, session: UUID, owner: UUID) -> PdfSessionResponse:
+        """Return bounded UI state without copying the complete PDF text over IPC."""
+        state = await self.store.get(session, owner)
+        referenced_blocks = {
+            operation.block_id
+            for turn in state.turns
+            if turn.approval and turn.approval.edit
+            for operation in turn.approval.edit.operations
+            if hasattr(operation, "block_id")
+        }
+        return PdfSessionResponse(
+            source=state.source,
+            pages=tuple(
+                PdfPageView(
+                    page_number=page.page_number,
+                    extraction_method=page.extraction_method,
+                    text_blocks=tuple(
+                        PdfTextBlockPreview(
+                            block_id=block.block_id,
+                            page_number=block.page_number,
+                            text=block.text[:500],
+                        )
+                        for block in page.text_blocks
+                        if block.block_id in referenced_blocks
+                    ),
+                )
+                for page in state.pages
+            ),
+            turns=state.turns,
+            activity=state.activity,
+        )
 
     async def source_path(self, session: UUID, owner: UUID, source: PdfSource) -> Path:
         approved = await self.files.resolve_approved_path(
@@ -311,6 +350,17 @@ class PdfWorkflowService:
                         for op in edit.operations
                     ):
                         raise PdfDocumentError("Edit references an unknown PDF source or block")
+                    page_count = state.source.page_count
+                    if any(
+                        isinstance(op, (PdfAddAnnotation, PdfOverlay, PdfRedactRegion))
+                        and op.page_number > page_count
+                        for op in edit.operations
+                    ) or any(
+                        isinstance(op, PdfPageSequence)
+                        and any(page > page_count for page in op.pages)
+                        for op in edit.operations
+                    ):
+                        raise PdfDocumentError("Edit references an unavailable PDF page")
                     plan = edit
                     approval = PdfApproval(
                         approval_id=uuid4(),
@@ -409,7 +459,7 @@ class PdfWorkflowService:
                         approval_id, session, p, dest
                     )
                 )
-                render_task: asyncio.Task[int] | None = None
+                render_task: asyncio.Task[PdfWriteResult] | None = None
                 try:
                     if isinstance(plan, PdfDocumentDraft):
                         render_task = asyncio.create_task(
@@ -428,14 +478,13 @@ class PdfWorkflowService:
                                 destination,
                             )
                         )
-                    count = await asyncio.shield(render_task)
-                    data = destination.read_bytes()
+                    written = await asyncio.shield(render_task)
                     artifact = PdfArtifact(
                         artifact_id=artifact_id,
                         file_name=approval.file_name,
-                        sha256=sha256(data).hexdigest(),
-                        size_bytes=len(data),
-                        page_count=count,
+                        sha256=written.sha256,
+                        size_bytes=written.size_bytes,
+                        page_count=written.page_count,
                     )
                     updated = turn.model_copy(
                         update={
@@ -443,24 +492,34 @@ class PdfWorkflowService:
                             "approval": approval.model_copy(update={"status": "completed"}),
                         }
                     )
-                    await self.store.finish_claim(approval_id, succeeded=True)
+                    completed_state = state.model_copy(
+                        update={"turns": (*state.turns[:-1], updated)}
+                    )
+                    await self.store.finalize_claim(
+                        approval_id,
+                        session,
+                        owner,
+                        completed_state,
+                        succeeded=True,
+                    )
                 except BaseException:
                     if render_task is not None and not render_task.done():
-                        from contextlib import suppress
-
                         with suppress(Exception):
                             await render_task
-                    destination.unlink(missing_ok=True)
-                    await self.store.finish_claim(approval_id, succeeded=False)
                     updated = turn.model_copy(
                         update={"approval": approval.model_copy(update={"status": "failed"})}
                     )
-                    await self.store.save(
-                        session,
-                        owner,
-                        state.model_copy(update={"turns": (*state.turns[:-1], updated)}),
-                    )
+                    failed_state = state.model_copy(update={"turns": (*state.turns[:-1], updated)})
+                    with suppress(Exception):
+                        await self.store.finalize_claim(
+                            approval_id,
+                            session,
+                            owner,
+                            failed_state,
+                            succeeded=False,
+                        )
                     raise
+                return updated
             await self.store.save(
                 session, owner, state.model_copy(update={"turns": (*state.turns[:-1], updated)})
             )
@@ -483,7 +542,10 @@ class PdfWorkflowService:
         path = self.workspaces.file_path(
             str(session), WorkspaceArea.ARTIFACTS, f"{artifact_id}.pdf"
         )
-        data = path.read_bytes()
-        if sha256(data).hexdigest() != artifact.sha256:
-            raise PdfDocumentError("Artifact failed integrity verification")
+        data = await asyncio.to_thread(
+            LocalPdfDocumentEngine.read_verified_artifact,
+            path,
+            expected_sha256=artifact.sha256,
+            expected_size=artifact.size_bytes,
+        )
         return artifact, data

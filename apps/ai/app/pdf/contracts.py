@@ -123,6 +123,12 @@ class PdfOverlay(ContractModel):
     text: str = Field(min_length=1, max_length=2_000)
     font_size: float = Field(default=10, ge=6, le=36)
 
+    @model_validator(mode="after")
+    def require_nonempty_rectangle(self) -> PdfOverlay:
+        if self.x1 <= self.x0 or self.y1 <= self.y0:
+            raise ValueError("PDF overlay rectangle must have positive area")
+        return self
+
 
 class PdfRedactRegion(ContractModel):
     operation: Literal["redactRegion"] = "redactRegion"
@@ -131,6 +137,12 @@ class PdfRedactRegion(ContractModel):
     y0: float = Field(ge=0)
     x1: float = Field(gt=0)
     y1: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def require_nonempty_rectangle(self) -> PdfRedactRegion:
+        if self.x1 <= self.x0 or self.y1 <= self.y0:
+            raise ValueError("PDF redaction rectangle must have positive area")
+        return self
 
 
 class PdfPageSequence(ContractModel):
@@ -215,11 +227,19 @@ class PdfTurnRequest(ContractModel):
 class PdfApproval(ContractModel):
     approval_id: UUID
     tool: Literal["create_pdf", "edit_pdf"]
-    arguments_hash: str
+    arguments_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: Literal["pending", "executing", "rejected", "completed", "failed"] = "pending"
-    file_name: str
+    file_name: str = Field(min_length=5, max_length=255, pattern=r"^[^/\\]+\.pdf$")
     draft: PdfDocumentDraft | None = None
     edit: PdfEditPlan | None = None
+
+    @model_validator(mode="after")
+    def require_matching_plan(self) -> PdfApproval:
+        if self.tool == "create_pdf" and (self.draft is None or self.edit is not None):
+            raise ValueError("create_pdf approval requires exactly one document draft")
+        if self.tool == "edit_pdf" and (self.edit is None or self.draft is not None):
+            raise ValueError("edit_pdf approval requires exactly one edit plan")
+        return self
 
 
 class PdfApprovalDecision(ContractModel):
@@ -242,5 +262,30 @@ class PdfTurnResult(ContractModel):
 class PdfSessionView(ContractModel):
     source: PdfSource | None = None
     pages: tuple[PdfPage, ...] = ()
+    turns: tuple[PdfTurnResult, ...] = ()
+    activity: tuple[str, ...] = ()
+
+
+class PdfTextBlockPreview(ContractModel):
+    """Bounded block metadata exposed only when an approval references it."""
+
+    block_id: str = Field(pattern=r"^pdfb_[0-9a-f]{64}$")
+    page_number: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=500)
+
+
+class PdfPageView(ContractModel):
+    """Renderer-safe page facts without the complete confidential page content."""
+
+    page_number: int = Field(ge=1)
+    extraction_method: PdfExtractionMethod
+    text_blocks: tuple[PdfTextBlockPreview, ...] = ()
+
+
+class PdfSessionResponse(ContractModel):
+    """Bounded Electron response; complete extracted content remains backend-only."""
+
+    source: PdfSource | None = None
+    pages: tuple[PdfPageView, ...] = ()
     turns: tuple[PdfTurnResult, ...] = ()
     activity: tuple[str, ...] = ()

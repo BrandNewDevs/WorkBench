@@ -5,6 +5,8 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
 
+import aiosqlite
+
 from app.pdf.contracts import PdfDocumentDraft, PdfEditPlan, PdfSessionView
 from app.storage.sqlite import LocalSQLiteDatabase
 
@@ -95,30 +97,7 @@ class PdfStateStore:
     async def save(self, session_id: UUID, owner_id: UUID, state: PdfSessionView) -> None:
         async with self.database.open() as connection:
             await connection.execute("BEGIN IMMEDIATE")
-            owned = await (
-                await connection.execute(
-                    "SELECT 1 FROM workflow_sessions WHERE session_id=? AND owner_user_id=? "
-                    "AND workflow_type='pdfDocument' AND status='active'",
-                    (str(session_id), str(owner_id)),
-                )
-            ).fetchone()
-            if owned is None:
-                raise PermissionError("PDF session not found")
-            await connection.execute(
-                "INSERT INTO pdf_sessions(session_id,state) VALUES(?,?) "
-                "ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, version=version+1",
-                (str(session_id), state.model_dump_json(by_alias=True)),
-            )
-            pending = state.turns[-1].approval if state.turns else None
-            stage = "awaitingApproval" if pending and pending.status == "pending" else "ready"
-            if not state.pages and not state.turns:
-                stage = "collectingInputs"
-            await connection.execute(
-                "UPDATE workflow_sessions SET stage=?, "
-                "updated_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now') "
-                "WHERE session_id=?",
-                (stage, str(session_id)),
-            )
+            await self._save_state(connection, session_id, owner_id, state)
 
     async def claim(
         self, approval_id: UUID, session_id: UUID, owner_id: UUID, digest: str, destination: Path
@@ -149,12 +128,62 @@ class PdfStateStore:
             )
             return cursor.rowcount == 1
 
-    async def finish_claim(self, approval_id: UUID, *, succeeded: bool) -> None:
+    async def finalize_claim(
+        self,
+        approval_id: UUID,
+        session_id: UUID,
+        owner_id: UUID,
+        state: PdfSessionView,
+        *,
+        succeeded: bool,
+    ) -> None:
+        """Persist claim outcome and matching turn state in one transaction."""
         async with self.database.open() as connection:
-            await connection.execute(
-                "UPDATE pdf_write_claims SET status=? WHERE approval_id=?",
-                ("completed" if succeeded else "failed", str(approval_id)),
+            await connection.execute("BEGIN IMMEDIATE")
+            cursor = await connection.execute(
+                "UPDATE pdf_write_claims SET status=? "
+                "WHERE approval_id=? AND session_id=? AND status='executing'",
+                (
+                    "completed" if succeeded else "failed",
+                    str(approval_id),
+                    str(session_id),
+                ),
             )
+            if cursor.rowcount != 1:
+                raise RuntimeError("PDF execution claim is no longer current")
+            await self._save_state(connection, session_id, owner_id, state)
+
+    @staticmethod
+    async def _save_state(
+        connection: aiosqlite.Connection,
+        session_id: UUID,
+        owner_id: UUID,
+        state: PdfSessionView,
+    ) -> None:
+        owned = await (
+            await connection.execute(
+                "SELECT 1 FROM workflow_sessions WHERE session_id=? AND owner_user_id=? "
+                "AND workflow_type='pdfDocument' AND status='active'",
+                (str(session_id), str(owner_id)),
+            )
+        ).fetchone()
+        if owned is None:
+            raise PermissionError("PDF session not found")
+        await connection.execute(
+            "INSERT INTO pdf_sessions(session_id,state) VALUES(?,?) "
+            "ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, version=version+1",
+            (str(session_id), state.model_dump_json(by_alias=True)),
+        )
+        pending = state.turns[-1].approval if state.turns else None
+        stage = "awaitingApproval" if pending and pending.status == "pending" else "ready"
+        if not state.pages and not state.turns:
+            stage = "collectingInputs"
+        await connection.execute(
+            "UPDATE workflow_sessions SET stage=?, "
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now') "
+            "WHERE session_id=?",
+            (stage, str(session_id)),
+        )
 
     def write_policy(
         self,

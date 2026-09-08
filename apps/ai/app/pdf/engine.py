@@ -3,6 +3,7 @@
 import os
 import stat
 from collections.abc import Callable
+from dataclasses import dataclass
 from hashlib import sha256
 from math import ceil, floor
 from pathlib import Path
@@ -34,6 +35,16 @@ class PdfDocumentError(ValueError):
 
 
 PdfWritePolicy = Callable[[PdfDocumentDraft | PdfEditPlan, Path], bool]
+_HAS_DIRECTORY_FD = os.open in os.supports_dir_fd
+
+
+@dataclass(frozen=True, slots=True)
+class PdfWriteResult:
+    """Metadata calculated from the exact validated bytes published by the engine."""
+
+    page_count: int
+    size_bytes: int
+    sha256: str
 
 
 class PdfDocumentEngine(Protocol):
@@ -41,7 +52,7 @@ class PdfDocumentEngine(Protocol):
 
     def inspect(self, source: PdfSource, path: Path) -> tuple[PdfPage, ...]: ...
 
-    def render_draft(self, draft: PdfDocumentDraft, destination: Path) -> int: ...
+    def render_draft(self, draft: PdfDocumentDraft, destination: Path) -> PdfWriteResult: ...
 
     def apply_edit(
         self,
@@ -50,7 +61,7 @@ class PdfDocumentEngine(Protocol):
         pages: tuple[PdfPage, ...],
         plan: PdfEditPlan,
         destination: Path,
-    ) -> int: ...
+    ) -> PdfWriteResult: ...
 
 
 class LocalPdfDocumentEngine:
@@ -188,13 +199,17 @@ class LocalPdfDocumentEngine:
         ) as error:
             raise PdfDocumentError("PDF could not be decoded safely") from error
 
-    def render_draft(self, draft: PdfDocumentDraft, destination: Path) -> int:
+    def render_draft(self, draft: PdfDocumentDraft, destination: Path) -> PdfWriteResult:
         self._require_write_approval(draft, destination)
         try:
             output = self._renderer.render_draft_bytes(draft)
             page_count = self._validate_output(output)
             self._publish_new_file(destination, output)
-            return page_count
+            return PdfWriteResult(
+                page_count=page_count,
+                size_bytes=len(output),
+                sha256=sha256(output).hexdigest(),
+            )
         except PdfRenderError as error:
             raise PdfDocumentError(str(error)) from error
 
@@ -205,7 +220,7 @@ class LocalPdfDocumentEngine:
         pages: tuple[PdfPage, ...],
         plan: PdfEditPlan,
         destination: Path,
-    ) -> int:
+    ) -> PdfWriteResult:
         self._require_write_approval(plan, destination)
         if path.resolve() == destination.resolve():
             raise PdfDocumentError("the uploaded source cannot be overwritten")
@@ -315,11 +330,19 @@ class LocalPdfDocumentEngine:
                             operation.text,
                             icon="Note",
                         )
-                output = cast(bytes, document.tobytes(garbage=4, deflate=True))
+                # Level 4 deduplicates stream contents and has produced corrupt Flate
+                # streams in the Windows PyMuPDF build used by CI. Level 3 still
+                # removes unreachable/duplicate objects without rewriting every
+                # content stream, which keeps edited text portable across platforms.
+                output = cast(bytes, document.tobytes(garbage=3, deflate=False))
             self._validate_preserved_layout(path, output, plan, block_map)
             page_count = self._validate_output(output)
             self._publish_new_file(destination, output)
-            return page_count
+            return PdfWriteResult(
+                page_count=page_count,
+                size_bytes=len(output),
+                sha256=sha256(output).hexdigest(),
+            )
         except PdfDocumentError:
             raise
         except (
@@ -456,7 +479,7 @@ class LocalPdfDocumentEngine:
                 raise PdfDocumentError("PDF artifact directory is not trusted")
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
             flags |= getattr(os, "O_NOFOLLOW", 0)
-            if os.open in os.supports_dir_fd:
+            if _HAS_DIRECTORY_FD:
                 directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
                 directory_flags |= getattr(os, "O_NOFOLLOW", 0)
                 directory_descriptor = os.open(destination.parent, directory_flags)
@@ -472,6 +495,10 @@ class LocalPdfDocumentEngine:
             else:
                 opened_directory = expected_directory
                 descriptor = os.open(destination, flags, 0o600)
+                if not LocalPdfDocumentEngine._descriptor_matches_path(descriptor, destination):
+                    os.close(descriptor)
+                    descriptor = -1
+                    raise PdfDocumentError("PDF artifact path changed before creation")
         except FileExistsError as error:
             if directory_descriptor >= 0:
                 os.close(directory_descriptor)
@@ -521,3 +548,92 @@ class LocalPdfDocumentEngine:
     @staticmethod
     def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
         return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+    @staticmethod
+    def _descriptor_matches_path(descriptor: int, expected: Path) -> bool:
+        """Verify the final Windows handle target when relative open is unavailable."""
+        if os.name != "nt":
+            # Supported Unix platforms take the directory-descriptor branch.
+            return False
+        try:
+            import ctypes
+            import msvcrt
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+            final_path = kernel32.GetFinalPathNameByHandleW
+            final_path.argtypes = [
+                wintypes.HANDLE,
+                wintypes.LPWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+            ]
+            final_path.restype = wintypes.DWORD
+            handle = msvcrt.get_osfhandle(descriptor)  # type: ignore[attr-defined]
+            buffer = ctypes.create_unicode_buffer(32_768)
+            length = final_path(handle, buffer, len(buffer), 0)
+            if length == 0 or length >= len(buffer):
+                return False
+            actual = buffer.value
+            if actual.startswith("\\\\?\\UNC\\"):
+                actual = "\\\\" + actual[8:]
+            elif actual.startswith("\\\\?\\"):
+                actual = actual[4:]
+            return os.path.normcase(os.path.abspath(actual)) == os.path.normcase(
+                os.path.abspath(expected)
+            )
+        except AttributeError, OSError, ValueError:
+            return False
+
+    @staticmethod
+    def read_verified_artifact(path: Path, *, expected_sha256: str, expected_size: int) -> bytes:
+        """Read one registered artifact without following a substituted final path."""
+        directory_descriptor = -1
+        descriptor = -1
+        try:
+            expected_directory = os.stat(path.parent, follow_symlinks=False)
+            if not stat.S_ISDIR(expected_directory.st_mode):
+                raise PdfDocumentError("PDF artifact directory is not trusted")
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            if _HAS_DIRECTORY_FD:
+                directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+                directory_descriptor = os.open(path.parent, directory_flags)
+                opened_directory = os.fstat(directory_descriptor)
+                if not LocalPdfDocumentEngine._same_identity(expected_directory, opened_directory):
+                    raise PdfDocumentError("PDF artifact directory changed before reading")
+                descriptor = os.open(path.name, flags, dir_fd=directory_descriptor)
+            else:
+                opened_directory = expected_directory
+                descriptor = os.open(path, flags)
+                if not LocalPdfDocumentEngine._descriptor_matches_path(descriptor, path):
+                    raise PdfDocumentError("PDF artifact path changed before reading")
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_size != expected_size:
+                raise PdfDocumentError("Artifact failed integrity verification")
+            chunks: list[bytes] = []
+            remaining = expected_size
+            while remaining:
+                chunk = os.read(descriptor, min(remaining, 64 * 1024))
+                if not chunk:
+                    raise PdfDocumentError("Artifact failed integrity verification")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(descriptor, 1):
+                raise PdfDocumentError("Artifact failed integrity verification")
+            current_directory = os.stat(path.parent, follow_symlinks=False)
+            if not LocalPdfDocumentEngine._same_identity(opened_directory, current_directory):
+                raise PdfDocumentError("PDF artifact directory changed while reading")
+            content = b"".join(chunks)
+            if sha256(content).hexdigest() != expected_sha256:
+                raise PdfDocumentError("Artifact failed integrity verification")
+            return content
+        except PdfDocumentError:
+            raise
+        except OSError as error:
+            raise PdfDocumentError("Artifact failed integrity verification") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if directory_descriptor >= 0:
+                os.close(directory_descriptor)

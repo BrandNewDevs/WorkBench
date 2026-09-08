@@ -1,9 +1,11 @@
 """Real local storage/index/rendering with deterministic model responses."""
 
+import json
+from base64 import b64decode
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pymupdf
 import pytest
@@ -35,6 +37,8 @@ from app.workflow.contracts import WorkflowSession, WorkflowStage, WorkflowStatu
 class PdfModels(FakeModelAdapter):
     tool = "answer_pdf"
     invalid_page = False
+    edit_source: UUID | None = None
+    invalid_edit_page = False
 
     async def generate_text(self, request: TextGenerationRequest) -> TextGenerationResult:
         title = request.output_schema["title"]
@@ -46,6 +50,20 @@ class PdfModels(FakeModelAdapter):
                 "title": "Inspection report",
                 "purpose": "Summarize findings",
                 "sections": [{"heading": "Findings", "paragraphs": ["Valve 17 needs inspection."]}],
+            }
+        elif title == "PdfEditPlan":
+            content = {
+                "sourceId": str(self.edit_source),
+                "outputFileName": "edited.pdf",
+                "operations": [
+                    {
+                        "operation": "addAnnotation",
+                        "pageNumber": 999 if self.invalid_edit_page else 1,
+                        "text": "Approved note",
+                        "x": 72,
+                        "y": 100,
+                    }
+                ],
             }
         else:
             content = {
@@ -213,7 +231,7 @@ async def test_fastapi_upload_to_pdf_answer_and_session_restore(tmp_path: Path) 
     from app.main import create_app
     from app.storage import SQLiteActivityEventStore
 
-    service, session, _, data = await setup(tmp_path)
+    service, session, models, data = await setup(tmp_path)
     store = SQLiteWorkflowStore(service.store.database)
     app = create_app(
         dependencies=ApplicationDependencies(
@@ -255,8 +273,32 @@ async def test_fastapi_upload_to_pdf_answer_and_session_restore(tmp_path: Path) 
         assert response.json()["pages"] == [1]
         restored = await client.get(f"/pdf/sessions/{session.session_id}")
         assert restored.json()["turns"][0]["answer"] == "Valve 17 needs inspection."
+        assert restored.json()["pages"][0]["textBlocks"] == []
+        assert "visualText" not in restored.json()["pages"][0]
         assert "Calling answer_pdf" in restored.json()["activity"]
         assert "path" not in restored.text.lower()
+
+        models.tool = "create_pdf"
+        proposal = await client.post(
+            f"/pdf/sessions/{session.session_id}/turns",
+            json={
+                "message": "Create a new inspection note",
+                "clientRequestId": str(uuid4()),
+            },
+        )
+        approval = proposal.json()["approval"]
+        completed = await client.post(
+            f"/pdf/sessions/{session.session_id}/approvals/{approval['approvalId']}",
+            json={"approve": True, "argumentsHash": approval["argumentsHash"]},
+        )
+        artifact = completed.json()["artifact"]
+        downloaded = await client.get(
+            f"/pdf/sessions/{session.session_id}/artifacts/{artifact['artifactId']}"
+        )
+        assert downloaded.status_code == 200
+        assert downloaded.content.startswith(b"%PDF-")
+        header = downloaded.headers["x-workbench-artifact"]
+        assert json.loads(b64decode(header))["sha256"] == artifact["sha256"]
 
 
 @pytest.mark.asyncio
@@ -312,6 +354,38 @@ async def test_invented_page_is_not_persisted(tmp_path: Path) -> None:
             ),
         )
     assert not (await service.store.get(session.session_id, session.owner_user_id)).turns
+
+
+@pytest.mark.asyncio
+async def test_invalid_edit_page_is_rejected_before_approval(tmp_path: Path) -> None:
+    service, session, models, data = await setup(tmp_path)
+    uploaded = await service.files.save_upload(
+        session=session,
+        upload_id=uuid4(),
+        source_id=uuid4(),
+        file_name="first.pdf",
+        mime_type="application/pdf",
+        content=chunks(data),
+    )
+    await service.turn(
+        session.session_id,
+        session.owner_user_id,
+        PdfTurnRequest(message="Read it", client_request_id=uuid4(), upload_id=uploaded.upload_id),
+    )
+    state = await service.store.get(session.session_id, session.owner_user_id)
+    assert state.source is not None
+    models.tool = "edit_pdf"
+    models.edit_source = state.source.source_id
+    models.invalid_edit_page = True
+
+    with pytest.raises(PdfDocumentError, match="unavailable PDF page"):
+        await service.turn(
+            session.session_id,
+            session.owner_user_id,
+            PdfTurnRequest(message="Annotate page 999", client_request_id=uuid4()),
+        )
+
+    assert len((await service.store.get(session.session_id, session.owner_user_id)).turns) == 1
 
 
 @pytest.mark.asyncio
