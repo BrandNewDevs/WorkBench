@@ -6,6 +6,7 @@ import app.ai.generation.conversation as conversation_module
 from app.ai.errors import ConversationContextTooLarge, InvalidStructuredOutput
 from app.ai.evaluation.samples import sample_inference_metrics, sample_model_profile
 from app.ai.generation.conversation import LocalConversationGenerator
+from app.ai.models.answer_stream import AnswerDelta
 from app.ai.models.ports import ModelAdapter
 from app.ai.schemas import (
     ConversationGenerationRequest,
@@ -45,7 +46,7 @@ class RecordingConversationAdapter:
         raise AssertionError("ordinary chat must not use structured text generation")
 
     async def generate_conversation(
-        self, request: ConversationGenerationRequest
+        self, request: ConversationGenerationRequest, *, on_delta: AnswerDelta | None = None
     ) -> ConversationGenerationResult:
         self.requests.append(request)
         if self.results:

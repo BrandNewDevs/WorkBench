@@ -13,6 +13,7 @@ from pwdlib import PasswordHash
 
 from app.ai.errors import AIError, ModelNotInstalled, ModelRequestTimeout
 from app.ai.fakes import FakeAIEngine
+from app.ai.models.answer_stream import AnswerDelta
 from app.ai.schemas import ConversationReply, ConversationRequest, InferenceMetrics
 from app.auth.provisioning import provision_initial_employee
 from app.config import ApplicationSettings
@@ -64,7 +65,9 @@ class RecordingConversationAI(FakeAIEngine):
         self.generation_started = asyncio.Event()
         self.release_generation = asyncio.Event()
 
-    async def reply_to_conversation(self, request: ConversationRequest) -> ConversationReply:
+    async def reply_to_conversation(
+        self, request: ConversationRequest, *, on_delta: AnswerDelta | None = None
+    ) -> ConversationReply:
         self.conversation_requests.append(request)
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)

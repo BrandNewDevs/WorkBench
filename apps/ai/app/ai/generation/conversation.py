@@ -8,6 +8,7 @@ from app.ai.errors import (
     InvalidStructuredOutput,
     ModelRequestTimeout,
 )
+from app.ai.models.answer_stream import AnswerDelta
 from app.ai.models.ports import ModelAdapter
 from app.ai.prompts.conversation import build_local_conversation_system_prompt
 from app.ai.schemas import (
@@ -28,7 +29,9 @@ class LocalConversationGenerator:
         self._model_adapter = model_adapter
         self._model_profile = model_profile
 
-    async def reply(self, request: ConversationRequest, *, model: str) -> ConversationReply:
+    async def reply(
+        self, request: ConversationRequest, *, model: str, on_delta: AnswerDelta | None = None
+    ) -> ConversationReply:
         """Return one validated reply for the exact supplied history and user message."""
 
         messages = (
@@ -53,20 +56,26 @@ class LocalConversationGenerator:
                     if remaining_timeout_seconds <= 0:
                         raise ModelRequestTimeout("local conversation request timed out")
                     try:
-                        generation = await self._model_adapter.generate_conversation(
-                            ConversationGenerationRequest(
-                                model=selected_model,
-                                system_prompt=build_local_conversation_system_prompt(
-                                    correction=attempt == 1
-                                ),
-                                assistant_name="WorkBench",
-                                disclose_runtime_model=True,
-                                messages=messages,
-                                limits=self._model_profile.text_limits,
-                                timeout_seconds=remaining_timeout_seconds,
-                                temperature=0.2,
-                            )
+                        generation_request = ConversationGenerationRequest(
+                            model=selected_model,
+                            system_prompt=build_local_conversation_system_prompt(
+                                correction=attempt == 1
+                            ),
+                            assistant_name="WorkBench",
+                            disclose_runtime_model=True,
+                            messages=messages,
+                            limits=self._model_profile.text_limits,
+                            timeout_seconds=remaining_timeout_seconds,
+                            temperature=0.2,
                         )
+                        if on_delta is None:
+                            generation = await self._model_adapter.generate_conversation(
+                                generation_request
+                            )
+                        else:
+                            generation = await self._model_adapter.generate_conversation(
+                                generation_request, on_delta=on_delta
+                            )
                         break
                     except InvalidStructuredOutput as error:
                         if error.fallback_reason is not None:
@@ -79,9 +88,7 @@ class LocalConversationGenerator:
                             )
                             raise
         except TimeoutError as error:
-            raise ModelRequestTimeout(
-                "local conversation request timed out"
-            ) from error
+            raise ModelRequestTimeout("local conversation request timed out") from error
 
         if generation is None:  # pragma: no cover - the loop returns or raises
             raise InvalidStructuredOutput("local conversation returned no generation")
@@ -106,9 +113,7 @@ class LocalConversationGenerator:
         limits = self._model_profile.text_limits
         available_tokens = limits.context_window - limits.max_output_tokens
         character_budget = available_tokens * _CONSERVATIVE_CHARACTERS_PER_TOKEN
-        input_characters = len(
-            build_local_conversation_system_prompt(correction=True)
-        ) + sum(
+        input_characters = len(build_local_conversation_system_prompt(correction=True)) + sum(
             len(message.content) for message in messages
         )
         if available_tokens <= 0 or input_characters > character_budget:

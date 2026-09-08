@@ -14,6 +14,7 @@ from app.ai.evaluation.samples import (
     sample_task_plan,
     sample_vision_analysis,
 )
+from app.ai.models.answer_stream import AnswerDelta
 from app.ai.models.structured_output import validate_output_schema, validate_structured_output
 from app.ai.schemas import (
     AgentContext,
@@ -97,7 +98,7 @@ class FakeModelAdapter:
         )
 
     async def generate_conversation(
-        self, request: ConversationGenerationRequest
+        self, request: ConversationGenerationRequest, *, on_delta: AnswerDelta | None = None
     ) -> ConversationGenerationResult:
         """Return one safe, deterministic conversational reply without Ollama."""
 
@@ -145,9 +146,7 @@ class FakeModelAdapter:
 class FakeKnowledgeAdapter:
     """Return local evidence without importing or starting Chroma."""
 
-    evidence: tuple[EvidenceChunk, ...] = field(
-        default_factory=lambda: (sample_evidence_chunk(),)
-    )
+    evidence: tuple[EvidenceChunk, ...] = field(default_factory=lambda: (sample_evidence_chunk(),))
     ready: bool = True
     calls: list[str] = field(default_factory=list, init=False)
 
@@ -209,9 +208,7 @@ class FakeAIEngine:
     )
     plan: TaskPlan = field(default_factory=sample_task_plan)
     vision_result: VisionAnalysis = field(default_factory=sample_vision_analysis)
-    evidence: tuple[EvidenceChunk, ...] = field(
-        default_factory=lambda: (sample_evidence_chunk(),)
-    )
+    evidence: tuple[EvidenceChunk, ...] = field(default_factory=lambda: (sample_evidence_chunk(),))
     draft: GroundedDraft = field(default_factory=sample_grounded_draft)
     ingestion_result: IngestionResult | None = None
     action_proposal: AgentProposal | None = None
@@ -234,7 +231,9 @@ class FakeAIEngine:
         self._raise_configured_failure("choose_capability")
         return self.capability_decision
 
-    async def reply_to_conversation(self, request: ConversationRequest) -> ConversationReply:
+    async def reply_to_conversation(
+        self, request: ConversationRequest, *, on_delta: AnswerDelta | None = None
+    ) -> ConversationReply:
         """Return a configured local reply without inference, files, or tools."""
 
         self.calls.append(f"reply_to_conversation:{request.session_id}")
@@ -301,9 +300,7 @@ class FakeAIEngine:
             return self.action_proposal
         if not request.allowed_tools:
             return AgentProposal(response_text="No backend-approved tools are available.")
-        return AgentProposal(
-            response_text="No fake tool proposal was configured for this test."
-        )
+        return AgentProposal(response_text="No fake tool proposal was configured for this test.")
 
     async def repair_code(self, request: CodeRepairRequest) -> CodeRepairResult:
         """Return input code unchanged; no sandbox execution occurs."""

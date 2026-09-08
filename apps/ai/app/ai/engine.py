@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.ai.knowledge.ports import KnowledgeAdapter
+from app.ai.models.answer_stream import AnswerDelta
 from app.ai.models.ports import ModelAdapter
 from app.ai.routing.ports import CapabilityRouter
 from app.ai.schemas import (
@@ -50,7 +51,9 @@ class AIEngine(Protocol):
         """Select the local model capability for a task."""
         ...
 
-    async def reply_to_conversation(self, request: ConversationRequest) -> ConversationReply:
+    async def reply_to_conversation(
+        self, request: ConversationRequest, *, on_delta: AnswerDelta | None = None
+    ) -> ConversationReply:
         """Generate one local text-only reply without tools or workflow actions."""
         ...
 

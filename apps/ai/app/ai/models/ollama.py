@@ -20,6 +20,7 @@ from app.ai.errors import (
     ModelRequestTimeout,
     OllamaPolicyViolation,
 )
+from app.ai.models.answer_stream import AnswerDecoder, AnswerDelta
 from app.ai.models.ollama_http import (
     LocalOllamaHTTPClient,
     OllamaEndpoint,
@@ -173,7 +174,7 @@ class OllamaModelAdapter:
         )
 
     async def generate_conversation(
-        self, request: ConversationGenerationRequest
+        self, request: ConversationGenerationRequest, *, on_delta: AnswerDelta | None = None
     ) -> ConversationGenerationResult:
         """Run one ordinary local text-chat turn with the approved text fallback chain."""
 
@@ -197,6 +198,7 @@ class OllamaModelAdapter:
                     max_output_tokens=request.limits.max_output_tokens,
                     timeout_seconds=remaining_timeout_seconds,
                     temperature=request.temperature,
+                    on_delta=on_delta,
                 ),
                 started=started,
             ),
@@ -337,8 +339,7 @@ class OllamaModelAdapter:
                 )
                 if index == 0 and len(candidates) > 1:
                     fallback_reason = (
-                        f"Preferred model '{candidate}' is not installed; tried "
-                        f"'{candidates[1]}'."
+                        f"Preferred model '{candidate}' is not installed; tried '{candidates[1]}'."
                     )
                 continue
 
@@ -362,8 +363,7 @@ class OllamaModelAdapter:
                     await self._best_effort_unload(candidate)
                 if index == 0 and len(candidates) > 1:
                     fallback_reason = (
-                        f"Preferred model '{candidate}' could not run; tried "
-                        f"'{candidates[1]}'."
+                        f"Preferred model '{candidate}' could not run; tried '{candidates[1]}'."
                     )
 
         if last_error is not None:
@@ -381,11 +381,7 @@ class OllamaModelAdapter:
 
     async def _prepare_generative_model(self, model: str) -> None:
         current = self._active_generative_model
-        if (
-            current is not None
-            and current != model
-            and self._settings.unload_on_capability_switch
-        ):
+        if current is not None and current != model and self._settings.unload_on_capability_switch:
             await self._unload_model(current)
         self._active_generative_model = model
 
@@ -500,6 +496,7 @@ class OllamaModelAdapter:
         max_output_tokens: int,
         timeout_seconds: float,
         temperature: float,
+        on_delta: AnswerDelta | None = None,
     ) -> ConversationGenerationResult:
         """Call local Ollama and expose only a validated final conversation answer."""
 
@@ -507,14 +504,11 @@ class OllamaModelAdapter:
         if disclose_runtime_model:
             runtime_identity += f"\n- Active local model: {model}"
         controlled_system_prompt = (
-            f"{system_prompt}\n\nAPPLICATION-CONTROLLED RUNTIME IDENTITY:\n"
-            f"{runtime_identity}"
+            f"{system_prompt}\n\nAPPLICATION-CONTROLLED RUNTIME IDENTITY:\n{runtime_identity}"
         )
         model_messages = (
             *messages[:-1],
-            messages[-1].model_copy(
-                update={"content": f"{messages[-1].content}\n\n/no_think"}
-            ),
+            messages[-1].model_copy(update={"content": f"{messages[-1].content}\n\n/no_think"}),
         )
         output_schema = ConversationModelOutput.model_json_schema(by_alias=True)
         payload = OllamaConversationRequest(
@@ -537,11 +531,44 @@ class OllamaModelAdapter:
             ),
         )
         started = perf_counter()
-        response = await self._client.request(
-            OllamaEndpoint.CHAT,
-            payload=payload.model_dump(mode="json", exclude_none=True),
-            timeout_seconds=timeout_seconds,
-        )
+        if on_delta is not None:
+            await on_delta(None)
+            decoder = AnswerDecoder()
+            streamed = payload.model_dump(mode="json", exclude_none=True)
+            streamed["stream"] = True
+            last = None
+            try:
+                async for line in self._client.stream_chat(streamed, timeout_seconds):
+                    frame = OllamaChatResponse.model_validate_json(line)
+                    if frame.model != model or frame.message.role != "assistant":
+                        raise InvalidStructuredOutput("Invalid streaming model identity")
+                    delta = decoder.feed(frame.message.content)
+                    if delta:
+                        await on_delta(delta)
+                    last = frame
+                    if frame.done:
+                        break
+            except httpx.HTTPStatusError as error:
+                self._raise_for_status(error.response, model=model)
+                raise
+            except ValidationError as error:
+                raise InvalidStructuredOutput("Invalid Ollama stream") from error
+            if last is None or not last.done or last.done_reason == "length":
+                raise InvalidStructuredOutput("Incomplete Ollama stream")
+            result = last.model_copy(
+                update={
+                    "message": last.message.model_copy(
+                        update={"content": decoder.raw, "thinking": None}
+                    )
+                }
+            )
+            response = httpx.Response(200, json=result.model_dump())
+        else:
+            response = await self._client.request(
+                OllamaEndpoint.CHAT,
+                payload=payload.model_dump(mode="json", exclude_none=True),
+                timeout_seconds=timeout_seconds,
+            )
         elapsed_ms = (perf_counter() - started) * 1_000
         self._raise_for_status(response, model=model)
         try:

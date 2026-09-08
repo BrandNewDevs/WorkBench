@@ -3,6 +3,8 @@
 import asyncio
 from types import TracebackType
 
+from chromadb.api import ClientAPI
+
 from app.ai.engine import AIEngineDependencies
 from app.ai.generation import LocalConversationGenerator, StructuredTextGenerator
 from app.ai.knowledge.chroma_ingestion import (
@@ -11,8 +13,10 @@ from app.ai.knowledge.chroma_ingestion import (
 )
 from app.ai.knowledge.config import KnowledgeProcessingSettings
 from app.ai.knowledge.ports import RetrievalMetricsSink
+from app.ai.models.answer_stream import AnswerDelta
 from app.ai.models.ollama import create_ollama_adapter
 from app.ai.models.ollama_http import OllamaSettings
+from app.ai.models.ports import ModelAdapter
 from app.ai.models.profiles import load_model_profile
 from app.ai.routing import DeterministicCapabilityRouter
 from app.ai.schemas import (
@@ -65,11 +69,7 @@ class LocalAIEngine:
         self._vision = VisionAnalyzer(
             dependencies.model_adapter,
             dependencies.model_profile,
-            (
-                visual_normalizer
-                if visual_normalizer is not None
-                else LocalVisualNormalizer()
-            ),
+            (visual_normalizer if visual_normalizer is not None else LocalVisualNormalizer()),
         )
         self._text = StructuredTextGenerator(
             dependencies.model_adapter,
@@ -98,12 +98,23 @@ class LocalAIEngine:
             knowledge_error=knowledge_error,
         )
 
+    @property
+    def model_adapter(self) -> ModelAdapter:
+        """Reuse the composition-owned runtime for local document processing."""
+        return self._dependencies.model_adapter
+
+    @property
+    def model_profile(self) -> ModelProfile:
+        return self._dependencies.model_profile
+
     async def choose_capability(self, task: TaskDescriptor) -> CapabilityDecision:
         """Route from task facts and current local health without model inference."""
 
         return self._dependencies.router.choose(task, await self.health())
 
-    async def reply_to_conversation(self, request: ConversationRequest) -> ConversationReply:
+    async def reply_to_conversation(
+        self, request: ConversationRequest, *, on_delta: AnswerDelta | None = None
+    ) -> ConversationReply:
         """Generate one ordinary local text reply without agent or tool behavior."""
 
         decision = await self.choose_capability(
@@ -114,7 +125,9 @@ class LocalAIEngine:
                 modalities=(InputModality.TEXT,),
             )
         )
-        reply = await self._conversation.reply(request, model=decision.selected_model)
+        reply = await self._conversation.reply(
+            request, model=decision.selected_model, on_delta=on_delta
+        )
         if not decision.used_fallback:
             return reply
         return reply.model_copy(
@@ -186,9 +199,7 @@ class LocalAIEngine:
 
     async def _runtime_health(self) -> ModelRuntimeHealth:
         try:
-            return await self._dependencies.model_adapter.health(
-                self._dependencies.model_profile
-            )
+            return await self._dependencies.model_adapter.health(self._dependencies.model_profile)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -219,6 +230,7 @@ def create_local_ai_engine(
     knowledge_settings: KnowledgeProcessingSettings | None = None,
     vision_settings: VisionProcessingSettings | None = None,
     retrieval_metrics_sink: RetrievalMetricsSink | None = None,
+    chroma_client: ClientAPI | None = None,
 ) -> LocalAIEngine:
     """Compose one reusable, local-only engine without making a runtime request.
 
@@ -228,7 +240,11 @@ def create_local_ai_engine(
 
     profile = model_profile if model_profile is not None else load_model_profile()
     normalizer = LocalVisualNormalizer(vision_settings)
-    chroma_client = create_persistent_chroma_client(knowledge_root)
+    chroma_client = (
+        chroma_client
+        if chroma_client is not None
+        else create_persistent_chroma_client(knowledge_root)
+    )
     model_adapter = create_ollama_adapter(
         settings=ollama_settings,
         profile=profile,

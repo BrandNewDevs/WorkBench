@@ -19,6 +19,7 @@ from app.ai.evaluation.samples import (
 )
 from app.ai.fakes import FakeCapabilityRouter, FakeKnowledgeAdapter
 from app.ai.local_engine import LocalAIEngine, create_local_ai_engine
+from app.ai.models.answer_stream import AnswerDelta
 from app.ai.schemas import (
     AgentContext,
     AgentProposal,
@@ -119,7 +120,7 @@ class RecordingModelAdapter:
         )
 
     async def generate_conversation(
-        self, request: ConversationGenerationRequest
+        self, request: ConversationGenerationRequest, *, on_delta: AnswerDelta | None = None
     ) -> ConversationGenerationResult:
         self.calls.append(f"generate_conversation:{request.model}")
         return ConversationGenerationResult(

@@ -1,6 +1,7 @@
 """Policy-enforcing asynchronous HTTP transport for the local Ollama runtime."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from enum import StrEnum
 from ipaddress import ip_address
 from types import TracebackType
@@ -117,6 +118,33 @@ class LocalOllamaHTTPClient:
         """Release the owned HTTP connection pool."""
 
         await self._client.aclose()
+
+    async def stream_chat(
+        self, payload: dict[str, object], timeout_seconds: float
+    ) -> AsyncIterator[str]:
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async with self._client.stream(
+                    "POST", OllamaEndpoint.CHAT.value, json=payload, timeout=timeout_seconds
+                ) as response:
+                    if response.status_code != 200:
+                        await response.aread()
+                        response.raise_for_status()
+                    buffer = ""
+                    async for chunk in response.aiter_text():
+                        buffer += chunk
+                        if len(buffer) > 200_000:
+                            raise OllamaPolicyViolation("Ollama stream frame exceeds limit")
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            if line.strip():
+                                yield line
+                    if buffer.strip():
+                        yield buffer
+        except (TimeoutError, httpx.TimeoutException) as error:
+            raise ModelRequestTimeout("local Ollama stream timed out") from error
+        except httpx.RequestError as error:
+            raise ModelRuntimeUnavailable("local Ollama runtime is unavailable") from error
 
     async def __aenter__(self) -> LocalOllamaHTTPClient:
         """Support deterministic client cleanup in composition roots and tests."""
