@@ -179,10 +179,17 @@ class LocalPdfDocumentEngine:
                         page.add_redact_annot(rect, fill=(1, 1, 1))
                         page.apply_redactions()
                         if isinstance(operation, PdfReplaceText):
+                            font_size = block.font_size or 10
+                            replacement_rect = pymupdf.Rect(  # type: ignore[no-untyped-call]
+                                rect.x0,
+                                max(0, rect.y0 - font_size * 0.2),
+                                min(page.rect.width, rect.x1 + 2),
+                                min(page.rect.height, rect.y1 + font_size * 0.8),
+                            )
                             inserted = page.insert_textbox(
-                                rect,
+                                replacement_rect,
                                 operation.replacement,
-                                fontsize=block.font_size or 10,
+                                fontsize=font_size,
                                 fontname="helv",
                                 color=(0, 0, 0),
                                 overlay=True,
