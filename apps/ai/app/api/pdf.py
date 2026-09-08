@@ -1,15 +1,21 @@
 """Authenticated PDF routes with opaque source and artifact identifiers."""
 
 from base64 import b64encode
+from collections.abc import Iterator
 from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from app.api.auth import AllowedOrigin, CurrentEmployee
 from app.api.turn_stream import Emit, TurnEvent, turn_response
-from app.pdf.contracts import PdfApprovalDecision, PdfSessionView, PdfTurnRequest, PdfTurnResult
+from app.pdf.contracts import (
+    PdfApprovalDecision,
+    PdfSessionResponse,
+    PdfTurnRequest,
+    PdfTurnResult,
+)
 from app.pdf.service import PdfWorkflowService
 
 
@@ -33,8 +39,8 @@ def build_pdf_router() -> APIRouter:
     @router.get("/{session_id}")
     async def view(
         session_id: UUID, _: AllowedOrigin, user: CurrentEmployee, request: Request
-    ) -> PdfSessionView:
-        return await pdf_service(request).store.get(session_id, user.user_id)
+    ) -> PdfSessionResponse:
+        return await pdf_service(request).view(session_id, user.user_id)
 
     @router.post("/{session_id}/turns")
     async def turn(
@@ -100,15 +106,23 @@ def build_pdf_router() -> APIRouter:
         _: AllowedOrigin,
         user: CurrentEmployee,
         request: Request,
-    ) -> JSONResponse:
+    ) -> StreamingResponse:
         metadata, content = await pdf_service(request).artifact(
             session_id, user.user_id, artifact_id
         )
-        return JSONResponse(
-            {
-                "artifact": metadata.model_dump(mode="json", by_alias=True),
-                "contentBase64": b64encode(content).decode("ascii"),
-            }
+        encoded_metadata = b64encode(metadata.model_dump_json(by_alias=True).encode()).decode()
+
+        def chunks() -> Iterator[bytes]:
+            for start in range(0, len(content), 64 * 1024):
+                yield content[start : start + 64 * 1024]
+
+        return StreamingResponse(
+            chunks(),
+            media_type="application/pdf",
+            headers={
+                "Content-Length": str(len(content)),
+                "X-Workbench-Artifact": encoded_metadata,
+            },
         )
 
     return router

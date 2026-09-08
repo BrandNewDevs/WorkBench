@@ -42,11 +42,14 @@ preserved-layout edits. Failed output is removed.
 - `GET /pdf/sessions/{id}` restores source, turns, approvals and activity.
 - `POST /pdf/sessions/{id}/turns[/stream]` handles PDF turns.
 - `POST /pdf/sessions/{id}/approvals/{approvalId}` approves/rejects an exact plan.
-- `GET /pdf/sessions/{id}/artifacts/{artifactId}` is consumed by Electron main.
+- `GET /pdf/sessions/{id}/artifacts/{artifactId}` streams bounded PDF chunks to Electron main.
 - `POST /pdf/sessions/{id}/delete` removes session files and PDF index records.
 
-Electron main verifies artifact bytes and handles Open/Save as. The renderer
-receives no backend path. Activity contains operation labels, not model tokens.
+Electron main verifies streamed artifact size and hash and handles Open/Save as.
+The renderer receives no backend path or file bytes. Session restore exposes page
+classification and only bounded block previews referenced by an approval; complete
+extracted PDF text remains in the backend. Activity contains operation labels, not
+model tokens.
 
 ## Acceptance
 

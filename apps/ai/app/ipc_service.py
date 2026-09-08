@@ -162,7 +162,17 @@ async def _dispatch_stream(
 
     async def send(message: dict[str, Any]) -> None:
         if message["type"] == "http.response.start":
-            await emit({"id": request_id, "kind": "streamStart", "status": int(message["status"])})
+            await emit(
+                {
+                    "id": request_id,
+                    "kind": "streamStart",
+                    "status": int(message["status"]),
+                    "headers": [
+                        [key.decode("latin-1"), value.decode("latin-1")]
+                        for key, value in message.get("headers", [])
+                    ],
+                }
+            )
         elif message["type"] == "http.response.body":
             chunk = bytes(message.get("body", b""))
             if chunk:
@@ -204,9 +214,7 @@ async def run_ipc_service() -> None:
 
         async def emit(frame: dict[str, Any] | str) -> None:
             serialized = (
-                frame
-                if isinstance(frame, str)
-                else json.dumps(frame, separators=(",", ":"))
+                frame if isinstance(frame, str) else json.dumps(frame, separators=(",", ":"))
             )
             async with write_lock:
                 sys.stdout.write(serialized + "\n")
@@ -228,9 +236,7 @@ async def run_ipc_service() -> None:
                 if frame.get("stream") is True:
                     await emit({"id": request_id, "kind": "streamStart", "status": 400})
                     encoded_error = base64.b64encode(str(error).encode()).decode("ascii")
-                    await emit(
-                        {"id": request_id, "kind": "streamData", "body": encoded_error}
-                    )
+                    await emit({"id": request_id, "kind": "streamData", "body": encoded_error})
                     await emit({"id": request_id, "kind": "streamEnd"})
                 else:
                     await emit(_response_frame(request_id, 400, [], str(error).encode("utf-8")))

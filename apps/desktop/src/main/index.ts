@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { app, BrowserWindow, dialog, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Session, type WebContents } from "electron";
@@ -73,6 +73,17 @@ interface PendingLocalServiceRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 const localServiceRequests = new Map<string, PendingLocalServiceRequest>();
+interface PendingLocalServiceStream {
+  resolve: (response: { status: number; headers: readonly [string, string][]; body: Buffer }) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+  status?: number;
+  headers: readonly [string, string][];
+  chunks: Buffer[];
+  byteLength: number;
+}
+const localServiceStreams = new Map<string, PendingLocalServiceStream>();
+const localServiceArtifactLimitBytes = 64 * 1024 * 1024;
 interface SessionEventSubscription {
   turn?: boolean;
   completed?: boolean;
@@ -239,6 +250,11 @@ function clearManagedLocalService(child?: ChildProcess): void {
     request.reject(new Error("The managed local service pipe closed."));
   }
   localServiceRequests.clear();
+  for (const stream of localServiceStreams.values()) {
+    clearTimeout(stream.timeout);
+    stream.reject(new Error("The managed local service pipe closed."));
+  }
+  localServiceStreams.clear();
   for (const [subscriptionId, subscription] of sessionEventSubscriptions) {
     if (!subscription.sender.isDestroyed()) {
       emitSessionEvent(subscriptionId, {
@@ -485,6 +501,33 @@ function receiveLocalServiceFrame(value: string): void {
     return;
   }
   if (!frame || typeof frame.id !== "string") return;
+  const stream = localServiceStreams.get(frame.id);
+  if (stream && frame.kind?.startsWith("stream")) {
+    if (frame.kind === "streamStart" && Number.isInteger(frame.status)) {
+      stream.status = frame.status;
+      stream.headers = Array.isArray(frame.headers) ? frame.headers : [];
+    } else if (frame.kind === "streamData" && typeof frame.body === "string") {
+      const chunk = Buffer.from(frame.body, "base64");
+      stream.byteLength += chunk.byteLength;
+      if (stream.byteLength > localServiceArtifactLimitBytes) {
+        clearTimeout(stream.timeout);
+        localServiceStreams.delete(frame.id);
+        localService?.stdin?.write(`${JSON.stringify({ cancel: frame.id })}\n`);
+        stream.reject(new Error("The local PDF artifact exceeds its transfer limit."));
+      } else {
+        stream.chunks.push(chunk);
+      }
+    } else if (frame.kind === "streamEnd") {
+      clearTimeout(stream.timeout);
+      localServiceStreams.delete(frame.id);
+      stream.resolve({
+        status: stream.status ?? 500,
+        headers: stream.headers,
+        body: Buffer.concat(stream.chunks, stream.byteLength),
+      });
+    }
+    return;
+  }
   const subscription = sessionEventSubscriptions.get(frame.id);
   if (subscription && frame.kind?.startsWith("stream")) {
     if (frame.kind === "streamStart" && Number.isInteger(frame.status)) {
@@ -523,6 +566,44 @@ function receiveLocalServiceFrame(value: string): void {
   } catch {
     request.reject(new Error("The managed local service sent an invalid response."));
   }
+}
+
+function sendLocalServiceStreamRequest(
+  path: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<{ status: number; headers: readonly [string, string][]; body: Buffer }> {
+  const child = localService;
+  if (!child || !managedLocalServiceIsRunning()) {
+    throw new Error("The managed local service is no longer running.");
+  }
+  const id = randomUUID();
+  const frame = JSON.stringify({id, path, method: "GET", stream: true, headers, body: ""});
+  return new Promise((resolveStream, rejectStream) => {
+    const timeout = setTimeout(() => {
+      const pending = localServiceStreams.get(id);
+      if (!pending) return;
+      localServiceStreams.delete(id);
+      child.stdin?.write(`${JSON.stringify({ cancel: id })}\n`);
+      pending.reject(new Error("The local PDF artifact transfer timed out."));
+    }, timeoutMs);
+    localServiceStreams.set(id, {
+      resolve: resolveStream,
+      reject: rejectStream,
+      timeout,
+      headers: [],
+      chunks: [],
+      byteLength: 0,
+    });
+    child.stdin?.write(`${frame}\n`, error => {
+      if (!error) return;
+      const pending = localServiceStreams.get(id);
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      localServiceStreams.delete(id);
+      pending.reject(error);
+    });
+  });
 }
 
 function timeoutLocalServiceRequest(id: string, child: ChildProcess): void {
@@ -857,33 +938,43 @@ async function requestLocalService(request: LocalServiceRequest): Promise<LocalS
   // child-owned pipe after capability verification, so a replacement local listener has no path to it.
   const cookies = await getManagedServiceSession().cookies.get({ url: managedServiceCookieUrl });
   const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
-  const response = await sendLocalServiceRequest(path, init.method as "GET" | "POST", {
-    Accept: "application/json",
+  const requestHeaders = {
+    Accept: request.operation === "pdfArtifact" ? "application/pdf" : "application/json",
     Origin: rendererOrigin(),
     "X-Workbench-Capability": localServiceCapability,
     ...(cookieHeader ? { Cookie: cookieHeader } : {}),
     ...(init.headers as Record<string, string> | undefined),
-  }, typeof init.body === "string" ? init.body : undefined, filePath, timeoutMs);
-  if (request.operation === "pdfArtifact" && response.status === 200) {
-    const payload: unknown = JSON.parse(response.body);
-    if (!payload || typeof payload !== "object" || !("artifact" in payload) || !("contentBase64" in payload) || typeof payload.contentBase64 !== "string") throw new Error("Invalid artifact response");
-    const artifact = pdfArtifactSchema.parse(payload.artifact);
-    const bytes = Buffer.from(payload.contentBase64, "base64");
+  };
+  if (request.operation === "pdfArtifact") {
+    const streamed = await sendLocalServiceStreamRequest(path, requestHeaders, timeoutMs);
+    if (streamed.status < 200 || streamed.status >= 300) {
+      return {status: streamed.status, body: streamed.body.toString("utf8")};
+    }
+    const metadataHeader = streamed.headers.find(
+      ([name]) => name.toLowerCase() === "x-workbench-artifact",
+    )?.[1];
+    if (!metadataHeader) throw new Error("The PDF artifact metadata is missing.");
+    const artifact = pdfArtifactSchema.parse(
+      JSON.parse(Buffer.from(metadataHeader, "base64").toString("utf8")),
+    );
+    const bytes = streamed.body;
     if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("PDF integrity verification failed");
     if (artifact.artifactId !== request.artifactId || bytes.length !== artifact.sizeBytes || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("Invalid PDF artifact bytes");
     if (request.action === "save") {
-      const selected = await dialog.showSaveDialog({title: "Save PDF", defaultPath: "workbench-draft.pdf", filters: [{name: "PDF", extensions: ["pdf"]}]});
+      const selected = await dialog.showSaveDialog({title: "Save PDF", defaultPath: artifact.fileName, filters: [{name: "PDF", extensions: ["pdf"]}]});
       if (!selected.canceled && selected.filePath) await writeFile(selected.filePath, bytes);
     } else {
-      const folder = join(app.getPath("temp"), "workbench-pdf");
-      await mkdir(folder, { recursive: true });
+      const folder = await mkdtemp(join(app.getPath("temp"), "workbench-pdf-"));
       const file = join(folder, `${request.artifactId}.pdf`);
-      await writeFile(file, bytes);
+      await writeFile(file, bytes, {flag: "wx", mode: 0o600});
       const error = await shell.openPath(file);
       if (error) throw new Error("No local PDF viewer is available");
     }
     return {status: 200, body: "{}"};
   }
+  const response = await sendLocalServiceRequest(path, init.method as "GET" | "POST", {
+    ...requestHeaders,
+  }, typeof init.body === "string" ? init.body : undefined, filePath, timeoutMs);
   for (const [name, value] of response.headers) {
     if (name.toLowerCase() !== "set-cookie") continue;
     const [pair, ...attributes] = value.split(";").map((part) => part.trim());

@@ -167,10 +167,61 @@ async def test_stream_dispatch_emits_incremental_frames_and_cancels() -> None:
             break
         await asyncio.sleep(0)
 
-    assert emitted[0] == {"id": "stream-1", "kind": "streamStart", "status": 200}
+    assert emitted[0] == {
+        "id": "stream-1",
+        "kind": "streamStart",
+        "status": 200,
+        "headers": [],
+    }
     assert emitted[1]["kind"] == "streamData"
     assert base64.b64decode(str(emitted[1]["body"])).startswith(b"id: 1\n")
     assert not task.done()
 
     disconnected.set()
     await asyncio.wait_for(task, timeout=1)
+
+
+async def test_stream_dispatch_keeps_large_binary_responses_in_bounded_frames() -> None:
+    emitted: list[dict[str, object]] = []
+    content = b"P" * (2 * 1024 * 1024)
+
+    async def application(scope: dict[str, object], receive: object, send: object) -> None:
+        del scope, receive
+        send_call = send
+        assert callable(send_call)
+        await send_call(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/pdf")],
+            }
+        )
+        for start in range(0, len(content), 64 * 1024):
+            await send_call(
+                {
+                    "type": "http.response.body",
+                    "body": content[start : start + 64 * 1024],
+                    "more_body": start + 64 * 1024 < len(content),
+                }
+            )
+
+    async def emit(frame: dict[str, object]) -> None:
+        emitted.append(frame)
+
+    await _dispatch_stream(
+        application,
+        {
+            "id": "artifact",
+            "method": "GET",
+            "path": "/pdf/sessions/session/artifacts/artifact",
+            "headers": {},
+            "body": "",
+        },
+        emit,
+        asyncio.Event(),
+    )
+
+    assert emitted[0]["headers"] == [["content-type", "application/pdf"]]
+    frames = [base64.b64decode(str(frame["body"])) for frame in emitted[1:]]
+    assert b"".join(frames) == content
+    assert max(len(json.dumps(frame).encode()) for frame in emitted) < 1024 * 1024

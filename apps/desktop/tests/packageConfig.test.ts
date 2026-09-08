@@ -43,6 +43,9 @@ test("main-process service traffic uses the child-owned pipe", () => {
   );
   assert.match(main, /`\/sessions\/\$\{sessionId\}\/events`/);
   assert.match(main, /`\/pdf\/sessions\/\$\{sessionId\}\/turns\/stream`/);
+  assert.match(main, /sendLocalServiceStreamRequest\(path, requestHeaders, timeoutMs\)/);
+  assert.match(main, /localServiceArtifactLimitBytes = 64 \* 1024 \* 1024/);
+  assert.doesNotMatch(main, /contentBase64/);
   assert.match(main, /localServiceStartAttempts = 3/);
 });
 
