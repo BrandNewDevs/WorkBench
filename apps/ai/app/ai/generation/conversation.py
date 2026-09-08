@@ -1,6 +1,13 @@
 """Bounded ordinary text conversation over the injected local model seam."""
 
-from app.ai.errors import ConversationContextTooLarge, InvalidStructuredOutput
+import asyncio
+from time import perf_counter
+
+from app.ai.errors import (
+    ConversationContextTooLarge,
+    InvalidStructuredOutput,
+    ModelRequestTimeout,
+)
 from app.ai.models.ports import ModelAdapter
 from app.ai.prompts.conversation import build_local_conversation_system_prompt
 from app.ai.schemas import (
@@ -29,36 +36,52 @@ class LocalConversationGenerator:
             ConversationMessage(role="user", content=request.user_message),
         )
         self._require_context_budget(messages)
+        timeout_seconds = min(
+            request.timeout_seconds or self._model_profile.text_limits.timeout_seconds,
+            self._model_profile.text_limits.timeout_seconds,
+        )
+        started = perf_counter()
         selected_model = model
         preserved_fallback_reason: str | None = None
         generation = None
-        for attempt in range(2):
-            try:
-                generation = await self._model_adapter.generate_conversation(
-                    ConversationGenerationRequest(
-                        model=selected_model,
-                        system_prompt=build_local_conversation_system_prompt(
-                            correction=attempt == 1
-                        ),
-                        assistant_name="WorkBench",
-                        disclose_runtime_model=True,
-                        messages=messages,
-                        limits=self._model_profile.text_limits,
-                        timeout_seconds=request.timeout_seconds,
-                        temperature=0.2,
-                    )
-                )
-                break
-            except InvalidStructuredOutput as error:
-                if error.fallback_reason is not None:
-                    preserved_fallback_reason = error.fallback_reason
-                if error.model is not None:
-                    selected_model = error.model
-                if attempt == 1:
-                    error.attach_fallback_reason(
-                        error.fallback_reason or preserved_fallback_reason
-                    )
-                    raise
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                for attempt in range(2):
+                    remaining_timeout_seconds = timeout_seconds
+                    if attempt > 0:
+                        remaining_timeout_seconds -= perf_counter() - started
+                    if remaining_timeout_seconds <= 0:
+                        raise ModelRequestTimeout("local conversation request timed out")
+                    try:
+                        generation = await self._model_adapter.generate_conversation(
+                            ConversationGenerationRequest(
+                                model=selected_model,
+                                system_prompt=build_local_conversation_system_prompt(
+                                    correction=attempt == 1
+                                ),
+                                assistant_name="WorkBench",
+                                disclose_runtime_model=True,
+                                messages=messages,
+                                limits=self._model_profile.text_limits,
+                                timeout_seconds=remaining_timeout_seconds,
+                                temperature=0.2,
+                            )
+                        )
+                        break
+                    except InvalidStructuredOutput as error:
+                        if error.fallback_reason is not None:
+                            preserved_fallback_reason = error.fallback_reason
+                        if error.model is not None:
+                            selected_model = error.model
+                        if attempt == 1:
+                            error.attach_fallback_reason(
+                                error.fallback_reason or preserved_fallback_reason
+                            )
+                            raise
+        except TimeoutError as error:
+            raise ModelRequestTimeout(
+                "local conversation request timed out"
+            ) from error
 
         if generation is None:  # pragma: no cover - the loop returns or raises
             raise InvalidStructuredOutput("local conversation returned no generation")

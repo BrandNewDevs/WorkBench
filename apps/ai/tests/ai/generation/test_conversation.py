@@ -2,6 +2,7 @@
 
 import pytest
 
+import app.ai.generation.conversation as conversation_module
 from app.ai.errors import ConversationContextTooLarge, InvalidStructuredOutput
 from app.ai.evaluation.samples import sample_inference_metrics, sample_model_profile
 from app.ai.generation.conversation import LocalConversationGenerator
@@ -205,6 +206,38 @@ async def test_local_conversation_retries_invalid_output_once_without_changing_h
     assert reply.model == "qwen3:1.7b"
     assert reply.used_fallback is True
     assert reply.fallback_reason == first_error.fallback_reason
+
+
+async def test_local_conversation_retry_uses_only_the_remaining_request_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The correction attempt must not restart the caller's timeout budget."""
+
+    clock = iter((100.0, 106.0))
+    monkeypatch.setattr(conversation_module, "perf_counter", lambda: next(clock))
+    adapter = RecordingConversationAdapter(
+        (
+            InvalidStructuredOutput("first invalid response"),
+            ConversationGenerationResult(
+                model="qwen3:4b",
+                text="Corrected final answer.",
+                metrics=sample_inference_metrics(),
+            ),
+        )
+    )
+    generator = LocalConversationGenerator(adapter, sample_model_profile())
+
+    reply = await generator.reply(
+        ConversationRequest(
+            session_id="session-chat-deadline",
+            user_message="Hello.",
+            timeout_seconds=10,
+        ),
+        model="qwen3:4b",
+    )
+
+    assert reply.assistant_text == "Corrected final answer."
+    assert [request.timeout_seconds for request in adapter.requests] == [10, 4]
 
 
 async def test_local_conversation_stops_after_the_second_invalid_output() -> None:
